@@ -91,7 +91,7 @@ IDs are referenced from code comments and commit messages. **Never recycle one.*
 | G2 | P2 | Not deployed. `docs/` is empty; publishing is the user's explicit decision. Before any deploy: code files need the version stamp too (only data and shaders carry it), and GHSL/EDGAR/WRI/World Bank attributions must be visible on the live page (they are, in About) | `build/` | SCOPE §11 |
 | G3 | P2 | First-frame budget not measured. SCOPE says ≤ 6 MB and ≤ 1.5 s; the boot set is about 8 MB plus 23 MB of relief and elevation behind it | `fields.boot` | SCOPE §11 |
 | G4 | P3 | Performance is unmeasured: full-screen shader at 2× device pixels, re-run on every camera move | `main.js` cache | build notes |
-| G5 | P3 | The live-feed paths (aurora, satellites) were written and not exercised in a visible browser this session | `live.js` | this session |
+| G5 | P3 | Exercised by script with no errors and one viewed frame (all layers on: aurora oval, plates, volcanoes, power stations, quake record, rivers): every card type, search, About, the week-per-second play mode, the USGS / OVATION / CelesTrak feeds. **Not yet done by hand in a visible browser:** pointer drag and wheel, keyboard shortcuts, the sliders, panel scrolling at small window sizes; and the satellite points were not picked out by eye | `ui.js`, `main.js` | this session |
 
 ---
 

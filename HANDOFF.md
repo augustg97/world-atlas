@@ -63,8 +63,7 @@ All measured, none guessed.
    12-month surface; clouds; wind, current and ship tracers; aircraft; labels; the probe (Agra, July: 30.2 C at 10:40 solar
    time, mean 32.0, 740 people/km2); the dashboard (7.1 bn people in daylight at 09:00 UTC in July; mean July air
    temperature 15.9 C against an observed ~16); the temperature, population and shipping lenses; Today's Earth from GIBS;
-   live earthquakes. **Not exercised in a visible browser:** aurora, satellites, search, the About panel, the time console's
-   play modes, the country, city, dispute, quake, volcano, plant and airport cards (register G5)
+   live earthquakes. Every card type, search, About, the play modes and the three live feeds were then run by script without error, and a frame with all 23 layers on was viewed. **Not yet done by hand in a visible browser:** drag, wheel, keyboard, sliders (register G5)
 
 ## Traps that have each cost real time
 
