@@ -1,0 +1,41 @@
+[
+ {
+  "version": "1.0",
+  "date": "10 November 2026",
+  "title": "First public release",
+  "summary": "A living atlas of the present-day Earth: one typical year of the planet and its people, composed per pixel, anchored at now. This first release is the state after four rounds of work: a build, a round of measuring it against NASA's photographs, and two rounds of closing what that showed.",
+  "sections": [
+   {
+    "name": "The Earth from space",
+    "items": [
+     "Colour, exposure, ocean, desert and vegetated land sit within a few display levels of NASA EPIC's full-disc photographs, taken from the same place at the same instant: mean brightness within 2.5 levels in 255.",
+     "The ground's colour is Blue Marble re-read against a cloud-free composite of about a hundred EPIC frames. Read the usual way it drew forest and savanna at a third of their brightness.",
+     "The limb is as thin as the real air: a scale height of 8 km, where the first build drew a glow 57 and 190 km thick."
+    ]
+   },
+   {
+    "name": "Cloud and ice",
+    "items": [
+     "How much cloud there is, and how much light it returns, now come from a satellite climatology by kind of cloud. The stratocumulus sheets off Peru, Namibia and California exist; they were all but absent.",
+     "Close in, cloud is generated and reads as generated. Where any one cloud is, is not today's weather.",
+     "Sea ice is built from NSIDC's own monthly grids for 1991-2020. Its edge is placed where the extent equals NSIDC's mean, so that agreement is by construction; each of the 720 grids on its own converts within 1%."
+    ]
+   },
+   {
+    "name": "Close in, and names",
+    "items": [
+     "Closer than 5 km a pixel the ground sharpens to about 2 km from tiles fetched while you look (NASA and AWS; see what the page asks the network for).",
+     "The whole-Earth sheet names 129 of 198 states, where it named 21. No two names overlap and none sits on another country; Central Europe and the Balkans are too small at that scale and wait for an inset."
+    ]
+   },
+   {
+    "name": "Known to be wrong",
+    "items": [
+     "A band of shallow south-west Hudson Bay is drawn as land and never ices; lakes other than the Great Lakes and Ladoga never freeze.",
+     "The outermost ring of the disc is about 10 levels too bright; snow and sea ice at a low Sun read grey.",
+     "Air traffic and ships are modelled flows. No vehicle on screen is a real vehicle."
+    ]
+   }
+  ]
+ }
+]

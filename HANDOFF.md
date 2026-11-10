@@ -8,8 +8,8 @@ Paste this whole file as the first message of a new session.
 
 **World Atlas** — A living atlas of the present-day Earth: one year of the planet and its people, composed per pixel and anchored at now.
 
-- Repo: `/Users/augustgweon/World Atlas` (never under `~/Desktop` or `~/Documents`: macOS TCC)`
-- Live: not published. Local: `python3 build/serve.py 8150` -> http://localhost:8150. **Publishing is the owner's explicit decision; ask first.**
+- Repo: `~/World Atlas` (never under `~/Desktop` or `~/Documents`: macOS TCC)`
+- Live: **https://augustg97.github.io/world-atlas/** (public repo `augustg97/world-atlas`, Pages from `main:/docs`, first published 2026-11-10). Local: `python3 build/serve.py 8150` -> http://localhost:8150.
 - **Read `README.md` first.** It documents the goals, the standing working rules (§2), every
   subsystem, the traps that have cost time (§7), and the known limits (§9).
 - `SCOPE.md` is the contract: the claim, the layer table, the canonical frame, the evidence
@@ -53,8 +53,8 @@ The comparison is only meaningful at **matched scale**. All of this exists; reus
 
 ## State right now
 
-- Last live deploy: **never deployed**
-- Committed locally on branch `verify-round` and not pushed: everything
+- Last live deploy: **2026-11-10**, release 1.0; the stamps are in `docs/version.json` and must match the live `version.json`
+- Branch `main` is what is published; `verify-round` was merged into it at release 1.0
 - `data/` holds about 3.6 GB of sources and caches (gitignored); `python build/fetch_sources.py` rebuilds it,
   including 438 MB of NSIDC grids and 581 MB of ISCCP. Three reference sets live under `reference/`
   (gitignored): `epic/` and `epic/clearsky/` (300 MB) and `gibs_clouds/` (5 MB); each has a `--fetch`.

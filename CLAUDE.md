@@ -5,7 +5,7 @@ A living atlas of the present-day Earth: one year of the planet and its people, 
 **Read `README.md` first** — §1 (what this is trying to be), §2 (the working rules), §7 (traps),
 §9 (known limits). Then `SCOPE.md` for the contract and `HANDOFF.md` for the live state.
 
-The general protocol lives in `/Users/augustgweon/Modeling Studio`. Its skills apply here:
+The general protocol lives in `~/Modeling Studio`. Its skills apply here:
 `/model-research`, `/model-build`, `/model-verify`, `/model-ship`.
 
 ---
@@ -48,8 +48,9 @@ The general protocol lives in `/Users/augustgweon/Modeling Studio`. Its skills a
    done, say so explicitly and say why — do not omit it.
 
 6. **Always deploy, and verify the live artefact.** Every round ends with a build, a commit, a
-   push, and a check of the live data-version stamp. *(Suspended here by rule 16 until the owner
-   decides to publish: rounds end with `audit_all.py` green and a local commit.)*
+   push, and a check of the live data-version stamp. Here that is `build/build_site.py` (it runs
+   the audits and refuses on a regression), a commit, `git push`, and reading the stamp back from
+   https://augustg97.github.io/world-atlas/version.json. In force since the owner published on 2026-11-10.
 
 7. **Never ship on an average.** Score every item individually, before and after, and classify
    every regression.
@@ -66,7 +67,11 @@ The general protocol lives in `/Users/augustgweon/Modeling Studio`. Its skills a
 13. **Modelled motion is labelled as modelled.** No vehicle on screen is a real vehicle.
 14. **Borders follow who administers the ground; every dispute is dashed, hatched and carded.**
 15. **A source goes through `build/frames.py` or it does not go in**, and each build step asserts real landmarks.
-16. **Do not publish.** `docs/` and GitHub Pages are the owner's explicit decision; ask before any push.
+16. **Published since 2026-11-10** (the owner's decision, that day): public repo `augustg97/world-atlas`,
+    Pages from `main:/docs`. Everything committed to `main` is public. Nothing that is not the project's own
+    or freely licensed goes in the tree: `reference/` (the National Geographic sheet, EPIC and VIIRS frames),
+    `data/` and `scratchpad/` stay ignored. A NEW outside host, a new data licence, or anything about the
+    owner beyond what is already in the tree is the owner's call first.
 
 ---
 
@@ -117,6 +122,8 @@ node build/test_app_math.mjs                     # ephemeris vs almanac, project
 # cloud close in, against VIIRS scenes at 2 km a pixel (needs --fetch once, 5 MB)
 "$HOME/Modeling Studio/.venv/bin/python" Research/modeling/cloud_scenes_render.py cur
 ./venv/bin/python Research/modeling/cloud_texture.py --tag cur    # pairs land in Research/figures/clouds/
+# build the published site (audits first; stamps code and data; never pushes)
+./venv/bin/python build/build_site.py
 # the visual ratchet alone; accept a moved frame only with a reason
 "$HOME/Modeling Studio/.venv/bin/python" "$HOME/Modeling Studio/tools/frame_baseline.py" check --project .
 

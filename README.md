@@ -147,6 +147,7 @@ The build **runs the validators first and refuses to publish if one moved backwa
 
 ```bash
 ./venv/bin/python Research/modeling/audit_all.py           # eleven checks, 3-4 min
+./venv/bin/python build/build_site.py                     # audits, then docs/ for GitHub Pages; never pushes
 ./venv/bin/python Research/modeling/audit_all.py --quick   # skip the three that need a browser
 ```
 

@@ -19,3 +19,5 @@ Research/modeling/epic_scores_cur.json
 Research/modeling/clearsky_scores_clr.json
 Research/modeling/cloud_texture_cur.json
 Research/figures/clouds/*_cur.jpg
+# a machine-local launch config with an absolute path
+.claude/launch.json

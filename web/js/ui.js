@@ -228,10 +228,18 @@ export class UI {
       <li>Latitude is treated as spherical on a 6371 km sphere; the error is below a pixel at every scale offered.</li></ul>
       <h3>What this page asks the network for</h3>
       <p>Closer in than 5 km a pixel, with <i>Finer ground, close in</i> switched on (it is by default), the page fetches map tiles for the part of the Earth on screen from two hosts: imagery from NASA (gibs.earthdata.nasa.gov) and elevation from Amazon Web Services (s3.amazonaws.com). Those requests tell the two hosts roughly where you are looking, as any tiled map does. Nothing else about you is sent, and with the layer off neither host is asked for anything. The live layers (earthquakes, aurora, satellites, today’s Earth) fetch whole-Earth files that say nothing about where you look.</p>
+      <div id="updlog"></div>
       <h3>Sources</h3><ul class="srcs">${sources.map((s) => `<li>${esc(s)}</li>`).join('')}<li>Country statistics: World Bank Open Data, CC BY 4.0.</li>
       <li>We acknowledge the use of imagery provided by services from NASA's Global Imagery Browse Services (GIBS), part of NASA's Earth Science Data and Information System (ESDIS).</li>
       <li>Terrain Tiles (Mapzen, a Linux Foundation project; Registry of Open Data on AWS), used closer in than 5 km a pixel: ArcticDEM terrain data DEM(s) were created from DigitalGlobe, Inc., imagery and funded under National Science Foundation awards 1043681, 1559691, and 1542736; Australia terrain data © Commonwealth of Australia (Geoscience Australia) 2017; Austria terrain data © offene Daten Österreichs – Digitales Geländemodell (DGM) Österreich; Canada terrain data contains information licensed under the Open Government Licence – Canada; Europe terrain data produced using Copernicus data and information funded by the European Union - EU-DEM layers; Global ETOPO1 terrain data U.S. National Oceanic and Atmospheric Administration; Mexico terrain data source: INEGI, Continental relief, 2016; New Zealand terrain data Copyright 2011 Crown copyright (c) Land Information New Zealand and the New Zealand Government (All rights reserved); Norway terrain data © Kartverket; United Kingdom terrain data © Environment Agency copyright and/or database right 2015. All rights reserved; United States 3DEP (formerly NED) and global GMTED2010 and SRTM terrain data courtesy of the U.S. Geological Survey.</li><li>Reference for layout and coverage (not reproduced): National Geographic, <i>The World — Political</i>.</li></ul>
       <p class="dim">Keys: space play/pause · N now · G globe/sheet · A atlas/space · / search · Esc close.</p></div>`;
     host.onclick = (e) => { if (e.target === host || e.target.closest('.about-x')) host.hidden = true; };
+    // what changed, release by release: data, so a returning reader can see it (data/updatelog.json)
+    fetch('data/updatelog.json', { cache: 'no-cache' }).then((r) => (r.ok ? r.json() : [])).then((log) => {
+      const el = $('#updlog');
+      if (!el || !log.length) return;
+      el.innerHTML = '<h3>What changed</h3>' + log.map((v) => `<p><b>${esc(v.version)} · ${esc(v.date)} · ${esc(v.title)}</b><br>${esc(v.summary)}</p>` +
+        v.sections.map((sec) => `<p class="dim">${esc(sec.name)}</p><ul>${sec.items.map((i) => `<li>${esc(i)}</li>`).join('')}</ul>`).join('')).join('');
+    }).catch(() => {});
   }
 }

@@ -1,0 +1,35 @@
+{
+ "co2": {
+  "file": "co2.png",
+  "w": 3600,
+  "h": 1800,
+  "curve": "log1p",
+  "x0": 5.0,
+  "xmax": 500000.0,
+  "units": "tonnes CO2 per km2 per year",
+  "source": "EDGAR v8.0 (JRC), year 2022",
+  "total_t": 38522010879.44374
+ },
+ "pop": {
+  "file": "pop.png",
+  "w": 4096,
+  "h": 2048,
+  "curve": "log1p",
+  "x0": 1.0,
+  "xmax": 40000.0,
+  "units": "people per km2",
+  "source": "JRC GHSL GHS-POP R2023A, epoch 2025",
+  "total": 8191988536.304916,
+  "counts_1deg": "pop_1deg.bin"
+ },
+ "ships": {
+  "file": "ships.png",
+  "w": 4096,
+  "h": 2048,
+  "curve": "log1p",
+  "x0": 50000.0,
+  "xmax": 30000000.0,
+  "units": "AIS positions per 0.01-degree cell, 2015-2021",
+  "source": "World Bank / IMF Global Shipping Traffic Density"
+ }
+}
