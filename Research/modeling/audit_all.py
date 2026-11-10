@@ -1,6 +1,6 @@
 """Run every validator against its recorded baseline and refuse to regress.
 
-    ./venv/bin/python Research/modeling/audit_all.py            # all of them (about four minutes)
+    ./venv/bin/python Research/modeling/audit_all.py            # all ten (about three minutes)
     ./venv/bin/python Research/modeling/audit_all.py --quick    # skip the ones that need a browser
 
 A build or a publish calls this and stops if a check moved backwards.
@@ -42,12 +42,16 @@ CHECKS = [
      "Sun and Moon against the almanac and against NASA EPIC's own vectors; projection and camera round trips"),
     ("shaders", [[PY, B("check_shaders.py")]], {"failures": 0}, False,
      "a shader that does not compile (the black canvas with working panels)"),
-    ("selftests", [[PY, M("epic_compare.py"), "--selftest"], [PY, M("audit_ice.py"), "--selftest"], [PY, M("audit_population.py"), "--selftest"]],
+    ("selftests", [[PY, "-W", "ignore", M("epic_compare.py"), "--selftest"], [PY, "-W", "ignore", M("epic_clearsky.py"), "--selftest"],
+                   [PY, M("audit_ice.py"), "--selftest"], [PY, M("audit_population.py"), "--selftest"]],
      {"failures": 0}, False, "an audit that has stopped measuring what it says it measures"),
-    # Known overshoot, register C1: the 1991-2020 mean concentration field against NSIDC's mean extent.
+    # Rebuilt from NSIDC's 720 monthly grids (register C1). The edge is PLACED so the extent matches NSIDC's
+    # mean, so these three are a regression guard, not evidence; the evidence is the per-year check the
+    # build asserts (fields_climate.step_ocean) and audit_ice.py --peryear. Ice AREA is not solved for:
+    # mean concentration inside the edge is diluted by open years, up to 15.5% under in Antarctic February.
     ("sea-ice", [[PY, M("audit_ice.py"), "--json"]],
-     {"arctic_max_over_pct": 31.5, "antarctic_max_over_pct": 93.5, "mean_abs_pct": 29.3}, False,
-     "sea-ice extent drifting further from the NSIDC Sea Ice Index"),
+     {"arctic_max_over_pct": 0.1, "antarctic_max_over_pct": 0.0, "mean_abs_pct": 0.0, "area_max_under_pct": 15.5}, False,
+     "sea-ice extent or area drifting from the NSIDC Sea Ice Index"),
     # 26 units differ by more than 10% (vintage, small islands, city states); register F2 lists them.
     ("population", [[PY, M("audit_population.py"), "--json"]], {"units_off_10pct": 26, "total_err_pct": 0.37}, False,
      "the population field against World Bank national totals"),
@@ -55,10 +59,19 @@ CHECKS = [
     ("labels", [[SPY, M("audit_labels.py"), "--json"]], {"sheet_states_unnamed": 183}, True,
      "label coverage at the whole-Earth framing falling further below the baseline sheet"),
     # Eight NASA EPIC frames, software GL. Register A1 holds the per-frame table and what each number means.
+    # limb_err rose from 0.063 to 0.103 in the build round and that is a CANCELLATION, recorded in A1: the old
+    # frame matched the ring-to-centre ratio because the whole outer disc was 5-15 levels dim. disc_err is the
+    # measure that sees it (9.3 before, on the same renders).
     ("epic", [[SPY, M("epic_render.py"), "cur"], [PY, "-W", "ignore", M("epic_compare.py"), "--tag", "cur", "--json", "--no-figures"]],
-     {"lum_err": 6.96, "contrast_err": 3.47, "white_err": 0.042, "limb_err": 0.063, "ocean_rgb_err": 4.6,
-      "land_rgb_err": 15.9, "halo_err": 0.15, "glint_err": 0.17, "epic_shift_px": 2}, True,
-     "the lit globe moving away from the photograph: exposure, contrast, cloud, limb, ocean, ground, glint"),
+     {"lum_err": 1.94, "contrast_err": 1.98, "white_err": 0.015, "disc_err": 4.22, "limb_err": 0.103, "ocean_rgb_err": 4.9,
+      "land_rgb_err": 13.1, "halo_err": 0.09, "glint_err": 0.17, "epic_shift_px": 2}, True,
+     "the lit globe moving away from the photograph: exposure, contrast, cloud, the disc profile, ocean, ground, glint"),
+    # The ground alone: clouds off, against a cloud-free composite of about a hundred EPIC frames (register A7).
+    # Needs reference/epic/clearsky (epic_clearsky.py --fetch, 300 MB). instrument_bias is the numpy copy of the
+    # shader against the shader's own render: if it grows, shader_model.py has drifted and nothing here means anything.
+    ("clear-sky", [[SPY, M("epic_render.py"), "clr", "air,daylight,ice"], [PY, "-W", "ignore", M("land_transfer.py"), "--json"]],
+     {"instrument_bias": 1.6, "clearsky_land_abs": 5.0, "clearsky_land_bias": 0.7}, True,
+     "the cloud-free ground moving away from EPIC's, or the audit's copy of the shader drifting from the shader"),
     ("visual", [[SPY, os.path.join(STUDIO, "tools", "frame_baseline.py"), "check", "--project", ROOT]], {"failures": 0}, True,
      "any of the six canonical frames changing without a recorded reason (Research/baselines/FRAME-LOG.md)"),
 ]

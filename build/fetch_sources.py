@@ -4,9 +4,11 @@
     ./venv/bin/python build/fetch_sources.py            # everything
     ./venv/bin/python build/fetch_sources.py small      # only the small files (< 50 MB)
     ./venv/bin/python build/fetch_sources.py etopo ne   # by group
+    ./venv/bin/python build/fetch_sources.py nsidc      # 720 monthly sea-ice grids + 24 extent tables
 
 This table IS the project's source record: name, URL, licence. Research/SOURCE-SURVEY.md
-is written from it. Every source here is public domain or plain CC-BY; see the survey for
+is written from it. Every source here is public domain or plain CC-BY, except NSIDC's Sea Ice
+Index, which names no licence and asks for citation as its condition of use; see the survey for
 the ones that were refused and why.
 
 Two hosts are unreachable from this machine as of 2026-11-09 and have working mirrors:
@@ -70,8 +72,33 @@ add("psl", "psl/precip.mon.ltm.nc", f"{PSL}/gpcp/precip.mon.ltm.1991-2020.nc",
     "public domain (GPCP v2.3, Adler et al. 2018; NOAA PSL)")
 add("psl", "psl/sst.mon.ltm.nc", f"{PSL}/noaa.oisst.v2.highres/sst.mon.ltm.1991-2020.nc",
     "public domain (NOAA OISST v2.1, Huang et al. 2021)")
+# OISST's own ice field: no longer built from (it ran 11-94% over NSIDC's extent; fields_climate.py
+# takes sea ice from the NSIDC group below). Kept so that comparison can be repeated.
 add("psl", "psl/icec.mon.ltm.nc", f"{PSL}/noaa.oisst.v2.highres/icec.mon.ltm.1991-2020.nc",
     "public domain (NOAA OISST v2.1, Huang et al. 2021)")
+
+# --- sea ice, year by year (NSIDC Sea Ice Index, G02135 Version 4) ----------------------
+# Monthly mean concentration on NSIDC's 25 km polar stereographic grids (frames.NSIDC_NORTH /
+# NSIDC_SOUTH), one GeoTIFF per month and hemisphere for 1991-2020: 720 files, 457 MB. The
+# per-year extent tables (one CSV per calendar month, all years) are the witness the build
+# and Research/modeling/audit_ice.py check against.
+NSIDC = "https://noaadata.apps.nsidc.org/NOAA/G02135"
+# NSIDC names no licence for this product. Its landing page states one condition: "As a condition of
+# using these data, you must cite the use of this data set"; its data policy says most of its
+# holdings are government-funded and in the public domain. Both read on 2026-11-10.
+NSIDC_LIC = ("no licence named; citation required as the condition of use (Fetterer, F., Knowles, K., Meier, W. N., Savoie, M., "
+             "Windnagel, A. K. & Stafford, T. 2025: Sea Ice Index, G02135, Version 4, Boulder, Colorado USA, "
+             "National Snow and Ice Data Center, doi:10.7265/a98x-0f50)")
+NSIDC_YEARS = range(1991, 2021)
+NSIDC_WORKERS = 3
+_MON3 = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+for hemi, H in (("north", "N"), ("south", "S")):
+    for i, m3 in enumerate(_MON3, 1):
+        add("nsidc", f"nsidc/extent/{H}_{i:02d}_extent_v4.0.csv",
+            f"{NSIDC}/{hemi}/monthly/data/{H}_{i:02d}_extent_v4.0.csv", NSIDC_LIC)
+        for yr in NSIDC_YEARS:
+            add("nsidc", f"nsidc/{hemi}/{H}_{yr}{i:02d}_concentration_v4.0.tif",
+                f"{NSIDC}/{hemi}/monthly/geotiff/{i:02d}_{m3}/{H}_{yr}{i:02d}_concentration_v4.0.tif", NSIDC_LIC)
 
 # --- vectors (Natural Earth 5.1.2, public domain) -------------------------------------
 for f in ["ne_50m_admin_0_countries", "ne_50m_admin_0_boundary_lines_land",
@@ -141,17 +168,31 @@ def fetch(rel: str, url: str, tries: int = 6) -> bool:
 
 def main() -> int:
     want = set(sys.argv[1:])
-    big = {"etopo", "bmng", "pop", "ships"}
+    big = {"etopo", "bmng", "pop", "ships", "nsidc"}
     failed = []
+    many = []            # groups of many small files: fetched a few at a time, after the rest
     for group, rel, url, _lic in SOURCES:
         if want and "small" in want and group in big:
             continue
         if want and "small" not in want and group not in want:
             continue
+        if group == "nsidc":
+            many.append((rel, url))
+            continue
         if not fetch(rel, url):
             failed.append(rel)
         if group == "psl":
             time.sleep(4)  # PSL THREDDS answers 429 to bursts
+    todo = [(rel, url) for rel, url in many
+            if not (os.path.exists(os.path.join(DATA, rel)) and os.path.getsize(os.path.join(DATA, rel)) > 0)]
+    if many:
+        print(f"  nsidc: {len(many) - len(todo)} of {len(many)} already here", flush=True)
+    if todo:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=NSIDC_WORKERS) as pool:   # polite: three connections, backoff in fetch()
+            for (rel, _url), ok in zip(todo, pool.map(lambda t: fetch(*t), todo)):
+                if not ok:
+                    failed.append(rel)
     print("\nFAILED:" if failed else "\nall fetched", *failed, sep="\n  ")
     return 1 if failed else 0
 

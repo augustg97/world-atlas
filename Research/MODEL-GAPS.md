@@ -24,6 +24,56 @@ IDs are referenced from code comments and commit messages. **Never recycle one.*
 | stale-data guard | `web/version.json` stamp on every fetch | a cached two-key `climate.json` had crashed the tracers once |
 | ephemeris check | `build/test_app_math.mjs` | Sun declination within 0.004° at the four 2026 seasonal instants |
 
+## APPLIED (build round, 2026-11-10)
+
+Scope agreed for the round: clouds (B1), vegetated land (A7), sea ice (C1). Display values 0-255; EPIC
+figures are means over eight frames, software GL, as `audit_all.py` holds them.
+
+| measure | before | after | what changed |
+|---|---|---|---|
+| clear-sky land, mean abs. error (170,000 pixels stable over 9+ days) | 13.0 | 5.0 | Blue Marble decoded through a measured table, not as sRGB (A7) |
+| the same, held-out: table fitted on 3 frames, scored on the other 3 | 11.6 | 6.2 | the table is not fitted to the frames it is scored on |
+| mean brightness of the disc | 6.96 | 1.94 | exposure 0.43 to 0.70, gamma 1.914 to 1.63, fitted at physical anchors |
+| contrast (std of luminance) | 3.47 | 1.98 | cloud tops now reach EPIC's 245; they stopped at 206 |
+| bright-white fraction | 0.042 | 0.015 | cloud reflectance from the photograph, capped near 0.9 |
+| disc profile, centre to cos 0.2, by channel (new measure) | 9.31 | 4.22 | haze screened by the air above it; cloud reflects more of a slanting beam |
+| clear-ground colour, 6 regions, single days | 15.9 | 13.1 | albedo table; cumulus halved and spread to moderately wet land |
+| glow outside the limb | 0.15 | 0.09 | |
+| sun glint | 0.17 | 0.17 | wind spread added; see A3 |
+| clear-ocean colour, darkest fifth of each frame | 4.6 | 4.9 | **worse by 0.3.** The 4.6 was reached by tuning water colour to this very measure; the ocean is now physical constants and reads 3 levels low in green |
+| limb ring against centre (cos 0.1-0.2 / 0.8-1.0) | 0.063 | 0.103 | **worse. CANCELLATION**: see A1 |
+| cloud brightness over ocean, largest gap at any percentile p5-p99.5 | 17 | 5 | `epic_cloud_cdf.py` |
+| cloud brightness over land, the same | 32 | 20 | within 6 to the median; dim by 8-20 from p60 to p98 |
+| sea-ice extent, largest monthly error, Arctic / Antarctic | 31.5% / 93.5% | 0.1% / 0.0% | rebuilt from NSIDC's 720 grids; **the match is by construction** (C1) |
+| sea-ice conversion, each of 720 grids on its own, median / worst | - | 0.6% / 3.7% | the independent evidence for C1 |
+
+**What was actually wrong (A7).** Three errors were holding each other up. (1) Blue Marble's values were
+read as sRGB; they are close to linear in reflectance with a different gain per channel, so forest and
+savanna were drawn at a third of their brightness. (2) Last round's exposure and gamma were fitted to
+"desert, ocean and bright cloud", and two of those were the atlas's own guesses: the fit absorbed the bad
+decode. (3) Cumulus was then sized to fill the gap the dark ground left. This round fitted the display
+transform only to targets whose reflectance is known without the atlas (deep convective cloud 0.9; clear
+ocean, computed), and the Libya-4 calibration site, **not used in the fit**, landed at (155, 127, 98)
+against EPIC's (154, 130, 100).
+
+**Honest answer against the standard in SCOPE section 8: close, with named exceptions.** Colour, exposure,
+ocean, desert, vegetated land, the disc profile and the brightness distribution of cloud now sit within a
+few display levels of the photograph. Not there: where the clouds are (not compared: a typical year against
+one day), cloud shapes close in (edge detail and cumulus clumps are noise, B1), cloud over land above the
+median (8-20 levels dim), the outermost 2% of the disc (10 levels bright), snow and ice at
+a low Sun (A8).
+
+Also shipped: lake ice kept from OISST and left out of the sea-ice count; drawn ice extended two cells to
+the shore; a precision fault in the cloud drift that smeared cloud into vertical streaks at regional zoom;
+`shader_model.py` (the light model in numpy, checked against the shader's own render before every use);
+`epic_clearsky.py`, `epic_anchors.py`, `land_transfer.py`; the audit suite's tenth check (`clear-sky`).
+
+**Tried and dropped, measured:** ozone absorption (physically 3% of a vertical green beam; EPIC's
+green-to-red ratio is 1.04-1.06 from centre to edge, so the reference shows none, and drawing it turned the
+limb lilac); the two-stream gain below a Sun height of 17 degrees (made the outer ring 14 levels bright).
+
+---
+
 ## APPLIED (verify round, 2026-11-09)
 
 Eight NASA EPIC frames (two per season, four longitudes), the atlas rendered from the same place at the
@@ -56,21 +106,22 @@ texture is a magnified photograph, and vegetated land still reads darker than EP
 
 | # | P | item | touches | from |
 |---|---|---|---|---|
-| A1 | — | **DELIVERED 2026-11-09.** Scored against eight EPIC frames; table above; held by `audit_all.py` (check `epic`). The remaining distance is A7 and B1 | `earth.frag.glsl`, `epic_compare.py` | SCOPE §8 |
+| A1 | — | **DELIVERED 2026-11-09; recalibrated 2026-11-10.** Scored against eight EPIC frames; held by `audit_all.py` (check `epic`). **limb_err rose 0.063 to 0.103 and is classified CANCELLATION**: the verify-round frame matched the ring-to-centre ratio because its whole outer disc was 5-15 levels dim in every channel (`disc_err` 9.3 on the same renders). The disc is now within 3 levels per channel from the centre to cos 0.2 over all frames pooled; the ring at cos 0.1-0.2 is (85, 94, 100) against EPIC's (80, 84, 95). Open as A9 | `earth.frag.glsl`, `epic_compare.py` | SCOPE §8 |
 | A2 | **P1** | **The zoom floor is not met by fields.** SCOPE asks for 2 km/px; shipped fields stop at 5 km (8192 px). Below that the picture is a magnified texture. Stream elevation (AWS terrain tiles, Web Mercator — needs a `frames` conversion and test) and imagery (NASA GIBS 500 m BMNG, EPSG:4326) into a focus window around the camera | new `detail.js`, two samplers in the shader | SCOPE §2 |
-| A3 | P3 | **APPLIED 2026-11-09**: the gain is now physical. Residual: in the December Americas frame the specular point lies against the Chilean coast and the atlas's glint ratio is 1.04 against EPIC's 1.53; EPIC also shows a compact bright core the Cox-Munk mean slope does not produce | `earth.frag.glsl` water block | EPIC |
+| A3 | P3 | **APPLIED 2026-11-09, corrected 2026-11-10.** The physical gain was right but the field holds the mean wind VECTOR, slower than the mean wind speed, so the glint was too narrow and 1.4 times too strong in scene terms (hidden by the old gamma). A 4.5 m/s spread is added in quadrature: four of five frames now within 0.22. Residual unchanged: in the December Americas frame the specular point lies against the Chilean coast, 1.03 against EPIC's 1.53. The 4.5 is one number for the whole ocean; a wind-speed climatology would replace it | `earth.frag.glsl` water block | EPIC |
 | A4 | P2 | Relief shading is weak at regional zoom and there is no sub-grid detail grown from mechanism. Blocked on A2 for real slopes | `Earth.reliefK`, shader | visual review |
-| A5 | P3 | Lakes never freeze and shallow banks (Bahamas) render as land colour: the water mask is BMNG's ocean fill plus dark-pixel lakes, with no ice state for inland water | `fields_surface.step_water` | build notes |
+| A5 | P2 | **The water mask is Blue Marble's ocean fill, and it is wrong in shallow or turbid water.** Seen 2026-11-10: a band up to 150 km wide along south-west Hudson Bay and James Bay is classed as land, drawn in Blue Marble's water colour, and never ices; the Bahamas banks render as land colour. Fix: sea from ETOPO (below sea level and connected to the ocean), lakes from a lake dataset. Also still true: Baikal, Great Bear, Victoria are not in OISST's mask and the Caspian and Azov carry no ice in it, so they never freeze; the Great Lakes and Ladoga do (C1) | `fields_surface.step_water` | visual review |
 | A6 | P3 | The Atlas style's permanent-ice test is a brightness-and-latitude heuristic; mountain glaciers and seasonal snow can be misread | `earth.frag.glsl` atlas block | build notes |
 
-| A7 | P2 | **Vegetated land reads darker and bluer than EPIC.** With clouds off, land the atlas draws at about (40, 54, 62) sits under an EPIC clearest-twentieth of about (68, 70, 66), in every latitude band from the tropics to 70 N; desert and open ocean match. Cumulus (B1) closed part of it: over all land the atlas is now 10-15 levels under EPIC at every percentile (it was 23). Cause not established. Candidates: Blue Marble's display values understate dark-canopy reflectance (it is an enhanced picture, read here as sRGB); aerosol and humidity haze over land, which the Rayleigh-only air has none of; more small cloud than modelled. Needs a clear-sky EPIC composite (many days of one region) to separate ground from cloud | `fields_surface.step_albedo`, shader air block | EPIC |
-| A8 | P3 | Snow and ice at a low Sun read grey: Antarctica in the December frames is far dimmer than in EPIC. Snow scatters forward and stays bright at grazing light; the surface model is Lambert. Seen, not measured | shader | EPIC |
+| A7 | — | **RESOLVED 2026-11-10.** Cause established with a clear-sky composite of about a hundred EPIC frames (`epic_clearsky.py`): Blue Marble read as sRGB understated dark land threefold, and the display transform had been fitted around it. Now a nine-knot table per channel (`ALB_LUT`), fitted by `land_transfer.py`; held-out error 11.6 to 6.2; table above. **What the table is not:** surface reflectance. It is the albedo that reproduces EPIC's view, straight back along the sunlight, where rough ground hides its shadows. Dense forest sits at 0.07-0.09 in the red where field measurements say 0.03: the stable-pixel test passes few rainforest pixels (424 in the darkest bin), so the darkest end of the red curve rests on little | `earth.frag.glsl` `albedoOf()`, `shader_model.py` | EPIC |
+| A8 | P3 | Snow and ice at a low Sun read grey. Partly better 2026-11-10: white Blue Marble pixels are now given snow's albedo (0.90) by rule, since the picture clips there, and Antarctica in December reads white. Sea ice and winter snow at high latitude are still grey: the surface model is Lambert (plus a Lommel-Seeliger share for land) and snow scatters forward. Seen, not measured: the composite excludes latitudes above 60 | shader | EPIC |
+| A9 | P3 | **The outermost ring of the disc is 5-10 levels too bright and too green** (cos 0.1-0.2: atlas 85, 94, 100; EPIC 80, 84, 95). Rayleigh scattering saturates there in the model as in a plane atmosphere; the real loss is probably ozone, which EPIC's product does not show elsewhere on the disc, so it was not added. Would need a spherical-shell treatment of the last 2% of the radius | shader air block | EPIC |
 
 ## B. Atmosphere
 
 | # | P | item | touches | from |
 |---|---|---|---|---|
-| B1 | **P1** | **Clouds: the thing most expected to be wrong.** A 2002 cloud photograph moved by a 2.5° monthly-mean wind and thinned by reanalysis cloud fraction. **Measured 2026-11-09** (`epic_cloud_cdf.py`): over open ocean the brightness distribution now matches EPIC to the median and runs 6-17 levels dim from the 60th percentile up; over land 10-15 dim throughout. **Added:** a second regime, cumulus over humid land, with amount from the month's rainfall and the local solar time. Its cells are noise at 2-3 km, not cloud shapes, and close in the big systems are a magnified 10 km texture. Still to do: a satellite cloud climatology for coverage per 10° band (MODIS/ISCCP; needs an Earthdata route), and cloud that resolves below 10 km | `fields_climate.step_atmo`, `cloudAt()`, `cumulusAt()` | interview |
+| B1 | **P1** | **Clouds: brightness now measured and close; shape and place are not.** `epic_cloud_cdf.py`, 2026-11-10: over open ocean the atlas is within 5 levels of EPIC at every percentile from p5 to p99.5 (it was up to 17 dim); over land within 6 to the median and 8-20 dim from p60 to p98. By 10-degree band over ocean (`--zonal`, measured before the recalibration) ten of twelve bands were within 10 levels, the worst 40-60 N at 17-19 dim: no case yet for replacing the cloud-fraction climatology, and a satellite climatology (ISCCP-H at NCEI is public) stays an option, not a need. Cloud reflectance is the photograph's brightness, capped near 0.9, with the two-stream rise at a low Sun. Cumulus over land: amount from rainfall and local solar time, now clumps 3-12 km across (it was single-pixel noise in streaks). Below the photograph's 5 km texel, cloud edges are broken up by noise. **Still wrong:** both of those are noise, not cloud physics (no streets along the wind, no shadows from cumulus); positions are a 2002 photograph carried on a monthly-mean wind; single-day ground medians in the Congo and Amazon are off by 6-22 levels in either direction | `cloudAt()`, `cumulusAt()` | interview |
 | B2 | P2 | No independent witness for wind, temperature, pressure or precipitation. Score the shipped means against ERA5 monthly means (measure-against only) | new `Research/modeling/audit_climate.py` | SOURCE-SURVEY §5 |
 | B3 | P2 | The daily temperature cycle is a three-parameter model with no check. Compare its range against a station or reanalysis diurnal-range climatology | `airTemp()` in shader and `cards.js` | SCOPE §4 |
 | B4 | P3 | The lapse-rate correction is a constant 6.5 K/km; winter inversions over ice sheets and basins are wrong in sign | same | SOURCE-SURVEY |
@@ -80,7 +131,7 @@ texture is a magnified photograph, and vegetated land still reads darker than EP
 
 | # | P | item | touches | from |
 |---|---|---|---|---|
-| C1 | **P1** | **Sea-ice extent runs high in every month.** `audit_ice.py` (2026-11-09) against NSIDC's own 1991-2020 means for all twelve months: Arctic +11% in winter and **+29 to +31% from July to October**; Antarctic +16% at the September maximum and **+55 to +94% from December to March**. The kickoff figures were four round numbers and understated it (Arctic September is 5.58, not 6.2). **CLOSED, negative result** for the cheap fix: counting only cells iced in at least half the years, or summing area times the fraction of years iced, still leaves +9 to +92%, so the excess is in OISST's ice field itself, not in how a mean is thresholded. The fix is a different source: NSIDC's monthly concentration grids per year (public; polar stereographic, so it needs a `frames` conversion and test), extent per year, then the mean | `fields_climate.step_ocean` | `REGISTER-ice.md` |
+| C1 | — | **RESOLVED 2026-11-10** for extent. The field is built from NSIDC's Sea Ice Index v4 monthly grids, all 720 of 1991-2020, through a tested polar-stereographic conversion (`frames.py`). Per cell: how often it was iced and its mean concentration; the typical-year edge is drawn so that the extent, counted as the dashboard counts it, equals NSIDC's mean of yearly extents. **So the 0.0% is by construction.** The evidence is the per-year check: each grid on its own reproduces NSIDC's cell count within 0.6% median, 3.7% worst. Findings: the median ice edge (iced in half the years) overshoots the mean extent by up to 13.8%, and no fixed threshold works (16-28% by month), which is why the edge is solved per month. Ice AREA is not solved: concentration inside the edge is the plain mean and runs up to 15.5% under NSIDC's area (Antarctic February). Lake ice kept from OISST, not counted. Not done: the month-to-month blend was not watched in motion; 8.9 M km² of OISST-valid cells the atlas draws as less than half water were not investigated | `fields_climate.step_ocean`, `REGISTER-ice.md` | NSIDC |
 | C2 | P2 | Currents come from a 1° ocean model: no eddies, a weak Gulf Stream (0.12 m/s where drifters give ~1), nothing poleward of 65°N / 74°S. A drifter-derived climatology would be the better source | `fields_climate.step_currents` | landmark check |
 | C3 | P3 | Ocean colour is one hue plus a shelf tint; no chlorophyll field | shader water block | source survey (NEO gone) |
 
@@ -116,7 +167,7 @@ texture is a magnified photograph, and vegetated land still reads darker than EP
 
 | # | P | item | touches | from |
 |---|---|---|---|---|
-| G1 | — | **DELIVERED 2026-11-09.** `audit_all.py`: frame tests, app math (now with eight EPIC sun positions), shader compile, audit selftests, sea ice, population, label coverage, EPIC, and the visual ratchet over six frozen frames. 2 min 19 s. Two captures of the same code differ by 0.000% of pixels; a 9% exposure change fails the ratchet (0.8% of pixels) | `Research/modeling/`, `Research/baselines/` | `/model-verify` |
+| G1 | — | **DELIVERED 2026-11-09; ten checks since 2026-11-10** (`clear-sky` added: the ground alone against the EPIC composite, and the audit's numpy copy of the shader against the shader). `audit_all.py`: frame tests, app math (now with eight EPIC sun positions), shader compile, audit selftests, sea ice, population, label coverage, EPIC, and the visual ratchet over six frozen frames. 2 min 19 s. Two captures of the same code differ by 0.000% of pixels; a 9% exposure change fails the ratchet (0.8% of pixels) | `Research/modeling/`, `Research/baselines/` | `/model-verify` |
 | G2 | P2 | Not deployed. `docs/` is empty; publishing is the user's explicit decision. Before any deploy: code files need the version stamp too (only data and shaders carry it), and GHSL/EDGAR/WRI/World Bank attributions must be visible on the live page (they are, in About) | `build/` | SCOPE §11 |
 | G3 | P2 | First-frame budget not measured. SCOPE says ≤ 6 MB and ≤ 1.5 s; the boot set is about 8 MB plus 23 MB of relief and elevation behind it | `fields.boot` | SCOPE §11 |
 | G4 | P3 | Performance is unmeasured: full-screen shader at 2× device pixels, re-run on every camera move | `main.js` cache | build notes |
@@ -125,9 +176,8 @@ texture is a magnified photograph, and vegetated land still reads darker than EP
 
 ---
 
-**Count: 34 items; 4 open at P1** (A1 and G1 delivered this round; A7, A8, G6 added). In order:
+**Count: 35 items; 3 open at P1** (A7 and C1 resolved 2026-11-10; A9 added; A5 raised to P2). In order:
 
-1. **B1 + A7** - cloud and vegetated land are now the whole of the visible distance from the photograph.
-2. **C1** - sea ice from NSIDC's yearly grids. The overshoot is larger than kickoff said and is on the dashboard.
-3. **A2** - streamed detail, so the 2 km floor is met by fields.
-4. **F1** - label coverage: 21 of 204 states at the baseline sheet's framing.
+1. **B1** - cloud shape and place. Brightness is now right; what a cloud looks like close in, and where it is, are not.
+2. **A2** - streamed detail, so the 2 km floor is met by fields.
+3. **F1** - label coverage: 21 of 204 states at the baseline sheet's framing.

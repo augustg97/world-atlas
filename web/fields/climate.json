@@ -55,7 +55,8 @@
  },
  "periods": {
   "atmo": "1991-2020 monthly means (NCEP/NCAR R1; GPCP v2.3)",
-  "ocean": "1991-2020 monthly means (NOAA OISST v2.1)",
+  "ocean": "sea-surface temperature: 1991-2020 monthly means (NOAA OISST v2.1)",
+  "ice": "one typical year of 1991-2020: mean concentration inside the line that encloses the mean of the yearly extents (NSIDC Sea Ice Index, Version 4, G02135, monthly 25 km grids)",
   "currents": "2019-2023 monthly means, 5 m depth (NCEP GODAS)"
  },
  "encodings": {

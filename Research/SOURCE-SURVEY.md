@@ -16,7 +16,8 @@ form of §1.*
 | cloud texture | NASA Blue Marble: Clouds — Stöckli, 2002 | JPEG | 4096×2048 (from 8192) | public domain | copied from `~/Tectonic Plate Model/web/imagery/` with its provenance record |
 | wind (surface, 250 hPa), 2 m temperature, pressure, cloud fraction | NCEP/NCAR Reanalysis 1 — Kalnay et al. 1996; 1991–2020 monthly means | NetCDF | 2.5° / T62 Gaussian | public domain | NOAA PSL THREDDS |
 | precipitation | GPCP v2.3 — Adler et al. 2018; 1991–2020 monthly means | NetCDF | 2.5° | public domain | NOAA PSL THREDDS |
-| sea-surface temperature, sea ice | NOAA OISST v2.1 — Huang et al. 2021; 1991–2020 monthly means | NetCDF / OPeNDAP | 0.25° | public domain | NOAA PSL OPeNDAP |
+| sea-surface temperature, lake ice | NOAA OISST v2.1 — Huang et al. 2021; 1991–2020 monthly means | NetCDF / OPeNDAP | 0.25° | public domain | NOAA PSL OPeNDAP |
+| sea ice | NSIDC Sea Ice Index, Version 4 (G02135) — Fetterer et al. 2025, doi:10.7265/a98x-0f50; monthly concentration, every month of 1991–2020, both hemispheres | GeoTIFF, 720 files, 438 MB | 25 km polar stereographic (EPSG:3411 / 3412, Hughes 1980) | no licence named; NSIDC states its holdings are public domain and asks for the citation | `noaadata.apps.nsidc.org/NOAA/G02135/` |
 | surface currents | NCEP GODAS, 5 m u/v, 2019–2023 | OPeNDAP | 1° × ⅓° | public domain | NOAA PSL OPeNDAP |
 | countries, borders, disputes, places, rivers, physical names | Natural Earth 5.1.2 | GeoJSON | 1:50m (places 1:10m) | public domain | GitHub `nvkelso/natural-earth-vector` tag v5.1.2 |
 | plate boundaries | Bird 2003, PB2002, G³ 4(3) 1027; GeoJSON by H. Ahlenius | GeoJSON | — | ODC PDDL | GitHub `fraxen/tectonicplates` |
@@ -98,7 +99,9 @@ off or changes its badge, and the clock reads *Typical year*. Offline, live laye
 
 | disagreement | shape | handling |
 |---|---|---|
-| **OISST long-term-mean ice vs the NSIDC Sea Ice Index** | amount. PSL's mean averages only years with ice: extent came out 12.3 M km² for the Antarctic February minimum against NSIDC's ~3.0. Corrected with `valid_yr_count / 30` → 5.6. Residual against NSIDC's twelve 1991–2020 monthly means (measured in the verify round; the kickoff figures were approximate): Arctic 16.75 vs 15.03 (Mar), 7.20 vs 5.58 (Sep); Antarctic 21.54 vs 18.61 (Sep), 5.61 vs 3.09 (Feb) | corrected; residual stated on the layer card and the dashboard; register C1 |
+| **OISST long-term-mean ice vs the NSIDC Sea Ice Index** | amount. OISST's ice ran 11–31% over NSIDC's extent in the Arctic and 16–94% over in the Antarctic however it was thresholded. **Settled 2026-11-10 by changing source**: sea ice is now built from NSIDC's own grids (register C1); OISST supplies only sea-surface temperature and lake ice | NSIDC for the sea, OISST for lakes, stated on the layer card |
+| **a mean concentration field vs a mean extent** | amount. Even from NSIDC's grids, the 15% contour of the 30-year mean field overshoots the mean of yearly extents by 4–30%, and the median ice edge by up to 13.8%; NSIDC's monthly extent is itself the mean of daily extents, which a monthly grid overshoots by 1–10% | the typical-year edge is solved per month to the mean extent; said on the card to be by construction |
+| **Blue Marble's pixel values vs reflectance** | amount. The values are not sRGB of reflectance: against EPIC's clear-sky view they are near-linear in reflectance with gains of about 465, 620 and 720 levels per unit in red, green and blue | decoded through a measured table (`land_transfer.py`); the table is EPIC's backscatter view, not field-measured reflectance |
 | de facto vs claimed borders | existence / position | de facto drawn, disputes dashed, 27 dispute cards, hatched in the Atlas style |
 | gridded population products | amount (rural cells) | GHSL only, named; totals conserved exactly through the pipeline (8.192 bn) |
 | vintages: surface 2004, lights 2016, borders 2022, population 2025 | existence | every layer states its vintage |
@@ -110,11 +113,13 @@ off or changes its badge, and the clock reads *Typical year*. Offline, live laye
 | what | witness | status |
 |---|---|---|
 | Sun and Moon | published almanac values: 2026 equinox and solstice instants, equation of time, the 3 March and 12 August 2026 eclipses | **built**: `build/test_app_math.mjs`, all pass (declination within 0.004°; Sun–Moon separation at the solar eclipse 0.84°) |
-| sea ice | NSIDC Sea Ice Index v4, monthly extent, mean of 1991–2020 from the yearly files (`Research/modeling/witness/`) | **built**: `audit_ice.py`. Arctic +11 to +31%, Antarctic +16 to +94% by month. The four figures quoted at kickoff were rounder and kinder than the record — register C1 |
+| sea ice | NSIDC Sea Ice Index v4: per-year monthly extents and each of the 720 grids on its own cells (`Research/modeling/witness/`) | **built**: `audit_ice.py --peryear` and an assertion in the build. The atlas's raster reproduces each grid's own extent within 0.6% median, 3.7% worst. The twelve-month extent match (0.0–0.1%) is by construction and only guards against regression |
 | global mean temperature | observed ~12.5 °C January, ~16 °C July | reproduced: 12.48 / 15.95 |
 | population | World Bank national totals vs the field summed per country | **built**: `audit_population.py`. Total −0.4%; 26 of 192 units differ by more than 10% — register F2 |
 | wind, cloud, precipitation, currents | ERA5 / satellite retrievals | **none in the repository.** A known limit |
-| the lit globe as a picture | NASA EPIC natural colour, eight frames (public domain; `epic.gsfc.nasa.gov`), camera and clock matched | **built**: `epic_compare.py`; table in MODEL-GAPS. Clear ocean within 5 display levels, ground within 16, cloud and vegetated land short — registers A7, B1 |
+| the lit globe as a picture | NASA EPIC natural colour, eight frames (public domain; `epic.gsfc.nasa.gov`), camera and clock matched | **built**: `epic_compare.py`; table in MODEL-GAPS. After the build round: mean brightness within 2 display levels, ocean within 5, ground within 13, cloud brightness over ocean within 5 at every percentile |
+| the ground without cloud | about a hundred more EPIC frames, 15–17 days around six of the eight, third-darkest value per pixel (`reference/epic/clearsky/`, gitignored, 300 MB) | **built**: `epic_clearsky.py`, `land_transfer.py`. Clear land within 5.0 levels mean absolute on 170,000 stable pixels; held-out error 6.2 |
+| the display transform | targets of known reflectance in EPIC: deep convective cloud tops (0.90), clear deep ocean (Rayleigh, computed), and the Libya-4 calibration site as the unfitted check (0.47 / 0.34 / 0.22, **from memory of the calibration literature, ±0.03: not looked up successfully this round**) | **built**: `epic_anchors.py`. Libya-4 lands at (155, 127, 98) against EPIC's (154, 130, 100) |
 | the Sun over the turning Earth | EPIC's J2000 Sun and spacecraft vectors with the sub-spacecraft longitude | **built** into `build/test_app_math.mjs`: eight instants, within 0.22° of longitude and 0.005° of latitude |
 
 ## 6. Layers with no usable source

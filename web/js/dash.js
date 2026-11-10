@@ -25,7 +25,9 @@ export function peopleBySun(pop1, sunNow) {
   return out;
 }
 
-/** Sea-ice extent (million km2, cells with >= 15% cover) per month and hemisphere, from the shipped field. */
+/** Sea-ice extent (million km2, cells with >= 15% cover) per month and hemisphere, from the shipped field.
+ *  The valid channel is 255 for the sea and 200 for inland water (the Great Lakes, the Caspian): lake ice
+ *  is drawn but not counted, because the NSIDC index this is held against is a sea-ice index. */
 export function iceExtents(fields) {
   const f = fields.cpu.oceanA, enc = fields.meta.climate.encodings.ice;
   const thr = ((0.15 - enc.lo) / (enc.hi - enc.lo)) * 255;
@@ -37,7 +39,7 @@ export function iceExtents(fields) {
       const area = R_KM * R_KM * cellLon * (Math.sin(lat + cellLat / 2) - Math.sin(lat - cellLat / 2));
       let c = 0;
       const o = (m * f.h + j) * f.w * 4;
-      for (let i = 0; i < f.w; i++) if (f.d[o + i * 4 + 2] > 127 && f.d[o + i * 4 + 1] >= thr) c++;
+      for (let i = 0; i < f.w; i++) if (f.d[o + i * 4 + 2] > 227 && f.d[o + i * 4 + 1] >= thr) c++;
       if (lat > 0) n[m] += c * area; else s[m] += c * area;
     }
     n[m] /= 1e6; s[m] /= 1e6;

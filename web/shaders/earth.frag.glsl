@@ -78,6 +78,21 @@ float elevation(vec2 uv) {
   return (e.r * 255.0 * 256.0 + e.g * 255.0) / 65535.0 * 20000.0 - 11000.0;
 }
 
+float vnoise(vec2 x, float period) {
+  vec2 i = floor(x), f = fract(x);
+  f = f * f * (3.0 - 2.0 * f);
+  vec2 j = vec2(mod(i.x + 1.0, period), i.y + 1.0);               // periodic in longitude
+  return mix(mix(hash12(i), hash12(vec2(j.x, i.y)), f.x), mix(hash12(vec2(i.x, j.y)), hash12(j), f.x), f.y);
+}
+// Three octaves of value noise whose coarsest wave is `km` long on the ground; returns about 0..1, mean 0.5.
+float clumps(vec2 uv, float km) {
+  float fx = floor(40075.0 / km);
+  vec2 x = uv * vec2(fx, fx * 0.5);
+  return 0.50 * vnoise(x, fx) + 0.30 * vnoise(x * 2.0 + 7.7, fx * 2.0) + 0.20 * vnoise(x * 4.0 + 3.1, fx * 4.0);
+}
+// how many octaves the pixel is finer (negative) or coarser (positive) than a wave `km` long
+float lodOf(float km) { return log2(max(length(gDx) * 40075.0, length(gDy) * 20037.0) / km + 1e-6); }
+
 // Cloud optical density at uv. A real cloud photograph, moved along the monthly-mean surface
 // wind (two-phase flow map so the distortion stays bounded) and thinned or thickened by the
 // monthly cloud-fraction climatology. Shapes are real; positions are MODELLED.
@@ -85,13 +100,21 @@ float cloudAt(vec2 uv, vec2 flowUV, float frac) {
   const float PERIOD = 30.0;                                   // hours per flow cycle
   float ph0 = fract(uHours / PERIOD), ph1 = fract(uHours / PERIOD + 0.5);
   float w0 = 1.0 - abs(2.0 * ph0 - 1.0);
-  float drift = uHours * 2.2e-4;                               // slow eastward carry so cycles do not replay in place
+  // slow eastward carry so cycles do not replay in place. Only its fraction is kept: the whole number of
+  // turns is hundreds, and subtracting that from uv cost the longitude four digits (seen as vertical streaks)
+  float drift = fract(uHours * 2.2e-4);
   vec2 base = vec2(uv.x - drift, uv.y);
   float c0 = textureGrad(uClouds, base - flowUV * (ph0 - 0.5) * PERIOD, gDx, gDy).r;
   float c1 = textureGrad(uClouds, base - flowUV * (ph1 - 0.5) * PERIOD + vec2(0.37, 0.0), gDx, gDy).r;
   float c = mix(c1, c0, w0);
   float gain = mix(0.55, 1.75, smoothstep(0.15, 0.85, frac));
-  return clamp(c * gain - 0.10 * (1.0 - frac), 0.0, 1.0);
+  c = clamp(c * gain - 0.10 * (1.0 - frac), 0.0, 1.0);
+  // Below the photograph's 5 km texel the field would only be a blur. Cloud edges are ragged at every
+  // scale, so the edge (not the core, not the clear air) is broken up by clumps 4-16 km across, carried
+  // with the same drift. It fades out as the pixel grows past the texel: the far view is untouched.
+  float fine = 1.0 - smoothstep(-2.0, 0.0, lodOf(16.0));
+  if (fine > 0.01) c = clamp(c + (clumps(base, 16.0) - 0.5) * 0.65 * fine * 4.0 * c * (1.0 - c), 0.0, 1.0);
+  return c;
 }
 
 // ---- the air ----------------------------------------------------------------------------------
@@ -100,7 +123,7 @@ float cloudAt(vec2 uv, vec2 flowUV, float frac) {
 // scale height 8 km. Scored against NASA EPIC by Research/modeling/epic_compare.py (register A1).
 const vec3 TAU_R = vec3(0.045, 0.100, 0.240);      // vertical optical depth of a clear atmosphere
 const float SUN_E = 1.55;                          // the Sun's strength in the units the surface is lit in
-const float AIR_MS = 1.25;                         // multiple scattering, as a gain on the single-scattered light
+const float AIR_MS = 1.00;                         // gain on the single-scattered light. Last round needed 1.25: it was making up for a low exposure
 const float H_AIR = 0.001256;                      // 8 km in Earth radii
 // relative air mass along a ray at cosine `mu` from the vertical: Kasten & Young (1989); about 38 at the horizon
 float airmass(float mu) {
@@ -108,19 +131,42 @@ float airmass(float mu) {
   return 1.0 / (max(mu, 0.0) + 0.50572 * pow(6.07995 + h, -1.6364));
 }
 float rayleighPhase(float c) { return 0.1875 * (1.0 + c * c); }   // (3/16)(1 + cos^2): radiance factor per unit of scattering
+// Aerosol: the haze of dust, salt and smoke in the lowest two kilometres. A global-mean optical depth of
+// 0.13 at 550 nm, nearly white, thrown mostly forward with a small rise straight back (where EPIC looks from).
+const vec3 TAU_A = vec3(0.110, 0.130, 0.160);
+const float AER_W = 0.93;                          // single-scattering albedo
+const float AIR_ABOVE_HAZE = 0.78;                 // share of the air column above 2 km (scale height 8 km)
+float hg(float g, float c) { return (1.0 - g * g) / pow(1.0 + g * g - 2.0 * g * c, 1.5); }
+// c is the cosine of the scattering angle: -1 straight back toward the Sun
+float aerosolPhase(float c) { return 0.25 * (0.9 * hg(0.75, c) + 0.1 * hg(-0.3, c)); }
+// Ozone is NOT drawn. A 300 Dobson column takes 3% of a vertical green beam and a third of a grazing
+// one, which would turn the limb lilac. It was tried: EPIC's green-to-red ratio is 1.04-1.06 from the
+// centre of the disc to the edge, so the reference carries no such tint, and neither does the atlas.
+const vec3 SKY_L = vec3(0.115, 0.165, 0.275);      // skylight on the ground, in the Sun's units
+const vec3 TRANS_K = vec3(0.040, 0.095, 0.225);    // reddening of sunlight through a long air path
+// Clear deep water: the light that comes back out of it is 2-3% in the blue, under 1% in the green and
+// almost nothing in the red (open-ocean remote-sensing reflectance times pi), plus the reflected sky.
+const vec3 SEA_DEEP = vec3(0.001, 0.010, 0.020);
+const vec3 SKY_REF = vec3(0.22, 0.36, 0.60);
 
 // ---- scene light to display -------------------------------------------------------------------
-// One exposure and one gamma, with a soft shoulder so glints and the Sun roll off instead of
-// clipping. Fitted to NASA EPIC's natural-colour product over eight frames: clear ocean, desert
-// and bright cloud land on the photograph's display values (epic_compare.py; register A1).
-const float EXPO = 0.43, GAMMA = 1.914;
+// One exposure and one gamma, with a knee so glints and the Sun roll off instead of clipping.
+// Fitted to NASA EPIC's natural-colour product at targets whose reflectance is known without
+// reference to this atlas: deep convective cloud tops (0.9) and cloud-free deep ocean (Rayleigh
+// scattering, computed). The Libya-4 calibration site is the check. Research/modeling/epic_anchors.py.
+const float EXPO = 0.700, GAMMA = 1.63;
+const float KNEE = 0.85;
 vec3 display(vec3 c) {
   vec3 s = max(c, 0.0) * EXPO;
-  s = mix(s, 0.6 + 0.4 * tanh((s - 0.6) / 0.4), step(0.6, s));
+  s = mix(s, KNEE + (1.0 - KNEE) * tanh((s - KNEE) / (1.0 - KNEE)), step(KNEE, s));
   return pow(s, vec3(1.0 / GAMMA));
 }
 // the scene value that will be displayed as d: palettes and map inks are authored in display values
 vec3 fromDisplay(vec3 d) { return pow(d, vec3(GAMMA)) / EXPO; }
+const float WIND_SPREAD = 4.5;     // m/s, day-to-day spread of the wind about its monthly mean vector
+const float LAND_LS = 0.30;        // share of the ground's light that follows Lommel-Seeliger (rough, self-shadowing) rather than Lambert
+const float CLOUD_MAX = 0.96;      // ceiling of the cloud photograph read as reflectance
+const float CLOUD_MU = 0.75;       // the Sun height (cosine) at which the photograph's brightness IS the reflectance
 const float NIGHT_GAIN = 3.0;      // faint light (cities, moonlight, stars, aurora) is not scored by a daylit photograph; this keeps it where it was set by eye
 
 // Cumulus over humid land. Through the morning the ground heats, the air above it overturns and
@@ -130,28 +176,47 @@ const float NIGHT_GAIN = 3.0;      // faint light (cities, moonlight, stars, aur
 // the wanted coverage: `th` is the texture's own measured quantile curve. MODELLED.
 // Why it exists: against NASA EPIC the clearest twentieth of vegetated land was 25 display levels
 // brighter than bare ground under clear air, in every latitude band, while desert and ocean matched.
-float vnoise(vec2 x) {
-  vec2 i = floor(x), f = fract(x);
-  f = f * f * (3.0 - 2.0 * f);
-  vec2 j = vec2(mod(i.x + 1.0, 16000.0), i.y + 1.0);            // periodic in longitude
-  return mix(mix(hash12(i), hash12(vec2(j.x, i.y)), f.x), mix(hash12(vec2(i.x, j.y)), hash12(j), f.x), f.y);
-}
+const float CUMULUS_COVER = 0.20;
+const float CUMULUS_E2 = 1.2;      // mean of the sharpened field envelope, so sharpening leaves the mean cover alone  // afternoon cover over the wettest land (it was 0.42 while the ground under it was drawn too dark)
 float cumulusAt(vec2 uv, float humid, float lst) {
   float heat = 0.12 + 0.88 * smoothstep(8.0, 12.5, lst) * (1.0 - smoothstep(17.0, 21.0, lst));
-  float c = 0.42 * humid * heat;                                  // fraction of the ground under a cell
+  float c = CUMULUS_COVER * humid * heat;                         // fraction of the ground under cloud
   if (c < 0.004) return 0.0;
-  // cells gather into fields tens to hundreds of km across: the cloud photograph at five times the
-  // frequency sets where the fields are (its mean in this band is 0.194, so the envelope averages 1)
-  vec2 q = vec2(uv.x * 5.0 + 0.13, 0.25 + 0.5 * abs(fract(uv.y * 2.5) * 2.0 - 1.0));
-  float env = clamp(textureGrad(uClouds, q, gDx * 5.0, gDy * 2.5).r / 0.194, 0.0, 2.4);
-  c = min(0.62, c * env);
-  // the cells themselves are 2-3 km: smaller than a pixel from orbit, where they go to their mean
-  vec2 x = uv * vec2(16000.0, 8000.0);
-  float n = 0.65 * vnoise(x) + 0.35 * vnoise(x * 2.13 + 7.7);
+  // cells gather into fields tens of km across: the cloud photograph at 5 and 13 times its frequency
+  // sets where the fields are (its mean in this band is 0.194, so each envelope averages 1)
+  vec2 q = vec2(uv.x * 5.0 + 0.13, 0.25 + 0.5 * abs(fract(uv.y * 5.0) * 2.0 - 1.0));
+  float env = clamp(textureGrad(uClouds, q, gDx * 5.0, gDy * 5.0).r / 0.194, 0.0, 2.4);
+  vec2 q2 = vec2(uv.x * 13.0 + 0.61, 0.25 + 0.5 * abs(fract(uv.y * 13.0 + 0.3) * 2.0 - 1.0));
+  float env2 = clamp(textureGrad(uClouds, q2, gDx * 13.0, gDy * 13.0).r / 0.194, 0.0, 2.4);
+  float e = 0.5 * (env + env2);                                    // fields of two sizes, 30 and 80 km
+  c = min(0.60, c * e * sqrt(e) / CUMULUS_E2);                     // sharpened: fields with clear air between them, not a veil
+  // Single cells are 1-2 km, under the 2 km zoom floor. What a pixel that size CAN show is how they
+  // clump: knots and streets 3 to 12 km across. Coarser pixels than that see only the mean cover.
+  float n = clumps(uv, 12.0);
   float th = 0.5 + (0.5 - c) * 0.62;
-  float cells = smoothstep(th - 0.07, th + 0.07, n);
-  float lod = log2(max(length(gDx) * 16000.0, length(gDy) * 8000.0) + 1e-6);
-  return 0.55 * mix(cells, c, smoothstep(-0.5, 1.5, lod));
+  float cells = smoothstep(th - 0.15, th + 0.15, n);
+  // a crowded field holds taller, thicker cloud: reflectance from 0.45 (scattered fair-weather cells) to 0.70
+  return mix(0.45, 0.70, smoothstep(0.15, 0.50, c)) * mix(cells, c, smoothstep(-1.5, 0.5, lodOf(12.0)));
+}
+
+// ---- the ground's albedo from Blue Marble --------------------------------------------------
+// Blue Marble is a picture, not a reflectance map: its values are close to LINEAR in reflectance,
+// with a different gain in each channel (about 465, 620 and 720 levels per unit of red, green and
+// blue reflectance) so that land reads green on a screen. Read as sRGB it gave forest and savanna a
+// third of their real brightness. The table is what NASA EPIC's clear-sky view implies, pixel value
+// by pixel value, over 170,000 land pixels in six frames (Research/modeling/land_transfer.py):
+// fitted on three frames it halves the error on the other three. Above the data it continues each
+// channel's line; white stands for snow, which the picture clips, and gets snow's albedo.
+const vec3 ALB_LUT[9] = vec3[](vec3(0.000, 0.000, 0.000), vec3(0.070, 0.049, 0.026), vec3(0.120, 0.097, 0.063), vec3(0.172, 0.148, 0.099), vec3(0.229, 0.195, 0.147), vec3(0.284, 0.254, 0.188), vec3(0.369, 0.361, 0.230), vec3(0.440, 0.444, 0.272), vec3(0.510, 0.527, 0.314));
+const float SNOW_ALB = 0.90;
+float lut1(float x, int c) {
+  float t = clamp(x, 0.0, 1.0) * 8.0;
+  int i = int(min(floor(t), 7.0));
+  return mix(ALB_LUT[i][c], ALB_LUT[i + 1][c], t - float(i));
+}
+vec3 albedoOf(vec3 c) {
+  vec3 a = vec3(lut1(c.r, 0), lut1(c.g, 1), lut1(c.b, 2));
+  return mix(a, vec3(SNOW_ALB), smoothstep(0.80, 0.96, min(c.r, min(c.g, c.b))));
 }
 
 vec3 palette(float v) { return texture(uLut, vec2(clamp(v, 0.002, 0.998), (uLensRow + 0.5) / 16.0)).rgb; }
@@ -236,7 +301,8 @@ void main() {
   vec3 Nn = vec3(-sin(ll.y) * cos(ll.x), -sin(ll.y) * sin(ll.x), cos(ll.y));   // local north
   float coslat = max(cos(ll.y), 0.02);
 
-  vec3 alb = toLinear(mix(tex(uAlbA, uv).rgb, tex(uAlbB, uv).rgb, uAlbMix));
+  vec3 bm = mix(tex(uAlbA, uv).rgb, tex(uAlbB, uv).rgb, uAlbMix);     // Blue Marble's own display values
+  vec3 alb = albedoOf(bm);
   vec2 wn = tex(uWaterNight, uv).rg;
   float water = uHasWater > 0.5 ? smoothstep(0.35, 0.65, wn.r) : 0.0;
   float night = wn.g * wn.g;
@@ -276,7 +342,7 @@ void main() {
     float slant = 1.0 / max(mu0, 0.18);
     cloudSh = cloudAt(uv + sunStep * 0.0035 * slant, flowUV, cloudFrac);     // what stands between this ground and the Sun
     cloudSun = cloudAt(uv + sunStep * 0.0016, flowUV, cloudFrac);            // the cloud's own sunward neighbour
-    cum = cumulusAt(uv, (1.0 - water) * smoothstep(0.4, 6.0, precip), lst);
+    cum = cumulusAt(uv, (1.0 - water) * smoothstep(0.2, 3.0, precip), lst);
   }
 
   // ---- relief normal ------------------------------------------------------------------------
@@ -287,26 +353,33 @@ void main() {
   float lensShade = 1.0;
   if (uStyle == 0) {
     // =============================== Earth from space ========================================
-    vec3 trans = exp(-vec3(0.040, 0.095, 0.225) * (1.0 / (max(mu0, 0.0) + 0.055) - 0.948));   // sunlight reddens through a long air path
+    vec3 trans = exp(-TRANS_K * (1.0 / (max(mu0, 0.0) + 0.055) - 0.948));   // sunlight reddens through a long air path
     vec3 sunL = SUN_E * trans * max(mu0, 0.0);                    // Lambert: the limb of a full disc darkens as the photograph's does
-    vec3 skyL = vec3(0.115, 0.165, 0.275) * smoothstep(-0.20, 0.30, mu0);
+    vec3 skyL = SKY_L * smoothstep(-0.20, 0.30, mu0);
     vec3 moonL = NIGHT_GAIN * vec3(0.010, 0.013, 0.022) * (0.25 + 0.75 * uMoonLit * smoothstep(-0.1, 0.4, dot(N, uMoon))) * (1.0 - dayF);
     float shade = clamp(dot(n, uSun) / max(mu0, 0.10), 0.0, 2.4);
     shade = mix(1.0, shade, smoothstep(-0.02, 0.10, mu0) * (1.0 - water));
     lensShade = shade;
     float shadow = 1.0 - 0.62 * cloudSh;
 
-    vec3 land = alb * (sunL * shade * shadow + skyL + moonL);
+    // Rough ground is not a Lambert surface: seen from near the Sun's direction it hides its own
+    // shadows and falls off toward the limb more slowly (Lommel-Seeliger). Normalised to 1 with Sun and
+    // eye overhead, where the albedo table was measured.
+    float nvL = max(dot(N, V), 0.0);
+    float rough = (1.0 - LAND_LS) + LAND_LS * 2.0 / (max(mu0, 0.0) + nvL + 1e-3);
+    rough = uView == 0 ? min(rough, 1.8) : 1.0;
+    vec3 land = alb * (sunL * shade * shadow * rough + skyL + moonL);
 
     // water: one colour, shaded; a shelf tint; sky reflection; Sun glint whose width is the wind's
     float depth = max(-z, 0.0);
-    // open-ocean water-leaving reflectance is a few percent in the blue and almost nothing in the red
-    vec3 seaC = mix(vec3(0.006, 0.020, 0.044), vec3(0.018, 0.085, 0.110), 0.75 * exp(-depth / 75.0) * uHasElev);
+    vec3 seaC = mix(SEA_DEEP, vec3(0.018, 0.085, 0.110), 0.75 * exp(-depth / 75.0) * uHasElev);
     vec3 sea = seaC * (sunL * shadow * 0.9 + skyL * 1.6 + moonL * 2.0);
     float nv = max(dot(N, V), 0.0);
     float fres = 0.02 + 0.98 * pow(1.0 - nv, 5.0);
-    sea += fres * vec3(0.22, 0.36, 0.60) * smoothstep(-0.15, 0.3, mu0) * 0.55;
-    float s2 = 0.003 + 0.00512 * windSp;                           // Cox & Munk (1954) mean-square slope
+    sea += fres * SKY_REF * smoothstep(-0.15, 0.3, mu0) * 0.55;
+    // Cox & Munk (1954) mean-square slope. The field holds the month's mean wind VECTOR, which is
+    // slower than the mean wind speed wherever the wind swings about: add the day-to-day spread.
+    float s2 = 0.003 + 0.00512 * sqrt(windSp * windSp + WIND_SPREAD * WIND_SPREAD);
     vec3 H = normalize(uSun + V);
     float nh = max(dot(N, H), 1e-3);
     float D = exp(-(1.0 - nh * nh) / (nh * nh) / s2) / (PI * s2 * nh * nh * nh * nh);
@@ -326,13 +399,18 @@ void main() {
       col = mix(col, lv * (sunL * 0.85 + skyL), have);
     }
 
-    // clouds, lit by the same Sun, self-shaded on their sunward gradient
-    float selfSh = clamp(1.0 - (cloudSun - cloud) * 2.2, 0.55, 1.15);
-    vec3 cloudC = vec3(0.96) * (sunL * selfSh * 1.05 + skyL * 0.7 + moonL * 4.0);
-    // Opacity from the texture's density. The upper half is steepened so thick cloud is opaque and
-    // neutral: set by matching the brightness distribution over open ocean to EPIC's, percentile
-    // by percentile (they agreed below the 60th and the atlas ran 20-30% dim above it).
-    float cloudA = min(1.0, cloud * (1.0 + 0.65 * smoothstep(0.25, 0.80, cloud)));
+    // Clouds, lit by the same Sun, self-shaded on their sunward gradient. A cloud absorbs almost
+    // nothing: what it does not reflect it passes down. The cloud photograph's brightness is taken as
+    // the cloud's reflectance with the Sun 40 degrees from overhead, capped near 0.9 (what the thickest
+    // storm tops measure), and the two-stream law carries it to other Sun heights: R = t / (mu0 + t),
+    // so a cloud sends back a larger share of a slanting beam. That, with the ozone above, is what keeps
+    // EPIC's disc level from the centre to a cosine of 0.2 and then drops it at the edge. Checked against
+    // EPIC's brightness distribution over open ocean, percentile by percentile (epic_cloud_cdf.py).
+    float selfSh = clamp(1.0 - (cloudSun - cloud) * 2.2, 0.55, 1.10);
+    vec3 cloudC = sunL * selfSh + skyL * 0.7 + moonL * 4.0;
+    float cRef = cloud < 0.55 ? cloud : 0.55 + (CLOUD_MAX - 0.55) * tanh((cloud - 0.55) / (CLOUD_MAX - 0.55));
+    float tC = CLOUD_MU * cRef / (1.0 - cRef);
+    float cloudA = mix(cRef, tC / (max(mu0, 0.30) + tC), dayF);   // below 17 degrees of Sun, broken cloud shades itself and the gain stops
     cloudA = 1.0 - (1.0 - cloudA) * (1.0 - cum);                   // cumulus under and between the larger systems
     col = mix(col, cloudC, cloudA);
     cloud = max(cloud, cum);                                       // what the air and the city lights below see
@@ -353,12 +431,16 @@ void main() {
       // view path, and the air adds its own: (3/16)(1+cos^2) * muS/(muS+muV) * (1 - exp(-tau(mV+mS))).
       // The warm band at the terminator is not added here: it is the reddened sunlight (trans) on
       // whatever it lights.
-      vec3 tau = TAU_R * exp(-max(z, 0.0) / 8000.0) * mix(1.0, 0.40, cloud);
-      float amV = airmass(nv), amS = airmass(mu0);
-      vec3 inscat = SUN_E * AIR_MS * rayleighPhase(dot(uSun, V)) * (amV / (amV + amS)) * (1.0 - exp(-tau * (amV + amS)));
+      // most cloud is low (tops at 2 km, three quarters of the air still above); the thickest reaches 8 km
+      vec3 tau = TAU_R * exp(-max(z, 0.0) / 8000.0) * mix(1.0, mix(0.75, 0.35, smoothstep(0.5, 0.9, cloud)), smoothstep(0.0, 0.25, cloud));
+      vec3 tauA = TAU_A * exp(-max(z, 0.0) / 2000.0) * (1.0 - 0.9 * cloud);   // the haze lies under the cloud tops
+      float amV = airmass(nv), amS = airmass(mu0), cSV = dot(uSun, V);
+      // the haze lies in the lowest 2 km, under four fifths of the air: its light is screened both ways
+      vec3 inscat = SUN_E * (amV / (amV + amS)) * (AIR_MS * rayleighPhase(cSV) * (1.0 - exp(-tau * (amV + amS)))
+                                                   + AER_W * aerosolPhase(-cSV) * (1.0 - exp(-tauA * (amV + amS))) * exp(-tau * AIR_ABOVE_HAZE * (amV + amS)));
       // 0.6: about half of what the direct beam loses still arrives as skylight. The +1 is the Sun's
       // own vertical column; `trans` above carries only the extra path of a low Sun.
-      col = col * exp(-tau * 0.6 * (amV + 1.0)) + inscat * smoothstep(-0.10, 0.02, mu0);
+      col = col * exp(-(tau * 0.6 + tauA * 0.3) * (amV + 1.0)) + inscat * smoothstep(-0.10, 0.02, mu0);
     }
   } else {
     // =================================== Atlas ===============================================
@@ -377,7 +459,7 @@ void main() {
     float hs = dot(n, L) / dot(N, L);
     lensShade = hs;
     // permanent ice reads white: bright in BOTH bracketing months is not enough in winter, so use latitude and height too
-    float iceSheet = smoothstep(0.55, 0.8, luma(alb)) * smoothstep(58.0, 66.0, abs(degrees(ll.y)) + max(z, 0.0) / 400.0);
+    float iceSheet = smoothstep(0.55, 0.8, luma(toLinear(bm))) * smoothstep(58.0, 66.0, abs(degrees(ll.y)) + max(z, 0.0) / 400.0);
     vec3 land = mix(tint, vec3(0.97, 0.98, 0.99), iceSheet) * mix(1.0, hs, 0.55);
     if (cId.g > 0.5) {                                 // contested ground is hatched, never plain
       float st = step(0.5, fract((gl_FragCoord.x + gl_FragCoord.y) / 7.0));
@@ -411,7 +493,7 @@ void main() {
     else if (uLens == LENS_CO2) { v = tex(uLens2D, uv).r; a *= smoothstep(0.02, 0.22, v); }
     else if (uLens == LENS_SHIPS) { v = tex(uLens2D, uv).r; a *= smoothstep(0.03, 0.30, v) * water; }
     else if (uLens == LENS_ELEV) v = z < 0.0 ? 0.5 * (1.0 - sqrt(min(-z / 9000.0, 1.0))) : 0.5 + 0.5 * sqrt(min(z / 6500.0, 1.0));
-    else if (uLens == LENS_GREEN) { vec3 s = pow(alb, vec3(1.0 / 2.2)); v = clamp((2.0 * s.g - s.r - s.b) * 3.2, 0.0, 1.0); a *= (1.0 - water); }
+    else if (uLens == LENS_GREEN) { vec3 s = bm; v = clamp((2.0 * s.g - s.r - s.b) * 3.2, 0.0, 1.0); a *= (1.0 - water); }
     else if (uLens == LENS_SOLAR) { v = max(mu0, 0.0); a *= smoothstep(-0.02, 0.05, mu0); }
     else if (uLens == LENS_LIGHTS) { v = sqrt(night); a *= smoothstep(0.0, 0.15, v); }
     vec3 lc = uStyle == 0 ? fromDisplay(palette(v)) : toLinear(palette(v));

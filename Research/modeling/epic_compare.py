@@ -152,6 +152,12 @@ def measures(a, g, water, sun):
         m = hit & (mu > lo) & (mu <= hi)
         prof.append(float(lum[m].mean())); rgb = a[m].mean(0); blue.append(float(rgb[2] / max(1.0, rgb[0])))
     out["limb_lum"] = prof
+    # the same by channel, from the centre to a cosine of 0.2: what disc_err scores
+    dp = []
+    for lo, hi in ((0.8, 1.0), (0.6, 0.8), (0.45, 0.6), (0.3, 0.45), (0.2, 0.3)):
+        mm = g["hit"] & (g["mu"] > lo) & (g["mu"] <= hi)
+        dp.append([float(v) for v in a[mm].mean(0)])
+    out["disc_rgb"] = dp
     # The outermost bin is two pixels wide and is decided by how the disc radius was fitted, not by
     # the limb, so the score uses the next one in: cos 0.1-0.2 against the centre.
     out["limb_ratio"] = prof[-2] / prof[0]
@@ -288,6 +294,10 @@ def summarise(rows):
     s["lum_err"] = round(float(np.mean([abs(r["atlas"]["mean_lum"] - r["epic"]["mean_lum"]) for r in rows])), 2)
     s["contrast_err"] = round(float(np.mean([abs(r["atlas"]["contrast"] - r["epic"]["contrast"]) for r in rows])), 2)
     s["white_err"] = round(float(np.mean([abs(r["atlas"]["white_frac"] - r["epic"]["white_frac"]) for r in rows])), 3)
+    # The disc from its centre to a view cosine of 0.2, in five rings, each channel: mean |atlas - EPIC|.
+    # limb_err below scores only the ratio of the outermost ring to the centre, which a disc that is
+    # uniformly too dim toward the edge can pass (it did, in the verify round: see MODEL-GAPS A1).
+    s["disc_err"] = round(float(np.mean([np.abs(np.array(r["atlas"]["disc_rgb"]) - np.array(r["epic"]["disc_rgb"])).mean() for r in rows])), 2)
     s["limb_err"] = round(float(np.mean([abs(r["atlas"]["limb_ratio"] - r["epic"]["limb_ratio"]) for r in rows])), 3)
     oc = [np.linalg.norm(np.array(r["atlas"]["ocean_rgb"]) - np.array(r["epic"]["ocean_rgb"])) for r in rows if "ocean_rgb" in r["atlas"] and "ocean_rgb" in r["epic"]]
     s["ocean_rgb_err"] = round(float(np.mean(oc)), 1)

@@ -16,3 +16,4 @@ scratchpad/
 
 # rewritten by every audit run
 Research/modeling/epic_scores_cur.json
+Research/modeling/clearsky_scores_clr.json

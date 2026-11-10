@@ -98,17 +98,22 @@ node build/test_app_math.mjs                     # ephemeris vs almanac, project
 ./venv/bin/python build/check_shaders.py        # compile every shader
 
 # rebuild data (each step asserts landmarks and stamps web/version.json)
-./venv/bin/python build/fetch_sources.py        # ~2.6 GB into data/ (gitignored); idempotent
+./venv/bin/python build/fetch_sources.py        # ~3 GB into data/ (gitignored); idempotent
 ./venv/bin/python build/fields_surface.py       # water albedo elev night clouds   (albedo:7 = one month)
 ./venv/bin/python build/fields_climate.py       # atmo ocean currents
 ./venv/bin/python build/fields_human.py         # pop ships lanes co2 countries
 ./venv/bin/python build/vectors.py              # political places physical plates quakes volcanoes power stats air
 
-# the whole audit suite against its baselines (2-3 min; --quick skips the browser checks)
+# the whole audit suite against its baselines (ten checks, 2-3 min; --quick skips the browser checks)
 ./venv/bin/python Research/modeling/audit_all.py
 # score against NASA EPIC by hand: render (headless), then compare
 "$HOME/Modeling Studio/.venv/bin/python" Research/modeling/epic_render.py cur
 ./venv/bin/python Research/modeling/epic_compare.py --tag cur
+# the light model, in this order: display transform at physical anchors, then the albedo table, then score
+./venv/bin/python Research/modeling/epic_anchors.py
+"$HOME/Modeling Studio/.venv/bin/python" Research/modeling/epic_render.py clr air,daylight,ice
+./venv/bin/python Research/modeling/land_transfer.py --fit      # prints the ALB_LUT line for the shader
+./venv/bin/python Research/modeling/epic_clearsky.py --tag clr  # needs --fetch once (300 MB)
 # the visual ratchet alone; accept a moved frame only with a reason
 "$HOME/Modeling Studio/.venv/bin/python" "$HOME/Modeling Studio/tools/frame_baseline.py" check --project .
 
@@ -149,6 +154,22 @@ node build/test_app_math.mjs                     # ephemeris vs almanac, project
   the diff image before accepting: it should be confined to the panel.
 - **The kickoff sea-ice witness was four round numbers and was too kind.** Witness values come from the source's
   own files (`Research/modeling/witness/`), never from memory.
+- **Blue Marble is a picture, not a reflectance map.** Read as sRGB it gave dark land a third of its brightness,
+  and the display transform was then fitted around the error, and cumulus was sized to fill the gap. Three
+  compensating errors, each of which scored well. Fit a display transform ONLY to targets whose reflectance
+  is known without the atlas (`epic_anchors.py`), then fit the ground (`land_transfer.py --fit`), in that order.
+- **One photograph cannot separate ground from cloud.** A composite of 16 days can: keep the third-darkest
+  value per pixel, and trust only pixels where most days agree (`epic_clearsky.py`).
+- **A match made by construction is not evidence.** Sea-ice extent is solved to NSIDC's mean, so its 0.0% is a
+  regression guard. The evidence is the per-year check, which fits nothing.
+- **A mean of vectors is not a mean of magnitudes.** Monthly-mean wind is slower than the mean wind speed; the
+  median ice edge is not the mean extent; a mean concentration field cleared 15% in a fifth of the years.
+- **A big offset eats a coordinate's digits.** Cloud drift was hundreds of turns added to uv; regional zoom
+  showed vertical streaks. Keep the fraction of anything periodic before adding it to a texture coordinate.
+- **`shader_model.py` is a second copy of the shader.** Its users check it against the shader's own render first.
+  Change both together or the clear-sky audit's `instrument_bias` will say so.
+- **`water4.npy` and `water.webp` say south-west Hudson Bay is land.** They agree with each other and are both
+  wrong (register A5). Two instruments from one source are one instrument.
 
 Plus the standing ones: a process backgrounded with `&` inside a tool call dies when that call
 ends; a waiter on a `pgrep` pattern can match itself — wait on a **PID**; a static host can serve

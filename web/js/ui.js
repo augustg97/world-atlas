@@ -202,7 +202,7 @@ export class UI {
         ${d.co2 ? row('Fossil CO₂ this year', `${(d.co2.soFar / 1e9).toFixed(2)} Gt`, 'static', `at the 2022 rate of ${Math.round(d.co2.perSec).toLocaleString('en-US')} t/s`) : ''}</div>
       <div class="dsec"><div class="sec-h">Air & sea</div>
         ${Number.isFinite(d.meanT) ? row('Mean surface air temp.', `${d.meanT.toFixed(1)} °C`, 'climatology', '1991–2020 for this date') : ''}
-        ${d.ice ? row('Arctic sea ice', `${d.ice.n.toFixed(1)} M km²`, 'climatology', 'extent, ≥15% cover; runs 11–31% high vs NSIDC') + row('Antarctic sea ice', `${d.ice.s.toFixed(1)} M km²`, 'climatology', 'runs 16–94% high vs NSIDC; see layer card') : ''}</div>
+        ${d.ice ? row('Arctic sea ice', `${d.ice.n.toFixed(1)} M km²`, 'climatology', 'extent, ≥15% cover; NSIDC 1991–2020 mean') + row('Antarctic sea ice', `${d.ice.s.toFixed(1)} M km²`, 'climatology', 'extent, ≥15% cover; lake ice not counted') : ''}</div>
       <div class="dsec"><div class="sec-h">Ground</div>
         ${d.quakes ? row('Earthquakes M≥4.5', `${d.quakes.day} in 24 h · ${d.quakes.week} in 7 days`, 'live', d.quakes.top ? `largest this week: M${d.quakes.top[4].toFixed(1)} ${esc(d.quakes.top[5])}` : '') : row('Earthquakes', d.quakeNote || 'shown only at the present', 'live')}</div>`;
   }
@@ -223,7 +223,7 @@ export class UI {
       <ul><li>Borders follow who administers the ground (Natural Earth’s de facto worldview). Disputed lines are dashed and contested ground is hatched in the Atlas style; each dispute has a card.</li>
       <li>Relief is shaded from the elevation field with a vertical exaggeration of <b>${k.land.toFixed(1)}×</b> on land at this zoom${k.sea ? ` and <b>${k.sea.toFixed(1)}×</b> on the sea floor` : ''}. From orbit real slopes would be invisible without it.</li>
       <li>Cloud shadows and aircraft are drawn with exaggerated height. Cloud drift is sped up 2.5× so that it reads at the scale of the globe.</li>
-      <li>Brightness, colour and the limb of the Space style are set against eight NASA EPIC full-disc photographs taken from the same place at the same instant. Clear ocean and desert land within a few display levels of the photographs; vegetated land reads darker than they do, and where the clouds are is not compared at all.</li>
+      <li>Brightness, colour and the limb of the Space style are set against NASA EPIC full-disc photographs taken from the same place at the same instant. The exposure is fitted to cloud tops and clear ocean, whose reflectance is known independently; the ground’s albedo is Blue Marble re-read against a cloud-free composite of about a hundred EPIC frames. Ocean, desert, vegetated land and the brightness of cloud now land within a few display levels of the photographs. Where the clouds are is not compared at all: that is a typical year against one day.</li>
       <li>Air traffic and ship motion are modelled flows, not tracked vehicles. Live positions are licence-restricted and are not used.</li>
       <li>Latitude is treated as spherical on a 6371 km sphere; the error is below a pixel at every scale offered.</li></ul>
       <h3>Sources</h3><ul class="srcs">${sources.map((s) => `<li>${esc(s)}</li>`).join('')}<li>Country statistics: World Bank Open Data, CC BY 4.0.</li><li>Reference for layout and coverage (not reproduced): National Geographic, <i>The World — Political</i>.</li></ul>

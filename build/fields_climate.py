@@ -13,6 +13,8 @@ Frames (SCOPE section 6), all converted by frames.resample_grid:
   NCEP R1 Gaussian (T62)     192 x 94, irregular latitudes, 0..358.125 E
   GPCP v2.3                  2.5 deg CELL grid, 1.25..358.75 E, -88.75..88.75
   OISST v2.1                 0.25 deg CELL grid, 0.125..359.875 E, -89.875..89.875
+  NSIDC Sea Ice Index v4     25 km polar stereographic (EPSG:3411 / 3412), 304x448 north and
+                             316x332 south, one grid per month and year; frames.resample_polar
   GODAS                      1 x 1/3 deg velocity points, 1..360 E, -74..65 (no Arctic)
 """
 from __future__ import annotations
@@ -167,37 +169,302 @@ def fill_nearest(a):
     return out
 
 
+# --- sea ice: one typical year from NSIDC's thirty --------------------------------------------
+ICE_YEARS = range(1991, 2021)
+ICE_THRESHOLD = 0.15         # the Sea Ice Index's cutoff, and the one web/js/dash.js counts with
+ICE_IN_BYTE, ICE_OUT_BYTE = 40, 36       # the count threshold is 38.25 of 255: two bytes clear on either side, so a
+                                         # decoder that is off by one cannot move 1-2 million km2 across the line
+ICE_FILL_CELLS = 4.0         # a cell NSIDC does not observe borrows from an ocean cell at most 100 km away
+ICE_WATER_MIN = 0.02         # ...and only if the atlas draws water in it (water.webp, cell mean)
+_HEMI = (("N", F.NSIDC_NORTH), ("S", F.NSIDC_SOUTH))
+
+
+def nsidc_stack(letter, grid):
+    """(30, 12, ny, nx) monthly concentration 1991-2020 as fractions: NaN on NSIDC's land and
+    coast, 1.0 in the pole hole. Every file's georeferencing is checked against frames.py."""
+    out = np.empty((len(ICE_YEARS), 12, grid["ny"], grid["nx"]), np.float32)
+    for yi, yr in enumerate(ICE_YEARS):
+        for m in range(12):
+            p = os.path.join(DATA, "nsidc", grid["name"], f"{letter}_{yr}{m + 1:02d}_concentration_v4.0.tif")
+            if not os.path.exists(p):
+                raise SystemExit(f"missing {p}: run build/fetch_sources.py nsidc")
+            conc, raw = F.read_nsidc_concentration(p, grid)
+            if (raw == F.NSIDC_MISSING).any():
+                raise SystemExit(f"{p} has missing cells; the 30-year statistics assume none")
+            out[yi, m] = conc
+    ocean = ~np.isnan(out)
+    if not (ocean == ocean[0, 0]).all():
+        raise SystemExit(f"NSIDC {grid['name']}: the land mask changes between files")
+    return out
+
+
+def nsidc_extent_csv(letter):
+    """NSIDC's own monthly extent and area, (30, 12) each, million km2: the mean of that month's
+    DAILY extents (user guide section on monthly extent), not the extent of the monthly-mean grid."""
+    import csv
+    ext = np.full((len(ICE_YEARS), 12), np.nan); area = ext.copy()
+    for m in range(12):
+        for row in csv.reader(open(os.path.join(DATA, "nsidc", "extent", f"{letter}_{m + 1:02d}_extent_v4.0.csv"))):
+            if row and row[0].strip().isdigit() and int(row[0]) in ICE_YEARS:
+                ext[int(row[0]) - ICE_YEARS[0], m] = float(row[4]); area[int(row[0]) - ICE_YEARS[0], m] = float(row[5])
+    if np.isnan(ext).any() or (ext < 0).any():
+        raise SystemExit(f"NSIDC {letter} extent tables are incomplete for {ICE_YEARS[0]}-{ICE_YEARS[-1]}")
+    return ext, area
+
+
+class IceFrame:
+    """One NSIDC grid against the canonical raster and the atlas's own ocean.
+
+    A canonical cell is OBSERVED where its centre falls in an NSIDC ocean cell. NSIDC's 25 km
+    land mask turns every cell that touches land into 'coast', so fjords, straits and the
+    channels of the Canadian archipelago are land to it while the atlas draws water there. Such
+    a cell borrows from the nearest observed ocean cell, at most ICE_FILL_CELLS away, and only if
+    the atlas draws water in it: a valid-ocean cell that is all land or ice shelf on screen would
+    add to the extent and show nothing (the fill would be +19% of the Antarctic February extent
+    without that rule, +4% with it)."""
+
+    def __init__(self, grid, valid, water, w, h):
+        self.grid, self.w, self.h = grid, w, h
+        self.pm = F.polar_map(grid, w, h)
+        self.sl = slice(0, h // 2) if grid["sign"] > 0 else slice(h // 2, h)
+        self.cell_km2 = F.polar_cell_area_km2(grid)
+        self.area = (F.cell_area_km2(w, h) * np.ones((1, w)))[self.sl]
+        self.valid = valid[self.sl]
+        self.ocean = None
+        self.water = water[self.sl]
+
+    def set_ocean(self, ocean):
+        """ocean: (ny, nx) bool, NSIDC's ocean cells (the pole hole included)."""
+        self.ocean = ocean
+        dist, idx = ndimage.distance_transform_edt(~ocean, return_indices=True)
+        self.near = (idx[0], idx[1]); self.reach = dist <= ICE_FILL_CELLS
+        seen = np.nan_to_num(F.resample_polar(ocean.astype(float), self.pm, "nearest")[self.sl]) > 0.5
+        self.observed = seen
+        self.unseen = self.valid & ~seen & (self.water < ICE_WATER_MIN)      # valid ocean, not observed, drawn as land: no ice
+        self.borrowed = self.valid & ~seen & ~self.unseen                     # filled from the nearest observed cell (if in reach)
+
+    def filled(self, a):
+        """Native field (..., ny, nx) with land and coast taking the nearest ocean cell's value."""
+        return np.where(self.reach, a[..., self.near[0], self.near[1]], np.nan)
+
+    def to_canon(self, a, method):
+        """Native field -> this hemisphere's canonical rows, coast filled, zero where the atlas has no sea to put it in."""
+        c = F.resample_polar(self.filled(a), self.pm, method)[..., self.sl, :]
+        return np.where(self.unseen, 0.0, np.nan_to_num(c, nan=0.0))
+
+    def extent(self, iced):
+        """Million km2 the way web/js/dash.js counts it: valid cells, whole spherical cell areas."""
+        return ((iced & self.valid) * self.area).sum((-2, -1)) / 1e6
+
+
+def ice_peryear_check(frames, stacks, verbose=True):
+    """Each of the 720 monthly grids on its own: extent (>= 15%) counted on the canonical raster
+    the way the dashboard counts, against (a) the same grid counted on NSIDC's cells with their
+    true areas and (b) NSIDC's published extent for that month. (a) tests the conversion and the
+    coast handling and nothing else. (b) also contains NSIDC's own definition gap: its monthly
+    extent is the mean of the daily extents, and a monthly-MEAN grid clears 15% wherever ice sat
+    for a fifth of the month."""
+    out = {}
+    for letter, grid in _HEMI:
+        fr, c = frames[letter], stacks[letter]
+        csv_ext, _ = nsidc_extent_csv(letter)
+        native = ((np.nan_to_num(c) >= ICE_THRESHOLD) * fr.cell_km2).sum((2, 3)) / 1e6
+        canon = np.stack([fr.extent(fr.to_canon(c[y], "nearest") >= ICE_THRESHOLD) for y in range(c.shape[0])])
+        bare = np.stack([((np.nan_to_num(F.resample_polar(c[y], fr.pm, "nearest")[..., fr.sl, :]) >= ICE_THRESHOLD) * fr.area).sum((1, 2)) / 1e6
+                         for y in range(c.shape[0])])
+        e_conv = (canon - native) / native * 100
+        e_bare = (bare - native) / native * 100
+        e_def = (native - csv_ext) / csv_ext * 100
+        e_csv = (canon - csv_ext) / csv_ext * 100
+
+        def dist(e):
+            return {"median": round(float(np.median(e)), 2), "p05": round(float(np.percentile(e, 5)), 2),
+                    "p95": round(float(np.percentile(e, 95)), 2), "worst": round(float(e.flat[np.abs(e).argmax()]), 2),
+                    "by_month_mean": [round(float(x), 2) for x in e.mean(0)]}
+        out[grid["name"]] = {"canonical_vs_native_pct": dist(e_conv), "projection_only_vs_native_pct": dist(e_bare),
+                             "native_vs_nsidc_csv_pct": dist(e_def), "canonical_vs_nsidc_csv_pct": dist(e_csv),
+                             "nsidc_csv_extent_mkm2": [[round(float(x), 2) for x in r] for r in csv_ext],
+                             "canonical_extent_mkm2": [[round(float(x), 3) for x in r] for r in canon]}
+        if verbose:
+            for k in ("projection_only_vs_native_pct", "canonical_vs_native_pct", "native_vs_nsidc_csv_pct", "canonical_vs_nsidc_csv_pct"):
+                v = out[grid["name"]][k]
+                print(f"    {grid['name']:5s} {k:32s} median {v['median']:+6.2f}  p05 {v['p05']:+6.2f}  p95 {v['p95']:+6.2f}  worst {v['worst']:+6.2f}")
+    return out
+
+
+def ice_typical_year(frames, stacks, verbose=True):
+    """Twelve concentration fields for ONE typical year, on the canonical raster, and their diagnostics.
+
+    The atlas shows one year, and anything that counts or draws its ice edge uses 15% of that
+    field. So the 15% line has to enclose the area a typical year's ice covers: the 1991-2020
+    mean of NSIDC's monthly extents. Three fields that do NOT do that, each measured on NSIDC's
+    own cells against NSIDC's own extent (see Research/modeling/REGISTER-ice.md):
+      the mean concentration        +4..+20% Arctic, +6..+30% Antarctic (a cell iced one year in five clears 15%)
+      the median ice edge           -8..+14% (ice frequency is not symmetric about one half, least of all in an
+                                    Antarctic summer, when little ice is left and it is somewhere else every year)
+      any one fixed threshold       the level that works runs from 16% to 28% with the month
+    What is shipped: rank every cell by how often it is iced (the share of the thirty years whose
+    monthly mean is at least 15%; ties by mean concentration), and take cells from the top of
+    that ranking until their area, counted as the dashboard counts it, reaches NSIDC's mean
+    extent for the month. Inside that line the value is the plain 30-year mean concentration.
+    Outside it the value is the same mean, held under 15% (clipped at 14.1%) so that nothing
+    downstream counts it and the field stays continuous for the month-to-month blend and the
+    drawn edge. 0.7-2.3 million km2 a month sits on that clip: ice that is there in some years.
+
+    Frequency and mean are computed on NSIDC's cells and interpolated bilinearly, so the line is
+    a smooth contour between cell centres, not a staircase of 25 km blocks.
+    """
+    w = frames["N"].w; h = frames["N"].h
+    ice = np.zeros((12, h, w)); inside = np.zeros((12, h, w), bool)
+    diag = {}
+    for letter, grid in _HEMI:
+        fr, c = frames[letter], stacks[letter]
+        target = nsidc_extent_csv(letter)[0].mean(0)
+        c0 = np.nan_to_num(c, nan=0.0)
+        freq = (c0 >= ICE_THRESHOLD).mean(0)                     # (12, ny, nx)
+        cbar = c0.mean(0)
+        rank = freq + cbar / (len(ICE_YEARS) + 1)                # frequency first, mean concentration breaks ties
+        rank_c = fr.to_canon(rank, "bilinear"); cbar_c = np.clip(fr.to_canon(cbar, "bilinear"), 0, 1)
+        freq_c = fr.to_canon(freq, "nearest")
+        d = {k: [] for k in ("target_mkm2", "shipped_mkm2", "level_frequency", "level_on_nsidc_cells", "median_edge_native_mkm2",
+                             "mean_field_native_mkm2", "mean_of_yearly_native_mkm2", "borrowed_iced_mkm2", "observed_lost_mkm2",
+                             "inside_lifted_pct", "area_shipped_mkm2")}
+        for m in range(12):
+            ok = fr.valid & (rank_c[m] > 0)
+            order = np.argsort(-rank_c[m][ok], kind="stable")
+            cum = np.cumsum(fr.area[ok][order]) / 1e6
+            k = int(np.searchsorted(cum, target[m]))             # cum[k-1] < target <= cum[k]: take whichever is nearer
+            if k > 0 and (k == cum.size or target[m] - cum[k - 1] < cum[k] - target[m]):
+                k -= 1
+            if k >= cum.size - 1:
+                raise SystemExit(f"{grid['name']} month {m + 1}: NSIDC's mean extent {target[m]:.2f} is more ice than the 30 years ever show")
+            level = float(rank_c[m][ok][order][k])
+            ins = rank_c[m] >= level
+            v = np.where(ins, np.maximum(cbar_c[m], (ICE_IN_BYTE + 0.2) / 255), np.minimum(cbar_c[m], ICE_OUT_BYTE / 255))
+            ice[m, fr.sl] = v; inside[m, fr.sl] = ins
+            # the same question asked on NSIDC's own cells, with their true areas
+            A = fr.cell_km2
+            o = np.argsort(-rank[m][fr.ocean], kind="stable")
+            cumn = np.cumsum(A[fr.ocean][o]) / 1e6
+            d["level_on_nsidc_cells"].append(round(float(rank[m][fr.ocean][o][min(int(np.searchsorted(cumn, target[m])), cumn.size - 1)]), 3))
+            d["target_mkm2"].append(round(float(target[m]), 3))
+            d["shipped_mkm2"].append(round(float(fr.extent(ins)), 3))
+            d["level_frequency"].append(round(level, 3))
+            d["median_edge_native_mkm2"].append(round(float(((freq[m] >= 0.5) * A).sum() / 1e6), 3))
+            d["mean_field_native_mkm2"].append(round(float(((cbar[m] >= ICE_THRESHOLD) * A).sum() / 1e6), 3))
+            d["mean_of_yearly_native_mkm2"].append(round(float((freq[m] * A).sum() / 1e6), 3))
+            d["borrowed_iced_mkm2"].append(round(float(((ins & fr.borrowed) * fr.area).sum() / 1e6), 3))
+            seen_ice = np.nan_to_num(F.resample_polar((rank[m] >= level).astype(float), fr.pm, "nearest")[fr.sl]) > 0.5
+            d["observed_lost_mkm2"].append(round(float(((seen_ice & ~fr.valid) * fr.area).sum() / 1e6), 3))
+            d["inside_lifted_pct"].append(round(float(((ins & fr.valid & (cbar_c[m] < ICE_THRESHOLD)) * fr.area).sum() / max(1e-9, (ins & fr.valid) .__mul__(fr.area).sum()) * 100), 3))
+            d["area_shipped_mkm2"].append(round(float(((ins & fr.valid) * v * fr.area).sum() / 1e6), 3))
+        diag[grid["name"]] = d
+        if verbose:
+            def row(k, f="{:6.2f}"):
+                return " ".join(f.format(x) for x in d[k])
+            print(f"  {grid['name']}: million km2 by month")
+            print("    NSIDC mean of yearly extents  " + row("target_mkm2"))
+            print("    shipped (>= 15%, as counted)   " + row("shipped_mkm2"))
+            print("    ice frequency at the shipped line " + row("level_frequency", "{:5.2f}") + "   (0.50 would be the median edge)")
+            print("    same, solved on NSIDC's cells     " + row("level_on_nsidc_cells", "{:5.2f}"))
+            print("    median edge, NSIDC cells       " + row("median_edge_native_mkm2"))
+            print("    mean field >= 15%, NSIDC cells " + row("mean_field_native_mkm2"))
+            print("    iced cells borrowed at coasts  " + row("borrowed_iced_mkm2", "{:6.3f}"))
+            print("    iced NSIDC cells the atlas calls land " + row("observed_lost_mkm2", "{:6.3f}"))
+    return ice, inside, diag
+
+
 def step_ocean():
     print("ocean")
     W, H = 1440, 720
     sst, lon, lat = psl_months("sst.mon.ltm.nc", "sst", "noaa.oisst.v2.highres/sst.mon.ltm.1991-2020.nc")
-    ice, _, _ = psl_months("icec.mon.ltm.nc", "icec", "noaa.oisst.v2.highres/icec.mon.ltm.1991-2020.nc")
-    # PSL's long-term mean of ice concentration is CONDITIONAL: it averages only the years in
-    # which the cell had ice, so it overstates extent everywhere ice is intermittent (measured:
-    # Antarctic February extent 12.3 against NSIDC's 3.0 million km2). valid_yr_count is the
-    # number of those years; concentration x (years with ice / 30) is the unconditional mean.
-    nyr, _, _ = psl_months("icec.mon.ltm.nc", "valid_yr_count", "noaa.oisst.v2.highres/icec.mon.ltm.1991-2020.nc")
-    print(f"  ice valid_yr_count: max {np.nanmax(nyr):.0f} (expect 30)")
-    ice = np.nan_to_num(ice, nan=0.0) * np.clip(np.nan_to_num(nyr, nan=0.0) / 30.0, 0, 1)
     sst = F.resample_grid(sst, lon, lat, W, H)
-    ice = F.resample_grid(ice, lon, lat, W, H)
-    if np.nanmax(ice) > 1.5:
-        ice = ice / 100.0
     valid = ~np.isnan(sst)
-    ice = np.where(valid, np.nan_to_num(ice, nan=0.0), np.nan)
+    assert (valid == valid[0]).all(), "the OISST ocean mask is the same in every month"
+
+    # Sea ice is NOT OISST's. Its long-term-mean ice field ran 11-31% over the NSIDC Sea Ice Index
+    # in the Arctic and 16-94% over in the Antarctic however it was thresholded (REGISTER-ice.md,
+    # 2026-11-09). The field is rebuilt from NSIDC's own monthly grids, year by year.
+    wpath = os.path.join(CACHE, "water4.npy")
+    if not os.path.exists(wpath):
+        raise SystemExit("missing data/_cache/water4.npy: run build/fields_surface.py water first (the sea-ice coast fill needs the atlas's water)")
+    water = F.reduce_aligned(np.load(wpath).astype(np.float32), W, H)
+    frames, stacks = {}, {}
+    for letter, grid in _HEMI:
+        stacks[letter] = nsidc_stack(letter, grid)
+        frames[letter] = IceFrame(grid, valid[0], water, W, H)
+        frames[letter].set_ocean(~np.isnan(stacks[letter][0, 0]))
+    print("  sea ice, each of the 720 monthly grids on its own (% error in extent):")
+    chk = ice_peryear_check(frames, stacks)
+    for name in ("north", "south"):
+        v = chk[name]["canonical_vs_native_pct"]
+        assert abs(v["median"]) < 2.0 and abs(v["worst"]) < 5.0, f"NSIDC {name}: the canonical raster does not reproduce the grid's own extent: {v}"
+    ice, inside, diag = ice_typical_year(frames, stacks)
+    json.dump({"per_year": chk, "typical_year": diag}, open(os.path.join(CACHE, "ice_build_report.json"), "w"), indent=1)
+    ice = np.where(valid, ice, np.nan)
+
+    # Inland water. NSIDC's index is a SEA-ice index: it carries the Great Lakes, Ladoga, Baikal and
+    # Great Bear as cells that are always open, and the Caspian and Azov lie off its grid. Their winter
+    # ice is real, so water that does not connect to the world ocean keeps OISST's ice (corrected for
+    # PSL's conditional mean, as before). It is marked in the valid channel (200, the sea is 255) so
+    # that the sea-ice count leaves it out, as NSIDC's does.
+    from scipy import ndimage
+    lab, _ = ndimage.label(valid[0])
+    sizes = np.bincount(lab.ravel()); sizes[0] = 0
+    lake = valid[0] & (lab != sizes.argmax())
+    ice_o, lon_o, lat_o = psl_months("icec.mon.ltm.nc", "icec", "noaa.oisst.v2.highres/icec.mon.ltm.1991-2020.nc")
+    nyr, _, _ = psl_months("icec.mon.ltm.nc", "valid_yr_count", "noaa.oisst.v2.highres/icec.mon.ltm.1991-2020.nc")
+    ice_o = np.nan_to_num(ice_o, nan=0.0) * np.clip(np.nan_to_num(nyr, nan=0.0) / 30.0, 0, 1)
+    ice_o = np.nan_to_num(F.resample_grid(ice_o, lon_o, lat_o, W, H), nan=0.0)
+    if np.nanmax(ice_o) > 1.5:
+        ice_o = ice_o / 100.0
+    ice = np.where(lake[None], ice_o, ice)
+    inside = inside & ~lake[None]
+    sea = valid & ~lake[None]
+    lake_area = (lake * (F.cell_area_km2(W, H) * np.ones((1, W)))).sum() / 1e6
+    print(f"  inland water kept on OISST ice: {lake_area:.2f} M km2 in {len(np.unique(lab[lake]))} bodies")
+    # OISST's own mask has no Baikal, Great Bear or Victoria: those lakes still never freeze (register A5).
+    assert at(lake, -87.5, 47.7) and at(lake, 51, 42) and at(lake, 31.5, 60.8), "Lake Superior, the Caspian and Ladoga are inland water"
+    assert not at(lake, 20, 58) and not at(lake, -85, 60) and not at(lake, -40, -68), "the Baltic, Hudson Bay and the Weddell Sea are the sea"
+    assert at(ice[1], -81.2, 42.2) > 0.3 and at(ice[7], -81.2, 42.2) < 0.08, "Lake Erie: ice in February, open in August"
+    assert at(ice[2], 31.5, 60.8) > 0.4 and at(ice[7], 31.5, 60.8) == 0, "Lake Ladoga: ice in March, none in August"
+    # OISST carries no ice at all on the Caspian or the Sea of Azov, which do freeze in the north: still open (A5).
 
     assert at(sst[8], -150, 5) > 26 and at(sst[2], 0, -60) < 3, "warm pool; Southern Ocean"
     assert at(ice[2], 0, 85) > 0.9 and at(ice[8], 0, 85) > 0.5, "central Arctic ice"
+    assert at(ice[2], 0, 89.9) > 0.97 and at(ice[8], 0, 89.9) > 0.9, "the pole hole is ice"
     assert at(ice[8], -40, -68) > 0.9 and at(ice[1], -40, -68) < at(ice[8], -40, -68) - 0.3, "Weddell Sea: September maximum, February minimum"
+    assert at(ice[2], 75, 76) > 0.9 and at(ice[2], 2, 68) < 0.01, "March: the Kara Sea is iced, the Norwegian Sea further south is open"
+    assert at(ice[2], -85, 60) > 0.9 and at(ice[8], -85, 60) < 0.05, "Hudson Bay: frozen in March, open in September"
+    assert at(ice[2], 145, 58) > 0.7 and at(ice[8], 145, 58) < 0.01, "northern Sea of Okhotsk: iced in March, open in September"
+    assert at(ice[2], -20, 62) < 0.01 and at(ice[2], 35, 72) < 0.05, "March: no ice south of Iceland or in the southern Barents Sea"
+    assert at(ice[8], -175, -72) > 0.85 and at(ice[1], -175, -76) < 0.15, "Ross Sea: September pack, February open water"
+    assert at(ice[8], -60, -58) < 0.02 and at(ice[8], 20, -50) < 0.02, "September: Drake Passage and the ocean south of Africa are open"
     assert not at(valid[0], 10, 23) and at(valid[0], -150, 0), "Sahara is not ocean; the Pacific is"
-    area = F.cell_area_km2(W, H) * np.ones((1, W))
-    for name, sl in (("Arctic", slice(0, H // 2)), ("Antarctic", slice(H // 2, H))):
-        ext = [(np.nan_to_num(ice[m, sl]) >= 0.15).astype(float).__mul__(area[sl]).sum() / 1e6 for m in range(12)]
-        print(f"  {name} sea-ice extent (10^6 km2) by month: " + " ".join(f"{e:.1f}" for e in ext))
-    print("    NSIDC 1991-2020: Arctic ~15.3 (Mar) .. ~6.2 (Sep);  Antarctic ~3.0 (Feb) .. ~18.5 (Sep)")
+    j35 = int(55 / 180 * H)
+    assert np.nanmax(ice[:, j35: H - j35]) == 0, "no sea ice within 35 degrees of the equator"
+    assert at(ice[0], 122, 40.4) > 0.3 and at(ice[6], 122, 40.4) == 0, "the lowest-latitude sea ice: Liaodong Bay in January"
 
-    atlas("oceanA.png", enc("sst", fill_nearest(sst), -2, 35, units="C"), enc("ice", fill_nearest(ice), 0, 1, units="fraction"),
-          (valid * 255).astype(np.uint8))
+    b_ice = enc("ice", fill_nearest(ice), 0, 1, units="fraction")
+    # the one number everything downstream reads: valid cells at or above 15%, on the encoded bytes
+    area = F.cell_area_km2(W, H) * np.ones((1, W))
+    counted = (b_ice >= ICE_THRESHOLD * 255) & sea
+    assert (counted == (inside & sea)).all(), "the encoded 15% line is the line that was solved for"
+    for name, sl in (("north", slice(0, H // 2)), ("south", slice(H // 2, H))):
+        ext = (counted[:, sl] * area[sl]).sum((1, 2)) / 1e6
+        tgt = np.array(diag[name]["target_mkm2"])
+        err = (ext - tgt) / tgt * 100
+        print(f"  {name} sea-ice extent, shipped bytes (10^6 km2): " + " ".join(f"{e:.2f}" for e in ext))
+        print(f"  {name} NSIDC 1991-2020 mean of yearly extents: " + " ".join(f"{e:.2f}" for e in tgt) + f"   (largest gap {np.abs(err).max():.2f}%)")
+        assert np.abs(err).max() < 0.5, f"{name}: shipped extent is off NSIDC's mean by {err}"
+
+    # OISST's quarter-degree mask stops short of the real shore, and the shader draws ice and SST only where
+    # this channel says so: that left a strip of open water between the pack and the coast of Hudson Bay.
+    # Two cells past the mask are marked 180: drawn (both fields are already filled outward), not counted.
+    shore = ndimage.binary_dilation(valid[0], iterations=2) & ~valid[0]
+    vch = np.where(lake[None], 200, valid * 255)
+    vch = np.where(shore[None] & ~valid, 180, vch).astype(np.uint8)
+    atlas("oceanA.png", enc("sst", fill_nearest(sst), -2, 35, units="C"), b_ice, vch)
     np.save(os.path.join(CACHE, "ice_extent_valid.npy"), valid[0])
 
 
@@ -256,7 +523,9 @@ def main():
                 "oceanB": {"file": "oceanB.png", "w": 720, "h": 360, "channels": ["ucur", "vcur", "valid"]},
             },
             "periods": {"atmo": "1991-2020 monthly means (NCEP/NCAR R1; GPCP v2.3)",
-                        "ocean": "1991-2020 monthly means (NOAA OISST v2.1)",
+                        "ocean": "sea-surface temperature: 1991-2020 monthly means (NOAA OISST v2.1)",
+                        "ice": "one typical year of 1991-2020: mean concentration inside the line that encloses the mean "
+                               "of the yearly extents (NSIDC Sea Ice Index, Version 4, G02135, monthly 25 km grids)",
                         "currents": "2019-2023 monthly means, 5 m depth (NCEP GODAS)"},
             "encodings": ENC,
         }, open(meta_path, "w"), indent=1)
