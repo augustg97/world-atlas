@@ -13,3 +13,6 @@ venv/
 __pycache__/
 .DS_Store
 scratchpad/
+
+# rewritten by every audit run
+Research/modeling/epic_scores_cur.json
