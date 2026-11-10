@@ -1,0 +1,135 @@
+{
+ "note": "Twelve canonical months stacked vertically, January first. value = lo + (hi-lo)*decode(byte/255); decode is identity (linear), x^2 (sqrt) or signed x^2 about 0.5 (ssqrt).",
+ "lapse_K_per_km": 6.5,
+ "atlases": {
+  "atmoA": {
+   "file": "atmoA.png",
+   "w": 360,
+   "h": 180,
+   "channels": [
+    "u10",
+    "v10",
+    "t0"
+   ]
+  },
+  "atmoB": {
+   "file": "atmoB.png",
+   "w": 360,
+   "h": 180,
+   "channels": [
+    "slp",
+    "cloud",
+    "precip"
+   ]
+  },
+  "atmoC": {
+   "file": "atmoC.png",
+   "w": 360,
+   "h": 180,
+   "channels": [
+    "u250",
+    "v250",
+    null
+   ]
+  },
+  "oceanA": {
+   "file": "oceanA.png",
+   "w": 1440,
+   "h": 720,
+   "channels": [
+    "sst",
+    "ice",
+    "valid"
+   ]
+  },
+  "oceanB": {
+   "file": "oceanB.png",
+   "w": 720,
+   "h": 360,
+   "channels": [
+    "ucur",
+    "vcur",
+    "valid"
+   ]
+  }
+ },
+ "periods": {
+  "atmo": "1991-2020 monthly means (NCEP/NCAR R1; GPCP v2.3)",
+  "ocean": "1991-2020 monthly means (NOAA OISST v2.1)",
+  "currents": "2019-2023 monthly means, 5 m depth (NCEP GODAS)"
+ },
+ "encodings": {
+  "sst": {
+   "lo": -2,
+   "hi": 35,
+   "curve": "linear",
+   "units": "C"
+  },
+  "ice": {
+   "lo": 0,
+   "hi": 1,
+   "curve": "linear",
+   "units": "fraction"
+  },
+  "u10": {
+   "lo": -32,
+   "hi": 32,
+   "curve": "linear",
+   "units": "m/s"
+  },
+  "v10": {
+   "lo": -32,
+   "hi": 32,
+   "curve": "linear",
+   "units": "m/s"
+  },
+  "t0": {
+   "lo": -55,
+   "hi": 50,
+   "curve": "linear",
+   "units": "C at sea level"
+  },
+  "slp": {
+   "lo": 960,
+   "hi": 1060,
+   "curve": "linear",
+   "units": "hPa"
+  },
+  "cloud": {
+   "lo": 0,
+   "hi": 1,
+   "curve": "linear",
+   "units": "fraction"
+  },
+  "precip": {
+   "lo": 0,
+   "hi": 40,
+   "curve": "sqrt",
+   "units": "mm/day"
+  },
+  "u250": {
+   "lo": -90,
+   "hi": 90,
+   "curve": "linear",
+   "units": "m/s"
+  },
+  "v250": {
+   "lo": -90,
+   "hi": 90,
+   "curve": "linear",
+   "units": "m/s"
+  },
+  "ucur": {
+   "lo": -2,
+   "hi": 2,
+   "curve": "ssqrt",
+   "units": "m/s"
+  },
+  "vcur": {
+   "lo": -2,
+   "hi": 2,
+   "curve": "ssqrt",
+   "units": "m/s"
+  }
+ }
+}

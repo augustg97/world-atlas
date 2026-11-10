@@ -1,0 +1,20 @@
+{
+ "title": "Blue Marble: Clouds",
+ "credit": "NASA/Goddard Space Flight Center, image by Reto St\u00f6ckli",
+ "source_page": "https://visibleearth.nasa.gov/images/57747/blue-marble-clouds/77558l",
+ "source_asset": "https://eoimages.gsfc.nasa.gov/images/imagerecords/57000/57747/cloud_combined_8192.tif",
+ "usage": "https://science.nasa.gov/earth/faq/",
+ "publication_date": "2002-02-11",
+ "composition": "Two days of visible imagery plus a third day of polar thermal-infrared imagery; not a single instantaneous observation.",
+ "source_width": 8192,
+ "source_height": 4096,
+ "source_bytes": 35870468,
+ "source_sha256": "d137775d8966ab8d443fd5126dc6e7ad72072bc1ed50555c5818d221735daf0f",
+ "asset": "nasa-clouds-4096.jpg",
+ "width": 4096,
+ "height": 2048,
+ "bytes": 3456885,
+ "sha256": "bd872c8d3cb239433c142e48729e6ce33ad452517b441971446adf83b419b299",
+ "preparation": "Full global field converted to a scalar grayscale texture, Lanczos downsampled to 4096x2048 and encoded as progressive JPEG quality 95. No cloud shapes painted, synthesized, sharpened or rearranged in the bitmap.",
+ "runtime": "Longitude wraps, latitude clamps. Accelerated coherent transport and bounded deformation; broad era moisture modulates opacity. Illustrative weather, not a paleo-weather reconstruction or forecast."
+}

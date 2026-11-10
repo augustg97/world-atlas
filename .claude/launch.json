@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "world-atlas",
+      "runtimeExecutable": "/usr/bin/python3",
+      "runtimeArgs": ["/Users/augustgweon/World Atlas/build/serve.py", "8150"],
+      "port": 8150
+    }
+  ]
+}

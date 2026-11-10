@@ -1,0 +1,15 @@
+# large source datasets — never committed.
+# ANCHORED with a leading slash: an unanchored `data/` also matches `web/data/`,
+# which silently un-tracks the app's OWN data and ships a site that renders nothing.
+/data/
+*.tif
+*.tiff
+*.nc
+
+# reference material used as a STANDARD: measured against, never reproduced
+reference/
+
+venv/
+__pycache__/
+.DS_Store
+scratchpad/

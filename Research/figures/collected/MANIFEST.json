@@ -1,0 +1,10 @@
+{
+ "policy": {
+  "accept": ["public domain", "cc0", "pdm", "cc by 4.0", "cc by 3.0", "cc by 2.0",
+             "cc-by-4.0", "cc-by-3.0", "attribution"],
+  "refuse": ["share alike", "sharealike", "-sa", "noncommercial", "non-commercial",
+             "-nc", "noderivatives", "-nd", "fair use", "non-free"]
+ },
+ "warning": "verified_subject stays false until a human has looked at it. Correct licence does NOT imply correct subject - about a third of one project's first fetched batch was wrong.",
+ "items": []
+}
