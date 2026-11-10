@@ -1,7 +1,7 @@
 // Network feeds. Each one is LIVE or OBSERVED (SCOPE section 5): it carries its own timestamp,
 // reports plainly when it is unavailable, and never presents a stale value as current.
 
-import { loadBitmap, texFromImage, texFromData } from './gl.js?v=20261110T175726Z';
+import { loadBitmap, texFromImage, texFromData } from './gl.js?v=20261110T205316Z';
 
 const HOUR = 3600000, DAY = 86400000;
 

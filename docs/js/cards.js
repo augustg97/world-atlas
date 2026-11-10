@@ -2,9 +2,9 @@
 // an eyebrow, a title, fact rows, values FOR THE CURRENT INSTANT with their evidence tier, the
 // vintage of every number, and its sources (SCOPE section 7).
 
-import { TIERS, LAYERS, LENS_DEFS, FUEL_COLORS } from './catalog.js?v=20261110T175726Z';
-import { sunElevation, localSolarTime, dayLength, D2R } from './astro.js?v=20261110T175726Z';
-import { R_KM } from './camera.js?v=20261110T175726Z';
+import { TIERS, LAYERS, LENS_DEFS, FUEL_COLORS } from './catalog.js?v=20261110T205316Z';
+import { sunElevation, localSolarTime, dayLength, D2R } from './astro.js?v=20261110T205316Z';
+import { R_KM } from './camera.js?v=20261110T205316Z';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const fmt = (v, d = 0) => (Number.isFinite(v) ? v.toLocaleString('en-US', { maximumFractionDigits: d, minimumFractionDigits: d }) : '—');

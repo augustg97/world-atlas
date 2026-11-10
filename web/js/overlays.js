@@ -135,8 +135,14 @@ export function greatCircle(lon1, lat1, lon2, lat2, n) {
 // the map is dragged. No history is kept either: the same view always gives the same picture.
 // What "inside", "touching" and "open water" mean is tested against the ground, not assumed: each
 // candidate rectangle is sampled against the 0.1 degree owner raster (data.js).
-// Everything else (seas, continents, dependencies, cities, landforms) keeps one position each and is
-// placed after the states, so that it can never cost a state its name.
+// Everything else (seas, dependencies, cities, landforms) keeps one position each and is placed after the
+// states, so that it can never cost a state its name.
+// CONTINENTS are set last of all, in the manner of a political wall map: wide letter-spaced capitals in quiet
+// ink that lie across the states. Each letter is its own rectangle and goes only where nothing else is, so a
+// continent's name costs no other name its place and touches no other name's ink (see _spread).
+// TAKEN GROUND: setBlocked() gives the layer rectangles of the window that are not map (the interface's panels,
+// an inset's frame). No name, leader or letter is set on them; they are tested at the real scale (see draw).
+// A SUB-VIEW (an inset) is a second Labels on the same canvas, confined to a rectangle of it: place() says where.
 const SERIF = '"Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif';
 const SANS = '-apple-system, "Helvetica Neue", "Segoe UI", system-ui, sans-serif';
 
@@ -153,6 +159,17 @@ const SLOTS = NP + RINGS.length * DIRS.length;
 const ZOOM_STEP = 1.05;                         // the sheet's layout is solved once per 5% of zoom and rides the ground in between
 const CONFIRMED = 1 << 24, UNTOUCHED = 1 << 25; // bits in a candidate's cached result (see _scan, _confirm)
 const NV = 10;                                   // text variants per state (see _variants)
+// A continent's name (see _spread)
+const SPREAD_MIN = 14, SPREAD_MAX = 22;          // px; its type, a fourteenth of the continent's breadth on screen
+const SPREAD_FILL = [1, 0.88, 0.78, 0.68, 0.58, 0.5, 0.42, 0.35, 0.28];   // share of that breadth from its first letter to its last, widest first
+const SPREAD_TIGHT = 1.3, SPREAD_LOOSE = 4.2;    // letter pitch, in type sizes: closer is ordinary type, wider no longer reads as a word
+const SPREAD_ROW = 0.5, SPREAD_UP = 0.5;         // rows tried: every half a type size, out to this share of the breadth above and below the anchor
+const SPREAD_SHIFT = 0.3, SPREAD_ALONG = 0.4;    // and shifts along the line: every 0.3 of the pitch, out to this share of the breadth
+const SPREAD_GAPS = [1.9, 2.4, 2.9, 3.4, 3.9];  // line spacing of a name on two lines, in type sizes
+const SPREAD_PAD = 2.5;                          // px kept clear around each letter
+const SPREAD_ON_OWN = 0.6;                       // share of its letters that must lie on the continent's own land (the rest: on water)
+const SPREAD_STRAY_Y = 1.2, SPREAD_STRAY_X = 0.6, SPREAD_OWN = 0.3;   // the score: breadths lost per breadth strayed up or along; gained for all of it on its own land
+const SPREAD_ALIAS = { Australia: 'Oceania' };   // Natural Earth's continent field calls it that
 
 // The sheet's inverse projection as a table (the exact inverse is a Newton solve, far too slow to ask
 // what lies under every corner of every candidate rectangle). 256 x 128 cells, bilinear; a cell with a
@@ -204,12 +221,37 @@ function segsCross(a, b) {
 }
 
 export class Labels {
-  constructor(canvas) {
+  constructor(canvas, sub = false) {
     this.canvas = canvas; this.ctx = canvas.getContext('2d'); this.items = []; this.placed = [];
     this.states = []; this.before = []; this.after = []; this.geo = null;
     this._tw = new Map(); this._cap = new Map(); this._epoch = 0; this._key = ''; this._sig = null; this._gen = 0;
+    this.sub = sub; this.ox = 0; this.oy = 0; this.alpha = 1; this.blocked = []; this._bsig = ''; this.underlay = null; this._cont = new Map();
   }
-  resize(w, h, dpr) { this.canvas.width = Math.round(w * dpr); this.canvas.height = Math.round(h * dpr); this.w = w; this.h = h; this.dpr = dpr; this._sig = null; }
+  resize(w, h, dpr) { if (!this.sub) { this.canvas.width = Math.round(w * dpr); this.canvas.height = Math.round(h * dpr); } this.w = w; this.h = h; this.dpr = dpr; this._sig = null; }
+  /** A sub-view's rectangle on the shared canvas, CSS px. Its own coordinates run from its top-left corner. */
+  place(x, y, w, h, dpr) { this.ox = x; this.oy = y; if (w !== this.w || h !== this.h || dpr !== this.dpr) this.resize(w, h, dpr); }
+  /** Rectangles [x0, y0, x1, y1] of this view (CSS px, its own coordinates) that are taken by something that is not map. */
+  setBlocked(rects) {
+    const sig = rects.map((r) => r.map((v) => Math.round(v * 2) / 2).join(',')).join(';');
+    if (sig === this._bsig) return false;
+    this._bsig = sig; this.blocked = rects.map((r) => r.slice()); this._sig = null;
+    return true;
+  }
+  /** Is a rectangle at the REAL scale clear of everything taken? */
+  _clear(x0, y0, x1, y1) {
+    const B = this.blocked;
+    for (let i = 0; i < B.length; i++) { const r = B[i]; if (x0 < r[2] && x1 > r[0] && y0 < r[3] && y1 > r[1]) return false; }
+    return true;
+  }
+  /** The same for a leader, given in layout coordinates with the rectangle of the name it starts at. */
+  _segClear(seg, R) {
+    const B = this.blocked;
+    if (!B.length) return true;
+    const z = this._z, w2 = this.w / 2, h2 = this.h / 2, dx = ((R.x0 + R.x1) / 2 - w2) * (z - 1), dy = ((R.y0 + R.y1) / 2 - h2) * (z - 1);
+    const ax = seg[0] + dx, ay = seg[1] + dy, bx = w2 + (seg[2] - w2) * z, by = h2 + (seg[3] - h2) * z;
+    for (let i = 0; i < B.length; i++) { const r = B[i]; if (segHitsRect(ax, ay, bx, by, r[0] - 2.5, r[1] - 2.5, r[2] + 2.5, r[3] + 2.5)) return false; }
+    return true;
+  }
 
   /** items: {text, lon, lat, cls, prio, minKm, maxKm, ref} - lower prio is placed first and keeps its place.
    *  A country item with `state` is placed by its geometry (ref[1] carries lp, pts, inner, area, sea); items.geo is the owner raster. */
@@ -222,6 +264,9 @@ export class Labels {
     this.before = this.items.filter((it) => !st(it) && it.prio < first);
     this.after = this.items.filter((it) => !st(it) && it.prio >= first);
     this.states.forEach((it, i) => { it._i = i; it._L = null; });
+    // which continent each unit is on (Natural Earth's own field): a continent's letters lie on its own land
+    this._cont = new Map();
+    for (const it of this.items) if (it.cls === 'country' && it.ref && it.ref[1] && it.ref[1].id) this._cont.set(it.ref[1].id, it.ref[1].continent);
     this._gen++; this._sig = null;
   }
 
@@ -444,7 +489,7 @@ export class Labels {
   /** Is the rectangle wholly in the window, once the layout is carried to the real scale (see draw)? */
   _visible(R) {
     const z = this._z, hw = (R.x1 - R.x0) / 2, hh = (R.y1 - R.y0) / 2, cx = this.w / 2 + ((R.x0 + R.x1) / 2 - this.w / 2) * z, cy = this.h / 2 + ((R.y0 + R.y1) / 2 - this.h / 2) * z;
-    return cx - hw >= 1 && cy - hh >= 1 && cx + hw <= this.w - 1 && cy + hh <= this.h - 1;
+    return cx - hw >= 1 && cy - hh >= 1 && cx + hw <= this.w - 1 && cy + hh <= this.h - 1 && this._clear(cx - hw, cy - hh, cx + hw, cy + hh);
   }
   _onScreen(x, y, mx, my) { const z = this._z, X = this.w / 2 + (x - this.w / 2) * z, Y = this.h / 2 + (y - this.h / 2) * z; return X >= -mx && X <= this.w + mx && Y >= -my && Y <= this.h + my; }
 
@@ -562,7 +607,7 @@ export class Labels {
       }
       const ex = sx + dx * end, ey = sy + dy * end;
       const seg = [sx, sy, ex, ey];
-      if (!this._segFree(seg, it._i)) continue;
+      if (!this._segFree(seg, it._i) || !this._segClear(seg, R)) continue;
       this._place(it, v, R, 'lead', seg, L);
       return true;
     }
@@ -588,8 +633,12 @@ export class Labels {
     const y = p[1];
     if (st.dot) x += st.dot + 4; else x -= tw / 2;
     const x0 = st.dot ? p[0] - st.dot - 1.5 : x - 3, y0 = y - th / 2 - 1, x1 = x + tw + 3, y1 = y + th / 2 + 1;
-    const air = it.cls === 'continent' ? 14 : 0;                  // a continent's name is set only in clear space
-    if (!this._free(x0 - air, y0 - air, x1 + air, y1 + air, -1)) return;
+    // where it will be at the real scale (it holds on to its point, see _carry): clear of everything taken,
+    // and in a sub-view wholly inside the frame (a name cut by an inset's rule reads as a mistake)
+    const z = this._z, cdx = (p[0] - this.w / 2) * (z - 1), cdy = (p[1] - this.h / 2) * (z - 1);
+    if (!this._clear(x0 + cdx, y0 + cdy, x1 + cdx, y1 + cdy)) return;
+    if (this.sub && (x0 + cdx < 1 || y0 + cdy < 1 || x1 + cdx > this.w - 1 || y1 + cdy > this.h - 1)) return;
+    if (!this._free(x0, y0, x1, y1, -1)) return;
     this._take(x0, y0, x1, y1, -1, 0);
     this.placed.push({ x0, y0, x1, y1, it, px: p[0], py: p[1], kind: 'point', abbr: false, size: st.size, font: st.font, spacing, base: 'middle', lines: [{ t: text, x, y }], leader: null, st });
     return true;
@@ -597,7 +646,7 @@ export class Labels {
 
   draw(view, style, show) {
     const ctx = this.ctx;
-    ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    ctx.setTransform(this.dpr, 0, 0, this.dpr, this.ox * this.dpr, this.oy * this.dpr);
     ctx.clearRect(0, 0, this.w, this.h);
     if (!show) { this.placed = []; this._sig = null; return; }
     const atlas = style === 'atlas', sheet = view.view === 'sheet';
@@ -614,7 +663,7 @@ export class Labels {
     const k = view.kmPerPx();                 // what shows at which zoom goes by the real scale
     // nothing moved: repaint what was solved (the clock redraws this layer every tick)
     const key = sheet ? `s|${step}|${style}|${this.w}|${this.h}|${this._gen}` : `g|${cam.lon}|${cam.lat}|${cam.dist}|${cam.tanHalfFov}|${style}|${this.w}|${this.h}|${this._gen}`;
-    const sig = sheet ? `${key}|${view.mapUnitsPerPx}|${cam.mapCenter[0]}|${cam.mapCenter[1]}` : key;
+    const sig = (sheet ? `${key}|${view.mapUnitsPerPx}|${cam.mapCenter[0]}|${cam.mapCenter[1]}` : key) + '|' + this._bsig;
     if (sig === this._sig) { this._paint(atlas); return; }
     this._sig = sig;
     // a drag only translates the sheet, and a zoom within a step only spreads it: what lies under each candidate is kept
@@ -633,9 +682,11 @@ export class Labels {
       this._fc = -u * sy; this._fd = (cam.mapCenter[1] + (this.h / 2) * u + WT_YMAX) * sy;
     }
     const names = new Set();                     // a name is not printed twice (AUSTRALIA the continent and the state)
+    const spreads = [];                          // continents: set last, across whatever is there
     const legacy = (it) => {
       if (k < (it.minKm || 0)) return;
-      const twin = it.cls === 'country' || it.cls === 'continent' ? it.text.toUpperCase() : null;
+      if (it.cls === 'continent') { if (k <= it.maxKm) spreads.push(it); return; }
+      const twin = it.cls === 'country' ? it.text.toUpperCase() : null;
       if (twin && names.has(twin)) return;
       if (k > it.maxKm) {
         // a dependency shows before its rank's zoom once its full name fits inside it
@@ -696,8 +747,77 @@ export class Labels {
     }
 
     for (const it of this.after) legacy(it);
+    for (const it of spreads) if (!names.has(it.text.toUpperCase()) && this.geo) this._spread(it, atlas);
     if (z !== 1) this._carry(z);
     this._paint(atlas);
+  }
+
+  /** A continent's name, wall-map fashion: capitals set far apart on one line or two, across the continent, each
+   *  letter in a place of its own. Every setting is looked at (how wide, which row, how far along it) in which each
+   *  letter is in the window, on nothing taken, clear of every name and leader already placed, and on no other
+   *  continent's land; the one kept is the widest that stays near the continent's own anchor (see the score).
+   *  It takes nothing from anybody: it comes last. */
+  _spread(it, atlas) {
+    const cam = this.cam, A = cam.project(it.lon, it.lat);
+    if (!A) return false;
+    const cl = Math.max(0.05, Math.cos(it.lat * D2R)), e = cam.project(it.lon + 1 / cl, it.lat);
+    if (!e) return false;
+    const Wc = ((it.ref && it.ref[1] && it.ref[1].size) || 30) * Math.hypot(e[0] - A[0], e[1] - A[1]);      // the continent's breadth on screen, px (the source's own size, degrees)
+    if (Wc < 60) return false;
+    const size = Math.max(SPREAD_MIN, Math.min(SPREAD_MAX, Math.round(Wc / 14))), font = `600 ${size}px ${SANS}`, cap = this._capHeight(font, size);
+    const text = it.text.toUpperCase(), sp = text.indexOf(' '), own = SPREAD_ALIAS[it.text] || it.text;
+    const st = { color: atlas ? 'rgba(60,50,74,.62)' : 'rgba(255,255,255,.5)', halo: 2, haloColor: atlas ? 'rgba(255,255,255,.4)' : 'rgba(0,6,16,.3)' };
+    // one line; or two, at each of a few line spacings (a narrow continent has few clear rows)
+    const settings = [[[text], 0]];
+    if (sp > 0) for (const g of SPREAD_GAPS) settings.push([[text.slice(0, sp), text.slice(sp + 1)], g * size]);
+    const R = this._rc;
+    let G = [], best = null, bs = -Infinity;
+    for (const [lines, gap] of settings) {
+      const nmax = Math.max(...lines.map((l) => l.length)), n = lines.reduce((a, l) => a + l.replace(/ /g, '').length, 0);
+      const y0 = -((lines.length - 1) * gap) / 2 + cap / 2, cost = lines.length > 1 ? 0.12 + 0.05 * (gap / size - SPREAD_GAPS[0]) : 0;
+      let last = 0;
+      for (const f of SPREAD_FILL) {
+        const pitch = Math.min(SPREAD_LOOSE * size, (f * Wc) / (nmax - 1));
+        if (pitch < SPREAD_TIGHT * size) break;                    // closer than this it is ordinary type
+        if (pitch === last) continue;
+        last = pitch;
+        const wide = (pitch * (nmax - 1)) / Wc;
+        const ny = Math.floor((SPREAD_UP * Wc) / (SPREAD_ROW * size)), nx = Math.floor((SPREAD_ALONG * Wc) / (SPREAD_SHIFT * pitch));
+        for (let iy = 0; iy <= 2 * ny; iy++) {                    // 0, -1, +1, -2, +2 ...: nearest the anchor first
+          const dy = (iy & 1 ? -(iy + 1) / 2 : iy / 2) * SPREAD_ROW * size;
+          for (let ix = 0; ix <= 2 * nx; ix++) {
+            const dx = (ix & 1 ? -(ix + 1) / 2 : ix / 2) * SPREAD_SHIFT * pitch;
+            // the score: breadth of the setting, less how far it has strayed from the anchor, plus the share of it on its own land
+            const reach = wide - cost - (SPREAD_STRAY_Y * Math.abs(dy) + SPREAD_STRAY_X * Math.abs(dx)) / Wc;
+            if (reach + SPREAD_OWN <= bs) continue;                 // cannot beat the best so far
+            G.length = 0;
+            let ok = true, onOwn = 0;
+            for (let li = 0; li < lines.length && ok; li++) {
+              const l = lines[li], base = A[1] + dy + y0 + li * gap;
+              for (let j = 0; j < l.length; j++) {
+                if (l[j] === ' ') continue;
+                const w = this._width(l[j], font, 0), cx = A[0] + dx + (j - (l.length - 1) / 2) * pitch;
+                R.x0 = cx - w / 2 - SPREAD_PAD; R.x1 = cx + w / 2 + SPREAD_PAD; R.y0 = base - cap - SPREAD_PAD; R.y1 = base + SPREAD_PAD;
+                if (!this._visible(R) || !this._free(R.x0, R.y0, R.x1, R.y1, -1)) { ok = false; break; }
+                const o = this._owner(cx, base - cap / 2);
+                if (o < 0) { ok = false; break; }                   // off the Earth
+                if (o) { if (this._cont.get(o) === own) onOwn++; else { ok = false; break; } }   // on another continent
+                G.push({ t: l[j], x0: R.x0, y0: R.y0, x1: R.x1, y1: R.y1, x: cx - w / 2, y: base });
+              }
+            }
+            if (!ok || onOwn < SPREAD_ON_OWN * n) continue;
+            const score = reach + (SPREAD_OWN * onOwn) / n;
+            if (score > bs) { bs = score; best = G; G = []; }
+          }
+        }
+      }
+    }
+    if (!best) return false;
+    for (const g of best) {
+      this._take(g.x0, g.y0, g.x1, g.y1, -1, 0);
+      this.placed.push({ x0: g.x0, y0: g.y0, x1: g.x1, y1: g.y1, it, px: (g.x0 + g.x1) / 2, py: (g.y0 + g.y1) / 2, kind: 'spread', abbr: false, size, font, spacing: 0, base: 'alphabetic', lines: [{ t: g.t, x: g.x, y: g.y }], leader: null, st });
+    }
+    return true;
   }
 
   /** Carry a layout solved at a coarser scale to the real one: each name moves with the ground under it (out from the
@@ -717,17 +837,21 @@ export class Labels {
         p.px = ex; p.py = ey;
       } else { p.px += dx; p.py += dy; }
     }
-    let drop = null;
+    let drop = null, dropIt = null;
     for (let i = 0; i < P.length; i++) {
       const s = P[i].leader;
       if (!s) continue;
       for (let j = 0; j < P.length; j++) {
         const q = P[j];
         if (j === i || (drop && drop.has(q))) continue;
+        if (q.kind === 'spread') {                               // a continent's letter gives way, and its whole name with it
+          if (segHitsRect(s[0], s[1], s[2], s[3], q.x0, q.y0, q.x1, q.y1)) (dropIt = dropIt || new Set()).add(q.it);
+          continue;
+        }
         if (segHitsRect(s[0], s[1], s[2], s[3], q.x0 + 1, q.y0 + 1, q.x1 - 1, q.y1 - 1) || (j < i && q.leader && segsCross(q.leader, s))) { (drop = drop || new Set()).add(P[i]); break; }
       }
     }
-    if (drop) this.placed = P.filter((p) => !drop.has(p));
+    if (drop || dropIt) this.placed = P.filter((p) => !(drop && drop.has(p)) && !(dropIt && p.kind === 'spread' && dropIt.has(p.it)));
   }
 
   /** A dependency's full name inside it (one line, its own style), where it fits. */
@@ -753,8 +877,20 @@ export class Labels {
 
   _paint(atlas) {
     const ctx = this.ctx, ls = 'letterSpacing' in ctx;
+    ctx.save();
+    if (this.sub) { ctx.beginPath(); ctx.rect(0, 0, this.w, this.h); ctx.clip(); }
+    ctx.globalAlpha = this.alpha;
+    if (this.underlay) this.underlay(ctx, atlas);
     ctx.lineJoin = 'round'; ctx.lineCap = 'round';
     const ink = atlas ? 'rgba(28,26,30,.92)' : 'rgba(255,255,255,.88)', hal = halo(atlas);
+    // the continents' letters lie under everything else
+    if (ls) ctx.letterSpacing = '0px';
+    for (const p of this.placed) {
+      if (p.kind !== 'spread') continue;
+      ctx.font = p.font; ctx.textBaseline = p.base;
+      ctx.lineWidth = p.st.halo; ctx.strokeStyle = p.st.haloColor; ctx.fillStyle = p.st.color;
+      for (const l of p.lines) { ctx.strokeText(l.t, l.x, l.y); ctx.fillText(l.t, l.x, l.y); }
+    }
     // leaders and dots under the type
     for (const p of this.placed) {
       if (p.leader) {
@@ -774,6 +910,7 @@ export class Labels {
     // every halo, then every glyph: a halo never eats a neighbour's letters
     for (let pass = 0; pass < 2; pass++) {
       for (const p of this.placed) {
+        if (p.kind === 'spread') continue;
         ctx.font = p.font; ctx.textBaseline = p.base;
         if (ls) ctx.letterSpacing = p.spacing + 'px';
         if (pass === 0) { ctx.lineWidth = p.st ? p.st.halo : p.size < 10 ? 2.2 : 2.6; ctx.strokeStyle = p.st ? p.st.haloColor : hal; for (const l of p.lines) ctx.strokeText(l.t, l.x, l.y); }
@@ -781,6 +918,7 @@ export class Labels {
       }
     }
     if (ls) ctx.letterSpacing = '0px';
+    ctx.restore();
   }
 
   /** The label under a screen point, if any: its name first, then its leader line, then anything within reach of it. */
@@ -801,7 +939,6 @@ export class Labels {
 
 const halo = (atlas) => (atlas ? 'rgba(255,255,255,.85)' : 'rgba(0,6,16,.72)');
 const STYLES = {
-  continent: (it, k, a) => ({ font: `600 ${k > 12 ? 15 : 17}px ${SANS}`, size: 16, upper: true, spacing: '6px', color: a ? 'rgba(52,48,60,.78)' : 'rgba(255,255,255,.55)', halo: a ? 2 : 3, haloColor: a ? 'rgba(255,255,255,.5)' : halo(a) }),
   ocean: (it, k, a) => ({ font: `italic 400 ${it.rank <= 0 ? 17 : it.rank <= 2 ? 13.5 : 12}px ${SERIF}`, size: 15, upper: it.rank <= 0, spacing: it.rank <= 0 ? '5px' : '1.5px', color: a ? 'rgba(24,74,128,.9)' : 'rgba(150,195,235,.85)', halo: 2.5, haloColor: a ? 'rgba(255,255,255,.55)' : 'rgba(0,10,24,.6)' }),
   country: (it, k, a) => { const s = it.rank <= 2 ? 12 : it.rank <= 3 ? 11 : it.rank <= 4 ? 10.5 : 10; return { font: `${a ? 600 : 500} ${s}px ${SANS}`, size: s, upper: true, spacing: '1.8px', color: a ? 'rgba(28,26,30,.92)' : 'rgba(255,255,255,.88)', halo: 2.6, haloColor: halo(a) }; },
   city: (it, k, a) => { const big = it.pop > 5e6, s = big ? 12.5 : it.pop > 1e6 ? 11.5 : 10.5; return { font: `${it.capital ? 600 : 400} ${s}px ${SANS}`, size: s, dot: big ? 3.2 : 2.5, capital: it.capital, color: a ? 'rgba(20,20,24,.95)' : 'rgba(255,255,255,.95)', halo: 2.8, haloColor: halo(a) }; },

@@ -30,7 +30,8 @@ export class Earth {
     return { land, sea: style === 'atlas' ? land * 0.75 : 0 };
   }
 
-  draw(state, cam, astro, detail) {
+  /** blend: leave the caller's blending on (an inset fading in over the map); the substrate is otherwise drawn opaque. */
+  draw(state, cam, astro, detail, blend = false) {
     const gl = this.gl, f = this.fields, p = this.prog;
     gl.useProgram(p.p);
     f.bind();
@@ -53,7 +54,7 @@ export class Earth {
       uLens: lens.id, uLensAlpha: lens.alpha || 0, uLensRow: lens.row || 0,
       uHasRelief: f.has.relief ? 1 : 0, uHasElev: f.has.elev ? 1 : 0, uHasLive: f.has.live && L.today ? 1 : 0,
       uHasClimate: f.has.climate ? 1 : 0, uHasOcean: f.has.ocean ? 1 : 0, uHasCountries: f.has.countries ? 1 : 0,
-      uHasWater: f.has.water ? 1 : 0, uHasAurora: f.has.aurora && L.aurora && state.atNow ? 1 : 0, uHasCloudT: f.has.cloudT ? 1 : 0,
+      uHasWater: f.has.water ? 1 : 0, uHasAurora: f.has.aurora && L.aurora && state.atNow ? 1 : 0, uHasCloudT: f.has.cloudT ? 1 : 0, uHasGrain: f.has.cloudGrain ? 1 : 0,
       uCloudsOn: L.clouds ? 1 : 0, uNightOn: L.lights ? 1 : 0, uAtmoOn: L.air ? 1 : 0, uDaylightOn: L.daylight ? 1 : 0, uIceOn: L.ice ? 1 : 0,
       uReliefLand: k.land, uReliefSea: k.sea,
       uLapse: f.meta.climate ? f.meta.climate.lapse_K_per_km : 6.5,
@@ -65,7 +66,7 @@ export class Earth {
     };
     setUniforms(gl, p, u);
     gl.bindVertexArray(this.vao);
-    gl.disable(gl.BLEND);
+    if (!blend) gl.disable(gl.BLEND);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
 }

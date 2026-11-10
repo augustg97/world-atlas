@@ -5,8 +5,8 @@
 // Binding tolerates absence: every sampler always has a valid texture (a placeholder until the
 // real one lands) and `has.*` says which are real, so the first frame does not wait for 70 MB.
 
-import { loadBitmap, texFromImage, texFromData, texSolid, packRG, texArrayFromPixels, pixelsOf, getJSON, stamped } from './gl.js?v=20261110T175726Z';
-import { monthState } from './astro.js?v=20261110T175726Z';
+import { loadBitmap, texFromImage, texFromData, texSolid, packRG, texArrayFromPixels, pixelsOf, getJSON, stamped } from './gl.js?v=20261110T205316Z';
+import { monthState } from './astro.js?v=20261110T205316Z';
 
 export const UNIT = { albA: 0, albB: 1, relief: 2, waterNight: 3, elev: 4, clouds: 5, atmoA: 6, atmoB: 7, oceanA: 8, countries: 9, lens2D: 10, lut: 11, live: 12, aurora: 13,
   detAlb: 14, detElev: 15 };     // the focus window's streamed imagery and elevation (js/detail.js)
@@ -81,7 +81,28 @@ export class Fields {
       else this.tex.atmoB = texArrayFromPixels(gl, b.w, b.h, 12, b.d);
       this.has.climate = true; this.has.ocean = true; this.has.cloudT = joined;
     });
-    const clouds = this._load('clouds', async () => { const b = await loadBitmap(F + 'clouds.jpg'); this.tex.clouds = texFromImage(gl, b, { format: 'r' }); b.close(); });
+    // The cloud texture is two things in one unit (there is no seventeenth: see UNIT). R: the cloud photograph, whole
+    // Earth, 10 km a texel. G, B, A: the cloud GRAIN (build/cloud_grain.py), three 1024-texel tiles of real cloud's fine
+    // structure at 2 km a texel - sheet, cumulus, frontal - laid 4 x 2 across the same texture so the shader can read
+    // them at any repeat through the photograph's own sampler. Without the grain file the photograph loads alone.
+    const clouds = this._load('clouds', async () => {
+      const [b, g] = await Promise.all([loadBitmap(F + 'clouds.jpg'), loadBitmap(F + 'cloudgrain.jpg').catch((e) => { console.error('cloud grain not loaded:', e.message); return null; })]);
+      const tiles = g && g.width > 0 && b.width % g.width === 0 && b.height % g.height === 0 && b.width / g.width === 4 && b.height / g.height === 2;
+      if (g && !tiles) console.error(`cloud grain is ${g.width} x ${g.height}, the photograph ${b.width} x ${b.height}: it must tile it 4 x 2; left out`);
+      if (tiles) {
+        const W = b.width, H = b.height, n = g.width, ph = pixelsOf(b), gr = pixelsOf(g), px = new Uint8Array(W * H * 4);
+        for (let y = 0; y < H; y++) {
+          const gy = (y % n) * n;
+          for (let x = 0; x < W; x++) {
+            const o = (y * W + x) * 4, q = (gy + (x % n)) * 4;
+            px[o] = ph[o]; px[o + 1] = gr[q]; px[o + 2] = gr[q + 1]; px[o + 3] = gr[q + 2];
+          }
+        }
+        this.tex.clouds = texFromData(gl, W, H, px, { format: 'rgba' });
+      } else this.tex.clouds = texFromImage(gl, b, { format: 'r' });
+      this.has.cloudGrain = !!tiles;
+      b.close(); if (g) g.close();
+    });
     await Promise.all([first, metas]);
     this._settle = Promise.all([water, climate, clouds]).then(() => this._second(ms));
     return this;

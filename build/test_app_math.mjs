@@ -5,6 +5,7 @@ import { sun, moon, dayLength, monthState, gmstDeg } from '../web/js/astro.js';
 import { wtForward, wtInverse, Camera } from '../web/js/camera.js';
 import { GIBS, gibsTileDeg, gibsTexelDeg, gibsMatrix, gibsPixel, gibsLonLat, gibsTile, gibsTileBounds, TERRAIN, mercY, mercLat, terrPixel, terrLonLat, terrTile,
   terrTileBounds, terrDecode, terrTexelDeg, terrTexelKm, tentTaps, compositeElevation, shippedElevation, planDetail, viewBox, windowHolds, windowUniforms, PLAN, KM_PER_DEG } from '../web/js/detail.js';
+import { INSETS, Inset, freeRect, fitInset, insetAlpha, INSET_FULL, INSET_GONE, INSET_PAD, MIN_GAIN } from '../web/js/insets.js';
 import { inflateSync } from 'node:zlib';
 import { readFileSync, existsSync } from 'node:fs';
 
@@ -309,6 +310,56 @@ if (online) {
       else console.log(`  note ${name}: the tiles' sea floor against the shipped one, ${line}`);
     }
   }
+}
+
+// Insets (register F1): the geometry of a second view of the sheet. The panels are the ones the page has at 1440 x 900
+// and at 1100 x 700 (read from the page by Research/modeling/audit_labels.py; padded by 4 px as main.js pads them).
+{
+  const same = (a, b) => !!a && a.length === b.length && a.every((v, i) => Math.abs(v - b[i]) < 1e-9);
+  ok('inset room: beside a panel', same(freeRect([0, 0, 300, 200], [[-10, -10, 100, 300]], [1, 1]), [100, 0, 300, 200]));
+  ok('inset room: none under a panel', freeRect([0, 0, 100, 100], [[-1, -1, 101, 101]], [1, 1]) === null);
+  ok('inset room: the part that holds the larger frame of the given shape', same(freeRect([0, 0, 300, 300], [[150, 0, 300, 100]], [1, 2]), [0, 0, 150, 300]));
+  const P1440 = [[6, 6, 1434, 70], [6, 72, 282, 792], [1108, 72, 1434, 713], [895, 755, 1106, 792], [6, 794, 1434, 894]];
+  const P1100 = [[6, 6, 1094, 70], [6, 72, 282, 592], [806, 72, 1094, 592], [593, 555, 804, 592], [6, 594, 1094, 694]];
+  const sheet = (w, h) => { const c = new Camera(); c.view = 'sheet'; c.resize(w, h, 1); c.home(); return c; };
+  const hits = (r, q) => r[0] < q[2] && r[2] > q[0] && r[1] < q[3] && r[3] > q[1];
+  const cam = sheet(1440, 900), taken = P1440.slice();
+  for (const def of INSETS) {
+    const I = new Inset(def);
+    I.layout(cam, taken, 1, 1);
+    const r = I.rect, box = r && [r.x, r.y, r.x + r.w, r.y + r.h];
+    ok(`inset ${def.id}: has room on the whole-Earth sheet at 1440 x 900, clear of every panel`, !!r && !taken.some((q) => hits(box, q)) && r.x >= 0 && r.y >= 0 && r.x + r.w <= 1440 && r.y + r.h <= 900, r ? `${r.w} x ${r.h} at ${r.x}, ${r.y}; ${I.k.toFixed(2)} km/px` : 'not drawn');
+    if (!r) continue;
+    const step = Math.log(I.k) / Math.log(1.05);
+    ok(`inset ${def.id}: scale within its limits, on the label layer's ladder, and worth its frame`, I.k >= def.kMin - 1e-9 && I.k <= def.kMax + 1e-9 && Math.abs(step - Math.round(step)) < 1e-6 && cam.kmPerPx() / I.k >= MIN_GAIN, `${(cam.kmPerPx() / I.k).toFixed(2)} x`);
+    // it is the same sheet, magnified: the middle of the frame is the inset's centre, and a place keeps its position
+    // within the frame as within the outline drawn on the main map
+    const mid = I.cam.unproject(r.w / 2, r.h / 2);
+    ok(`inset ${def.id}: the middle of its frame is its centre`, near(mid[0], def.center[0], 1e-6) && near(mid[1], def.center[1], 1e-6));
+    const s = I.source(cam);
+    let worstIn = 0;
+    for (const [fx, fy] of [[0.1, 0.1], [0.9, 0.2], [0.5, 0.5], [0.3, 0.85], [0.95, 0.95]]) {
+      const ll = I.cam.unproject(r.w * fx, r.h * fy), m = cam.project(ll[0], ll[1]), back = I.cam.project(ll[0], ll[1]);
+      worstIn = Math.max(worstIn, Math.abs((m[0] - s[0]) / (s[2] - s[0]) - fx), Math.abs((m[1] - s[1]) / (s[3] - s[1]) - fy), Math.abs(back[0] - r.w * fx) / r.w, Math.abs(back[1] - r.h * fy) / r.h);
+    }
+    ok(`inset ${def.id}: frame and outline show the same ground`, worstIn < 1e-6, `worst ${worstIn.toExponential(2)} of the frame`);
+    // its sea must be sea: the frame's own outline on the main map does not reach the frame (they are different places)
+    ok(`inset ${def.id}: the frame is not on the ground it shows`, !hits(box, s));
+    taken.push([r.x - INSET_PAD, r.y - INSET_PAD, r.x + r.w + INSET_PAD, r.y + r.h + INSET_PAD]);
+  }
+  { // a smaller window: the same seas are smaller on the screen; an inset is drawn only if it still fits, never under a panel
+    const c2 = sheet(1100, 700), t2 = P1100.slice();
+    for (const def of INSETS) {
+      const f = fitInset(def, c2, t2);
+      ok(`inset ${def.id} at 1100 x 700: fits clear of the panels within its scale limits, or is not drawn`, !f || (f.k <= def.kMax + 1e-9 && !t2.some((q) => hits([f.x, f.y, f.x + f.w, f.y + f.h], q))), f ? `${f.w} x ${f.h}, ${f.k.toFixed(2)} km/px` : 'not drawn');
+      if (f) t2.push([f.x - INSET_PAD, f.y - INSET_PAD, f.x + f.w + INSET_PAD, f.y + f.h + INSET_PAD]);
+    }
+  }
+  { // dragged until its sea is under the left panel: gone, not squeezed past its coarsest scale
+    const c3 = sheet(1440, 900); c3.pan(-120, 0);
+    ok('inset europe: no room once its sea is under the panel', fitInset(INSETS[0], c3, P1440) === null);
+  }
+  ok('insets fade with the main map: whole at the whole-Earth scale, gone close in', insetAlpha(25.9) === 1 && insetAlpha(INSET_FULL) === 1 && insetAlpha(INSET_GONE) === 0 && insetAlpha(6) === 0 && insetAlpha((INSET_FULL + INSET_GONE) / 2) === 0.5);
 }
 
 console.log(bad ? `\napp math: ${bad} FAILURES` : '\napp math: ALL PASS');

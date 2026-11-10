@@ -24,6 +24,129 @@ IDs are referenced from code comments and commit messages. **Never recycle one.*
 | stale-data guard | `web/version.json` stamp on every fetch | a cached two-key `climate.json` had crashed the tracers once |
 | ephemeris check | `build/test_app_math.mjs` | Sun declination within 0.004° at the four 2026 seasonal instants |
 
+## APPLIED (third round, 2026-11-10)
+
+Scope agreed for the round: cloud close in (B1), and insets, continent names and panels for the labels (F1).
+
+**Clouds (B1): the fine structure is real cloud's now.** Closer than the cloud photograph resolves, the
+atlas knew how much cloud there is and generated its shape from noise. It now takes the shape from three
+VIIRS scenes at 2 km a pixel, one per kind of cloud (a Namibian stratocumulus sheet, shallow cumulus in the
+southern Indian Ocean, a Southern Ocean storm), each reduced to an **ordering field**: every pixel's rank,
+0 to 1, among its neighbours (`build/cloud_grain.py`, shipped as `fields/cloudgrain.jpg`, 1.4 MB). The
+shader asks one thing of it: with a share p of this sky under cloud, is this pixel under it? Yes if its
+rank is above 1 - p. Ranks are uniform by construction, so the cut covers p with no curve to measure. All
+the noise-based drawing is gone (`worley`, `cutFor`, the clump and pavement generators).
+
+| measure, close in (2 km a pixel, 15 VIIRS scenes, none of them a grain scene) | before | after |
+|---|---|---|
+| variance by wavelength, 4-256 km in six octaves | 0.621 | 0.226 |
+| direction | 0.052 | 0.032 |
+| cover (share brighter than reflectance 0.30) | 0.423 | 0.254 |
+| contrast (std of reflectance) | 0.026 | **0.088, worse** |
+| SE Pacific sheet: mean reflectance, atlas minus VIIRS | +0.129 | +0.063 |
+| the same ground at 2 and at 8 km a pixel, mean reflectance | 0.00-0.01 apart | 0.005-0.022 apart (**worse**; Amazon +0.022: close in, clear gaps between pieces are not shaded by the cloud around them) |
+
+Every scene, every measure (rule 7). Better: Congo, North Atlantic and SE Pacific on size spectrum,
+direction and cover; trades on size spectrum (0.32 to 0.12, now inside the photographs' spread). The North
+Atlantic and SE Pacific are now inside the day-to-day spread on spectrum, direction and contrast.
+**Worse, six items:**
+
+| item | before to after (floor) | class |
+|---|---|---|
+| Amazon, size spectrum | 0.38 to 0.53 (0.39) | **TRUE.** Real dry-season Amazon sky is fine cumulus everywhere, a third of the variance at 4-8 km; the grain's pieces there are fewer, larger and brighter. The old noise happened to have the right sizes |
+| Amazon, contrast | 0.001 to 0.054 (0.022) | **TRUE**, same cause |
+| trades, contrast | 0.007 to 0.055 (0.031) | **TRUE**: the brightest tenth of the scene is 0.45 where VIIRS has 0.23 |
+| trades, direction | 0.03 to 0.06 (0.03) | **TRUE**: cumulus no longer lines up along the wind; the grain has its own direction |
+| trades, cover | 0.03 to 0.05 (0.04) | **TRUE**, small |
+| Congo, contrast | 0.041 to 0.069 (0.038) | **PRE-EXISTING**: the scene carries 0.14 too much light in both states (ISCCP's April mean against three 2024 afternoons); resolved pieces show it where flat grey ones hid it |
+
+The contrast baseline is re-set backwards with this table as its reason. Two attempts to fix the Amazon and
+trades items were made and withdrawn because NASA EPIC said no: spreading cumulus evenly (EPIC's darkest
+fifth of ocean came out 3 levels too bright) and spreading daytime land cloud evenly (disc contrast error
+1.5 to 2.4).
+
+**Three things found on the way, each fixed at its cause.**
+
+- *How bright a piece of cloud is, was a guess.* Measured on 18 scenes of 2023 (not the audit's): the cloudy
+  part of a broken field has a mean reflectance of 0.35 (sheets), 0.33 (cumulus), 0.45 (storm cloud), and a
+  spread of 0.34-0.53 of that mean. So cloud covers a / m0 of the sky and brightens from edge to core as the
+  rank does. The first cut drew flat white pieces at 1.6 times the mean and scored half again the
+  photographs' contrast.
+- *Sheet cloud was a third brighter than ISCCP says.* The shader had its own by-eye law for sheet light
+  (0.37 off Peru where ISCCP's sheet light is 0.25). It is now ISCCP's: share times 0.50.
+- *The Sun-side brightening and the slant term were applied to each resolved piece.* Both are statements
+  about a field of cloud; applied per piece they weakened as detail appeared, so the same sky dimmed as
+  it was drawn finer. The gain is now worked out on the far view's light and given to what is drawn.
+
+**The EPIC audit's instrument was changed, and here are both steps.** `to_common()` shrank both pictures
+2.3 times by reading single points and averaged display values; it now averages light over each common
+pixel (selftest: fine stripes come out as the grey that sends back half the light). The same renders as the
+last baseline, re-scored, then this round:
+
+| whole disc (EPIC, eight frames) | last baseline | same renders, new instrument | this round |
+|---|---|---|---|
+| mean brightness | 2.47 | 2.63 | 2.66 |
+| contrast | 1.59 | 1.68 | 1.54 |
+| bright-white fraction | 0.018 | 0.021 | **0.027** |
+| disc profile | 4.12 | 4.17 | 4.13 |
+| limb ring | 0.107 | 0.105 | **0.118** |
+| clear-ocean colour | 5.1 | 5.7 | 5.0 |
+| clear-ground colour | 13.8 | 13.1 | 13.2 |
+| halo | 0.09 | 0.20 | 0.20 |
+| sun glint | 0.08 | 0.11 | 0.13 |
+
+White fraction and limb ring are TRUE regressions, small: with sheet light at ISCCP's figure the two
+December frames, already 2-6 points short of EPIC's white share (22%), are a point or two shorter. The old
+excess was covering for a shortfall of bright cloud over the summer Southern Ocean, which is now open in B1.
+
+**Honest answer on cloud close in: it reads as a satellite photograph of cloud now**, on the Mac's own GPU
+as well as in the headless frames (pairs: `Research/figures/clouds/*_b6.jpg` before, `*_g8.jpg` after).
+What it is not: the right cloud for the place. One real sheet stands in for every sheet and one real storm
+for every storm, repeating every 2048 km in two arrangements; the Amazon and the trades are wrong in the
+ways the table says; there are no towers, and no shadows thrown to one side.
+
+**Labels (F1): two insets, the continents, and nothing under a panel.** Built by a subagent and checked
+independently here (the label audit and its selftest re-run; frames read).
+
+| whole-Earth sheet, 1440 x 900 | before | after |
+|---|---|---|
+| states named where a reader can see them | 106 of 176 in view | 125 of 177 (107 on the map, 18 only in an inset) |
+| the old count (a name under a panel counts) | 129 of 198 | 107 on the map; 125 with the insets |
+| Europe | 15 of 45 | 29 of 45 |
+| names under panels, all 24 framings | 1222 (31 on the sheet) | 0 |
+| overlapping, under 9 px, on the wrong country, wrong card | 0, 0, 0, 0 | 0, 0, 0, 0 |
+| names lost on zooming in 10% | 5 | 4 |
+| older labels failing the on-own-ground test | 18 | 3 |
+
+**The release notes for 1.0 said 129 states named. Twenty-two of those were under the dashboard.** The count
+now leaves out what cannot be read, and a state whose own ground is under a panel is `hidden`, not unnamed.
+Old and new numbers do not compare; `audit_all.py` says so beside the baseline. State by state over the 24
+framings: 109 gained a name, 10 lost one; nine of the ten sat within 4 px of a panel or in the sliver between
+a panel and the window's edge (correct to drop), and the tenth is Benin on one globe framing, whose place
+Togo took (RESOLUTION-LIMITED: one of the two fits).
+
+- **An inset is a second view, not a picture**: the earth shader run through its own camera into its own
+  target, borders and rivers through the same camera, names placed by the same `Labels` machinery, and clicks
+  routed to it (`web/js/insets.js`, `main.js` `layoutInsets` / `viewAt`). Europe (13.6-26.9 E, 40.4-60 N) sits
+  in the south-east Pacific at 3.0 times; the Lesser Antilles in the southern Indian Ocean at 3.2 times. Each
+  takes whatever open sea is left between the panels and is not drawn if that is too little (at 1100 x 700,
+  neither is). They fade out between 15.5 and 12.5 km a pixel, where the main map names 12 and then 18 of the
+  Europe inset's states itself. Never on the globe.
+- **Continent names**: wide quiet capitals, one rectangle a letter, placed last and painted under everything.
+- **Panels**: their rectangles are read from the page every tick and are taken ground for names and insets.
+- The audit counts inset names, finds the ground under each through the inset's own camera, clicks every
+  inset name and a 7 x 7 grid of inset ground, and holds a fifth zero check, `under_panel`. 23 planted faults.
+
+**Not done, and why.** Sixteen European states are still unnamed on the sheet (AND BEL BIH CHE DNK KOS LIE
+LUX MCO MDA MKD MLT MNE SMR SVN VAT): the western Balkans need 6 km a pixel and the largest clear sea between
+the panels gives 8.6. The Levant and the Caucasus have no inset: the frame would have to reach 50 E. The
+Europe frame covers Easter Island (no sample point of its 2268 falls on land). Tracers and aircraft are not
+drawn inside insets. "PACIFIC OCEAN" no longer appears at 1440 x 900 (both its positions are under panels).
+ASIA lies across Arabia to India because Natural Earth files all of Russia under Europe. Not verified: the
+fade on the Mac's own GPU, windows larger than 1440 x 900, dragging by hand.
+
+---
+
 ## APPLIED (second build round, 2026-11-10)
 
 Scope agreed for the round: cloud shape and place (B1), the zoom floor (A2), labels (F1).
@@ -177,7 +300,7 @@ texture is a magnified photograph, and vegetated land still reads darker than EP
 
 | # | P | item | touches | from |
 |---|---|---|---|---|
-| B1 | **P1** | **Clouds: amount and brightness now come from observation; shape close in is generated and looks it.** 2026-11-10 (second round): cloud kinds and cloud light from ISCCP (2007-2016), three regimes (photograph for fronts and storms, generated pavement for stratocumulus, generated clumps for broken low cloud), texture scored against fifteen VIIRS scenes at 2 km a pixel (`cloud_texture.py`; table in APPLIED). Open, in order of what the pairs show: (1) fronts and storms have no structure under 10 km, only lumps; (2) decks are a regular mosaic and too grey; (3) no cumulus streets worth the name (measured direction is right, 0.11-0.15, but it does not read), no cloud shadows from low cloud at an offset, no clearings along rivers and coasts; (4) deck share under a fifth of the sky is not drawn, so about a quarter of ISCCP's deck light is missing (VIIRS agrees without it at the trades and North Atlantic scenes); (5) positions are still one 2002 photograph carried on a monthly-mean wind; (6) the Sun-side brightening is pinned at two angles only (EPIC at 4-12 degrees needs a third more light, VIIRS at about 30 needs none) and its shape between them is a guess; it makes cloud in ordinary views duller than in EPIC-style views, and the 9 km a pixel Atlantic frame lost crispness; (7) ISCCP shows a faint ring at the GOES-West sub-satellite point in the broken-cloud field. Congo: bright cloud covers 0.49 of the scene against VIIRS's 0.22 | `cloudAt()`, `broken()`, `deckAt()`, `cumulusAt()`, `fields_climate.isccp_monthly` | interview |
+| B1 | P2 | **Clouds: amount and brightness from observation; fine structure from real cloud since 2026-11-10 (third round).** Three kinds (photograph for fronts and storms, sheets, broken low cloud), amount and light from ISCCP (2007-2016), and closer than 10 km a pixel the shape is cut from three VIIRS scenes' ordering fields (`build/cloud_grain.py`), scored against fifteen other VIIRS scenes (`cloud_texture.py`; tables in APPLIED). Open, in order of what the pairs and the numbers show: (1) the Amazon in the dry season is fine cumulus everywhere and the atlas draws fewer, larger, brighter pieces (size spectrum 0.53 against a floor of 0.39); a fourth grain of continental cumulus would answer it, and there is no free texture channel (uClouds is R photograph + GBA grain; unit count is 16 of 16); (2) the trades' brightest tenth is 0.45 against 0.23, and cumulus no longer lines up along the wind; (3) Congo carries 0.14 too much light and twice the bright cover (0.47 against 0.22): ISCCP's April mean against three afternoons, and no daily cycle in the photograph regime; (4) bright cloud over the summer Southern Ocean is short in EPIC's December frames (white share 15-18% against 22%); (5) one scene stands for each kind everywhere and repeats every 2048 km; (6) no towers, no cloud shadows at an offset, no clearings along rivers and coasts; (7) sheet share under a fifth of the sky is not drawn; (8) positions are still one 2002 photograph carried on a monthly-mean wind; (9) the Sun-side brightening is pinned at two angles only; (10) between 4 and 11 km a pixel the grain fades into the 10 km photograph and the view is soft; (11) ISCCP shows a faint ring at the GOES-West sub-satellite point | `cloudAt()`, `pieces()`, `grainAt()`, `deckAt()`, `cumulusAt()`, `build/cloud_grain.py` | interview |
 | B2 | P2 | No independent witness for wind, temperature, pressure or precipitation. Score the shipped means against ERA5 monthly means (measure-against only) | new `Research/modeling/audit_climate.py` | SOURCE-SURVEY §5 |
 | B3 | P2 | The daily temperature cycle is a three-parameter model with no check. Compare its range against a station or reanalysis diurnal-range climatology | `airTemp()` in shader and `cards.js` | SCOPE §4 |
 | B4 | P3 | The lapse-rate correction is a constant 6.5 K/km; winter inversions over ice sheets and basins are wrong in sign | same | SOURCE-SURVEY |
@@ -208,7 +331,7 @@ texture is a magnified photograph, and vegetated land still reads darker than EP
 
 | # | P | item | touches | from |
 |---|---|---|---|---|
-| F1 | P2 | **Mostly DELIVERED 2026-11-10.** A real placement pass in `overlays.Labels`: exact collisions, names inside their state, beside it, abbreviated (Natural Earth's own abbreviations), or in open water on a leader. On the whole-Earth sheet at 1440 px **129 of 198 states are named (was 21)**; on the globe 87 of the 146 in view (was 10); at 6 km a pixel 21-28 of 21-28 in the Caribbean and south-east Asia and 63 of 66 in Europe. Held by `audit_labels.py` on 24 framings with four checks that must stay zero: overlapping names, type under 9 px, a name mostly on another country (tested against geometry), a click that opens the wrong card. **The ceiling is real:** at 26 km a pixel the shortest legible name is 520-1000 km long, so Central Europe, the Balkans, the Baltics, the Great Lakes states, the Levant and the Caucasus stay unnamed (Europe 15 of 45). Closing it needs a Europe inset and a Lesser Antilles inset, or a numbered key, not smaller type. Open: continent names other than Antarctica no longer appear on the sheet (they yield to states); names are not kept clear of the UI panels; 6 names drop when zooming in 10%; 18 older labels (Siachen Glacier, Hong Kong, several at the limb) fail the on-own-ground test; the state count was wrong in the old audit (it left out Kazakhstan, Cuba, Israel and Kosovo) and is now 198; Israel and Kosovo are placed as states, the same treatment as any de facto administration, their borders and dispute cards untouched | `overlays.Labels`, `data.labelItems`, `build/vectors.py` | SCOPE §8 |
+| F1 | P3 | **DELIVERED 2026-11-10 (placement, second round; insets, continents and panels, third round).** A real placement pass in `overlays.Labels`: exact collisions, names inside their state, beside it, abbreviated, or in open water on a leader; continent names in spaced capitals; nothing under a panel; and on the whole-Earth sheet a Europe inset and a Lesser Antilles inset, each a second rendered view with its own names and clicks (`web/js/insets.js`). On the sheet at 1440 x 900, **125 of the 177 states in view are named (106 before, counted the same way)**; Europe 29 of 45. Held by `audit_labels.py` on 24 framings and both insets, five checks at zero. Open: sixteen European states still unnamed on the sheet (the western Balkans need 6 km a pixel; the clear sea gives 8.6), no inset for the Levant and Caucasus, the Europe frame covers Easter Island, tracers are not drawn in insets, PACIFIC OCEAN is lost under the panels at 1440 x 900, ASIA sits too far south-west, Łódź is the one city in the Europe inset, 4 names drop when zooming in 10%, 3 older labels fail the on-own-ground test, the fade is unverified on a real GPU | `overlays.Labels`, `web/js/insets.js`, `main.js`, `data.labelItems` | SCOPE §8 |
 | F2 | P3 | **DELIVERED 2026-11-09** as `audit_population.py`: 192 units compared, the summed field 8.160 bn against 8.191 bn (-0.4%); **26 units differ by more than 10%**, listed in `REGISTER-population.md`. The largest are a border-raster effect (Republic of the Congo +48% beside Kinshasa; Moldova +40%), city states and islands (Macau, Singapore, Maldives, Cyprus) and vintage (Somalia, Yemen). Open: assign people by polygon, not by the 4 km country raster | `fields_human.step_countries` | SOURCE-SURVEY §5 |
 | F3 | P2 | Air traffic cannot reproduce hubs (Atlanta, Dubai, Istanbul are under-weighted; small rich catchments over-weighted). Score modelled airport ranks against a published passenger ranking and state the rank correlation on the card | `vectors.step_air` | build notes |
 | F4 | P2 | Endonyms exist for 50 of 242 units (those whose main language Natural Earth translates). The rest show English only | `vectors.ENDONYM_LANG` | SCOPE §6 |
@@ -233,9 +356,10 @@ texture is a magnified photograph, and vegetated land still reads darker than EP
 
 ---
 
-**Count: 36 items; 1 open at P1** (A2 delivered and F1 mostly delivered 2026-11-10; G7 added). In order:
+**Count: 36 items; none open at P1** (B1 to P2 and F1 to P3 after the third round, 2026-11-10). In order:
 
-1. **B1** - cloud close in still reads as generated: fronts without fine structure, decks as a regular mosaic, no towers, and a loss of crispness at middle zoom.
-2. **F1** - insets or a key for Europe and the Lesser Antilles; continent names back as an underlay; names clear of the panels.
-3. **A5** - the water mask from bathymetry (south-west Hudson Bay is "land"), then lake ice.
-4. **G7** - run one audit on a real GPU.
+1. **A5** - the water mask from bathymetry (south-west Hudson Bay is "land"), then lake ice.
+2. **B1** - a continental-cumulus grain for the Amazon; bright cloud over the summer Southern Ocean; a daily cycle for convective cloud over land.
+3. **G7** - run one audit on a real GPU.
+4. **F2** - population by polygon.
+5. **F1** - the sixteen European states the sheet still cannot name; an inset for the Levant and Caucasus.

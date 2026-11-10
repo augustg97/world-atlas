@@ -1,9 +1,9 @@
 // The interface: brand and clock, systems panel, time console, legend, card panel, dashboard,
 // search and About. All of it is generated from js/catalog.js.
 
-import { SYSTEMS, TIERS, LAYERS, LENS_DEFS, paletteCss } from './catalog.js?v=20261110T175726Z';
-import { coord } from './cards.js?v=20261110T175726Z';
-import { seasonName } from './astro.js?v=20261110T175726Z';
+import { SYSTEMS, TIERS, LAYERS, LENS_DEFS, paletteCss } from './catalog.js?v=20261110T205316Z';
+import { coord } from './cards.js?v=20261110T205316Z';
+import { seasonName } from './astro.js?v=20261110T205316Z';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const el = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstChild; };

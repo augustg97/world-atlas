@@ -17,11 +17,12 @@ Paste this whole file as the first message of a new session.
 
 ## The current task
 
-Kickoff, the first build, a verify round and two build rounds are done. The contract is `SCOPE.md`; the open
-work is `Research/MODEL-GAPS.md` (36 items, 1 open at P1). Against NASA's photographs the Space register is
-**close, with named exceptions**. The zoom floor is now met by streamed fields, the sheet names 129 of 198
-states, and cloud amount and brightness come from a satellite climatology. What is left at P1 is cloud close
-in: it is statistically nearer real cloud than it was and still reads as generated (B1).
+Kickoff, the first build, a verify round and three build rounds are done, and the atlas is published. The
+contract is `SCOPE.md`; the open work is `Research/MODEL-GAPS.md` (36 items, none at P1). Against NASA's
+photographs the Space register is **close, with named exceptions**. Cloud close in now takes its fine
+structure from real cloud and reads as a satellite photograph; it is not the cloud of the place, and it is
+wrong in measured ways over the Amazon, the trades and the Congo (B1). The whole-Earth sheet carries a Europe
+inset and a Lesser Antilles inset and its continent names (F1).
 
 ## Reference material and the measurement harness
 
@@ -36,14 +37,18 @@ The comparison is only meaningful at **matched scale**. All of this exists; reus
   `Research/modeling/epic_render.py` does the same headless.
 - `Research/modeling/epic_compare.py --tag <tag>` prints the per-frame table and writes side-by-side
   pairs to `Research/figures/epic/`. `epic_cloud_cdf.py <tag> [--land|--zonal]` compares cloud brightness
-  distributions. `_r0` is the first build, `_r7` after the verify round, `_r8` and `_r9` after the two build rounds.
+  distributions. `_r0` is the first build, `_r7` after the verify round, `_r8`, `_r9` and `_r10` after the three
+  build rounds. **The instrument changed at `_r10`** (both pictures are now shrunk by averaging light); `_r9`'s score
+  file was re-made on it, so `_r9` and `_r10` compare and earlier score files do not.
 - `epic_clearsky.py` builds a cloud-free EPIC composite per frame (third-darkest of about 16 days) and
   scores the atlas with clouds off against it; pairs are `Research/figures/epic/clearsky_*`.
   `epic_anchors.py` fits the display transform; `land_transfer.py` fits and scores the albedo table.
   `epic_render.py <tag> air,daylight,ice` renders with clouds off.
 - `cloud_texture.py` scores cloud at 2 km a pixel against VIIRS scenes in five regimes (`cloud_scenes_render.py`
   renders the atlas over the same ground); each number is the excess over the photographs' own day-to-day
-  spread. `audit_labels.py` places and tests names on 24 framings.
+  spread. Pairs: `Research/figures/clouds/*_b0`, `_b6`, `_g8` (first, second, third round). `build/cloud_grain.py
+  --preview` shows each grain scene cut at three amounts of light. `audit_labels.py` places and tests names on 24
+  framings and in the sheet's insets.
 - **Use the time in EPIC's image name, not its `date` field.** They differ by about five minutes and the
   centroid longitude belongs to the image name: with `date`, the Sun sat 1.1 degrees off in every frame.
 - `?frozen=1` gives a deterministic frame (`window.__FRAME_READY`). Six of them are baselines in
@@ -53,15 +58,40 @@ The comparison is only meaningful at **matched scale**. All of this exists; reus
 
 ## State right now
 
-- Last live deploy: **2026-11-10**, release 1.0; the stamps are in `docs/version.json` and must match the live `version.json`
+- Last live deploy: **2026-11-10**, release 1.1 (cloud grain, insets); the stamps are in `docs/version.json` and must match the live `version.json`
 - Branch `main` is what is published; `verify-round` was merged into it at release 1.0
 - `data/` holds about 3.6 GB of sources and caches (gitignored); `python build/fetch_sources.py` rebuilds it,
   including 438 MB of NSIDC grids and 581 MB of ISCCP. Three reference sets live under `reference/`
   (gitignored): `epic/` and `epic/clearsky/` (300 MB) and `gibs_clouds/` (5 MB); each has a `--fetch`.
-- `./venv/bin/python Research/modeling/audit_all.py` passes: eleven checks, about 3 min 50 s.
+  `data/cloudtex/` holds the three grain scenes (`fetch_sources.py cloudtex`).
+- `./venv/bin/python Research/modeling/audit_all.py` passes: eleven checks, about 4 min.
 - **The app now talks to two outside hosts when zoomed in** (NASA GIBS, AWS Terrain Tiles), by default, and
   says so in About. Read register A2 before publishing: one line of the tile documentation needs the owner's eye.
 - **The earth shader uses 16 of 16 texture units.** See G7.
+
+## What the third round found (2026-11-10)
+
+1. **Generated cloud never passed for cloud; real cloud's ranks do.** Three VIIRS scenes, each reduced to
+   every pixel's rank among its neighbours, tell the shader WHICH pixels the cloud takes at a given amount.
+   Size-spectrum error against fifteen held-out scenes 0.62 to 0.23 in one step; direction and cover better too.
+2. **A piece of cloud is mostly thin.** Measured on 18 scenes: the cloudy part of a broken field averages a
+   reflectance of 0.33-0.45 with a spread of 0.34-0.53 of that. Flat white pieces scored half again the
+   photographs' contrast.
+3. **Sheet cloud had a by-eye brightness law a third above ISCCP's.** Now ISCCP's (share times 0.50); the SE
+   Pacific scene went from 0.13 to 0.06 above VIIRS.
+4. **The Sun-side brightening was applied per resolved piece and weakened with zoom.** It is a property of a
+   field; it is worked out on the far view's light now.
+5. **The EPIC audit shrank pictures by point sampling, in display values.** Fixed, with a stripe selftest. The
+   old baseline's renders were re-scored on the new instrument before anything was compared.
+6. **EPIC vetoed two fixes VIIRS asked for** (cumulus spread evenly; daytime land cloud spread evenly). Both
+   withdrawn; the comments in the shader say what each cost.
+7. **Contrast close in went backwards (0.026 to 0.088) and is re-set with a written table**: Amazon and trades
+   TRUE, Congo PRE-EXISTING. `audit_all.py` carries the reason.
+8. **Release 1.0 said the sheet named 129 states; 22 of those names were under the dashboard.** Names are no
+   longer placed under panels, and the count leaves out what cannot be read: 106 before, 125 now, of 177 in view.
+9. **An inset is a second camera, not a picture**: the earth shader into its own target, names by the same
+   placement code, clicks routed through `viewAt`. `web/js/insets.js` holds the geometry; they need open sea
+   between the panels and vanish in a small window.
 
 ## What the second build round found (2026-11-10)
 
@@ -137,12 +167,12 @@ Plus the standing ones:
 
 ## The work queue
 
-1. **B1** - cloud close in. The instruments exist (`cloud_texture.py`, fifteen VIIRS scenes); the pairs in
-   `Research/figures/clouds/` show what is wrong better than the numbers do.
-2. **F1** - insets or a key for Europe and the Lesser Antilles; continent names; panels.
-3. **A5** - the water mask from bathymetry, then lake ice.
-4. **G7** - one audit on a real GPU.
-5. **F2** - population by polygon, not by the country raster.
+1. **A5** - the water mask from bathymetry, then lake ice. The most visible plain error left.
+2. **B1** - a continental-cumulus grain for the Amazon (needs a texture channel: uClouds is full, and so are
+   the 16 units), bright cloud over the summer Southern Ocean, a daily cycle for convective cloud over land.
+3. **G7** - one audit on a real GPU.
+4. **F2** - population by polygon, not by the country raster.
+5. **F1** - what the label round left open (see its row).
 
 **If you touch the light model** (`earth.frag.glsl`, Space branch): the order is `epic_anchors.py` (refit
 exposure and gamma), then `land_transfer.py --fit` (refit the albedo table, paste the printed line), then

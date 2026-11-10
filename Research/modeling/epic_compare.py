@@ -78,11 +78,27 @@ def disc_geometry(lon0, lat0, dist):
 
 
 def to_common(img, cx, cy, r):
-    """Resample an image whose disc is centred (cx, cy) with radius r px into the common frame."""
+    """Resample an image whose disc is centred (cx, cy) with radius r px into the common frame.
+
+    Both pictures arrive at about 2.3 source pixels to a common one, and `transform` reads single points:
+    until 2026-11-10 that let detail finer than the common frame (16 km) alias into every statistic, and it
+    scored a sharper atlas as a whiter or a darker one according to where the samples fell. So the picture
+    is first resampled K times finer than the common frame (no shrinking, so nothing to alias) and then
+    averaged K x K: each common pixel is the mean of the ground it covers, in both pictures alike."""
     s = r / RD
-    w, h = img.size
+    K = max(1, int(np.ceil(s)))
     box = (cx - (N / 2) * s, cy - (N / 2) * s, cx + (N / 2) * s, cy + (N / 2) * s)
-    return np.asarray(img.transform((N, N), Image.EXTENT, box, Image.BICUBIC), dtype=np.float32)
+    if K == 1:
+        return np.asarray(img.transform((N, N), Image.EXTENT, box, Image.BICUBIC), dtype=np.float32)
+    # A camera averages LIGHT over a pixel, not display values: half white cloud and half dark sea is brighter
+    # on a screen than the mean of the two screen values. Both products are near a gamma of 2 (EPIC 1.91, the
+    # atlas 1.63), so the whole resampling is done on squared values.
+    lin = (np.asarray(img, dtype=np.float32) / 255.0) ** 2
+    out = np.empty((N, N, 3), dtype=np.float32)
+    for c in range(3):
+        fine = np.asarray(Image.fromarray(lin[..., c]).transform((N * K, N * K), Image.EXTENT, box, Image.BICUBIC))
+        out[..., c] = fine.reshape(N, K, N, K).mean((1, 3))
+    return np.sqrt(np.clip(out, 0, 1)) * 255.0
 
 
 def fit_disc(a):
@@ -362,6 +378,14 @@ def selftest():
     fr = dict(dscovr=dict(x=1.0, y=0.0, z=0.0), sun=dict(x=1.0, y=0.0, z=0.0), lon=12.0)
     lo, la = sub_solar(fr)
     assert abs(lo - 12.0) < 1e-9 and abs(la) < 1e-9
+    # to_common averages light: stripes two source pixels wide, black and white, shrunk 2.3 times, must come out
+    # as the grey that sends back half the light (255 / sqrt 2 = 180), nearly flat. Point sampling leaves a moire.
+    stripes = np.zeros((2070, 2070, 3), dtype=np.uint8); stripes[:, ::2] = 255
+    img = Image.fromarray(stripes)
+    core = to_common(img, 1035, 1035, 920.0)[100:800, 100:800]
+    s_ = 920.0 / RD
+    old = np.asarray(img.transform((N, N), Image.EXTENT, (1035 - N / 2 * s_, 1035 - N / 2 * s_, 1035 + N / 2 * s_, 1035 + N / 2 * s_), Image.BICUBIC), dtype=np.float32)[100:800, 100:800]
+    assert abs(core.mean() - 180.3) < 6 and core.std() < 0.4 * old.std(), (core.mean(), core.std(), old.std())
     print("epic_compare selftest: ok")
 
 

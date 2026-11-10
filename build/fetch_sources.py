@@ -6,6 +6,7 @@
     ./venv/bin/python build/fetch_sources.py etopo ne   # by group
     ./venv/bin/python build/fetch_sources.py nsidc      # 720 monthly sea-ice grids + 24 extent tables
     ./venv/bin/python build/fetch_sources.py isccp      # 120 monthly cloud-type grids, 530 MB
+    ./venv/bin/python build/fetch_sources.py cloudtex   # three VIIRS cloud scenes for the cloud grain, 8 MB
 
 This table IS the project's source record: name, URL, licence. Research/SOURCE-SURVEY.md
 is written from it. Every source here is public domain or plain CC-BY, except NSIDC's Sea Ice
@@ -92,6 +93,21 @@ for yr in ISCCP_YEARS:
     for i in range(1, 13):
         f = f"ISCCP-Basic.HGM.v01r00.GLOBAL.{yr}.{i:02d}.99.9999.GPC.10KM.CS00.EA1.00.nc"
         add("isccp", f"isccp/{f}", f"{ISCCP}/{f}", "no constraints on access or use (ISCCP H-series HGM, NOAA NCEI CDR)")
+
+# --- cloud grain: three VIIRS true-colour scenes at 2 km a pixel (build/cloud_grain.py) ---------
+# NASA GIBS, the same service the page streams from. 1248 px: a 1024 px tile plus the 224 px its edges are
+# cross-faded over. PNG: the JPEG's 8 x 8 coding blocks showed in the atlas's cloud. One per kind of cloud, and none of them a scene the texture audit scores against
+# (Research/modeling/cloud_texture.py uses other oceans in 2024).
+import math
+GIBS_WMS = "https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi"
+CLOUDTEX = {"sheet": (4.0, -17.0, "2023-09-05"), "cumulus": (75.0, -17.0, "2023-08-03"), "frontal": (80.0, -46.0, "2023-01-22")}
+for name, (lon, lat, day) in CLOUDTEX.items():
+    half = 1248 * 2.0 / 2 / 111.195
+    hx = half / math.cos(math.radians(lat))
+    add("cloudtex", f"cloudtex/{name}_{day}.png",
+        f"{GIBS_WMS}?SERVICE=WMS&REQUEST=GetMap&VERSION=1.3.0&LAYERS=VIIRS_NOAA20_CorrectedReflectance_TrueColor&CRS=EPSG:4326"
+        f"&BBOX={lat - half:.4f},{lon - hx:.4f},{lat + half:.4f},{lon + hx:.4f}&WIDTH=1248&HEIGHT=1248&FORMAT=image/png&TIME={day}",
+        "public domain (NASA EOSDIS GIBS, VIIRS NOAA-20 corrected reflectance; NASA asks for acknowledgement)")
 
 NSIDC = "https://noaadata.apps.nsidc.org/NOAA/G02135"
 # NSIDC names no licence for this product. Its landing page states one condition: "As a condition of

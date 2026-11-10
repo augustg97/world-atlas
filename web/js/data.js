@@ -127,7 +127,7 @@ export class Data {
   labelItems() {
     const items = [];
     for (const f of this.physical.features) {
-      // a continent's name gives way to the states on it (prio 9.5: after every state, before everything else)
+      // a continent's name is set last, in spaced capitals across the states and clear of every other name (overlays.js, _spread)
       if (f.kind === 'Continent') { items.push({ text: f.name, lon: f.lon, lat: f.lat, cls: 'continent', prio: 9.5, maxKm: 60, minKm: 7, ref: ['feature', f] }); continue; }
       if (f.realm === 'sea') {
         const maxKm = [60, 26, 15, 9, 6, 4, 3][Math.min(6, f.rank)];

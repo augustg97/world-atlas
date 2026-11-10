@@ -13,6 +13,7 @@ import { LineBatch, PointBatch, Labels, segmentsFromLines, deq, graticule, paral
 import { FlowTracers, Flights, makeSamplers, seedRandom } from './particles.js';
 import { SYSTEMS, LAYERS, paletteCanvas, FUEL_COLORS } from './catalog.js';
 import { Data } from './data.js';
+import { INSETS, Inset, insetAlpha, INSET_PAD } from './insets.js';
 import { Live, HOUR, DAY } from './live.js';
 import { UI, SPEEDS } from './ui.js';
 import * as Cards from './cards.js';
@@ -45,6 +46,12 @@ const live = new Live(gl, fields, (k, s) => { earthDirty = true; feedStatus(); }
 // finer imagery and elevation for the part of the Earth in view, streamed when close in (register A2)
 const detail = new Detail(gl, fields, () => { earthDirty = true; window.__DETAIL_ERROR = detail.error || undefined; feedStatus(); }, { frozen: FROZEN });
 const labels = new Labels(document.getElementById('labels'));
+// Insets of the whole-Earth sheet: second views of the same atlas over open water (insets.js). Each has its own
+// camera and its own label layer, which draws into its frame on the main layer's canvas.
+const insets = INSETS.map((def) => { const I = new Inset(def); I.labels = new Labels(labels.canvas, true); return I; });
+// The interface's panels, as rectangles of the window. No name is set under one and no inset is put under one.
+const PANELS = ['top', 'left', 'left-open', 'card', 'dash', 'legend', 'hud', 'time'], PANEL_PAD = 4;
+let panelRects = [], panelSig = '';
 const astro = { sun: sun(state.t), moon: moon(state.t), month: monthState(state.t) };
 let progs = {}, batches = {}, tracers = {}, flights = null, samplers = null, cache = null, dashCache = {}, ui = null;
 
@@ -243,6 +250,10 @@ function tick(now) {
     if (u >= 1) { fly = null; saveHash(); }
   }
 
+  // 2b. what is not map: the panels as they stand now, then the insets in the open water that is left
+  measurePanels();
+  layoutInsets();
+
   // 3. the substrate, into the cache
   const settled = now - settledAt > 350;
   const det = fields.setMonths(astro.month, settled);
@@ -253,6 +264,10 @@ function tick(now) {
     gl.bindFramebuffer(gl.FRAMEBUFFER, cache.fb);
     gl.viewport(0, 0, cache.w, cache.h);
     earth.draw(state, cam, astro, detail);
+    // each inset: the same shader through the inset's own camera, into a target of its own
+    const relief = earth.relief;
+    for (const I of insets) if (I.rect) { insetTarget(I); gl.bindFramebuffer(gl.FRAMEBUFFER, I.fb); gl.viewport(0, 0, I.pw, I.ph); earth.draw(state, I.cam, astro, null); }
+    earth.relief = relief;                                             // the About panel states the main map's exaggeration
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   }
   gl.bindFramebuffer(gl.READ_FRAMEBUFFER, cache.fb);
@@ -264,25 +279,16 @@ function tick(now) {
   // 4. what sits on it
   const L = state.layers, camU = cam.uniforms(), k = cam.kmPerPx(), atlas = state.style === 'atlas', dpr = cam.dpr;
   gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
-  const line = (name, o = {}) => batches[name] && batches[name].draw(camU, { widthScale: dpr, ...o });
-  const point = (name, o = {}) => batches[name] && batches[name].draw(camU, { sizeScale: dpr, ...o });
-  if (L.graticule) { line('graticule'); line('equator'); }
-  if (L.marks) line('circles', { dashKm: k * 14, duty: 0.55 });
-  if (L.rivers) line('rivers', { alpha: Math.min(1, 14 / k) });
-  if (L.borders) { line('borders', { alpha: Math.min(1, 0.55 + 6 / k) }); line('disputed', { dashKm: Math.max(18, k * 9), duty: 0.55 }); }
-  if (L.plates) { line('plates'); line('subduction'); }
-  const f = Math.min(3, dt / 16.7);
+  drawLines(camU, k, 1);
+  const f = fs.still ? 0 : Math.min(3, dt / 16.7);                    // still: draw the tracers where they are (see frozenFrame)
   if (samplers && !fs.hold) {
-    if (L.currents && fields.has.ocean) { tracers.currents.step(cam, samplers.currents, f); tracers.currents.draw(camU, 1); }
-    if (L.wind && fields.has.climate) { tracers.wind.step(cam, samplers.wind, f); tracers.wind.draw(camU, atlas ? 0.9 : 0.75); }
-    if (L.jet && fields.has.climate) { tracers.jet.step(cam, samplers.jet, f); tracers.jet.draw(camU, 0.9); }
-    if (L.ships && fields.cpu.lanes) { tracers.ships.step(cam, samplers.lanes, f); tracers.ships.draw(camU, atlas ? 0.9 : 0.62); }
+    if (L.currents && fields.has.ocean) { if (f) tracers.currents.step(cam, samplers.currents, f); tracers.currents.draw(camU, 1); }
+    if (L.wind && fields.has.climate) { if (f) tracers.wind.step(cam, samplers.wind, f); tracers.wind.draw(camU, atlas ? 0.9 : 0.75); }
+    if (L.jet && fields.has.climate) { if (f) tracers.jet.step(cam, samplers.jet, f); tracers.jet.draw(camU, 0.9); }
+    if (L.ships && fields.cpu.lanes) { if (f) tracers.ships.step(cam, samplers.lanes, f); tracers.ships.draw(camU, atlas ? 0.9 : 0.62); }
   }
   if (L.flights && flights) dashCache.aloft = flights.draw(camU, state.t, astro.sun, Math.max(0.4, Math.min(1, 7 / k)), k);
-  if (L.flights && k < 5) point('airports', { alpha: Math.min(1, (5 - k) / 2) });
-  if (L.quakes) point('quakes');
-  if (L.volcanoes) point('volcanoes', { alpha: Math.min(1, 0.45 + 5 / k) });
-  if (L.power) point(k < 6 ? 'powerAll' : 'powerBig');
+  drawPoints(camU, k, 1);
 
   // dynamic points: live quakes, satellites, the Sun and Moon marks, the selection
   const dp = [];
@@ -304,18 +310,135 @@ function tick(now) {
   }
   if (selection) { const ph = (now / 1600) % 1; dp.push(selection.lon * D2R, selection.lat * D2R, 0, 1.0, 0.85, 0.35, 1, 7, 1, selection.lon * D2R, selection.lat * D2R, 0, 1.0, 0.85, 0.35, 0.6 * (1 - ph), 7 + 12 * ph, 1); }
   if (dp.length) { (dynPts ||= new PointBatch(gl, progs.points, true)).set(new Float32Array(dp)); dynPts.draw(camU, { sizeScale: dpr }); }
+
+  // 4b. the insets, over everything the main map drew: ground, then the same lines and points through their cameras.
+  // Tracers and aircraft are the main map's only (they are seeded and stepped for one camera).
+  for (const I of insets) {
+    if (!I.rect || !I.fb) continue;
+    if (I.alpha >= 0.999) {
+      gl.bindFramebuffer(gl.READ_FRAMEBUFFER, I.fb);
+      gl.blitFramebuffer(0, 0, I.pw, I.ph, I.vx, I.vy, I.vx + I.pw, I.vy + I.ph, gl.COLOR_BUFFER_BIT, gl.NEAREST);
+      gl.bindFramebuffer(gl.READ_FRAMEBUFFER, null);
+    }
+    gl.viewport(I.vx, I.vy, I.pw, I.ph); gl.enable(gl.SCISSOR_TEST); gl.scissor(I.vx, I.vy, I.pw, I.ph);
+    if (I.alpha < 0.999) {                                             // fading: composed straight over the map at that strength
+      const relief = earth.relief;
+      gl.enable(gl.BLEND); gl.blendColor(0, 0, 0, I.alpha); gl.blendFunc(gl.CONSTANT_ALPHA, gl.ONE_MINUS_CONSTANT_ALPHA);
+      earth.draw(state, I.cam, astro, null, true);
+      gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA); earth.relief = relief;
+    }
+    const iu = I.cam.uniforms();
+    drawLines(iu, I.k, I.alpha); drawPoints(iu, I.k, I.alpha);
+    if (dp.length) dynPts.draw(iu, { sizeScale: dpr, alpha: I.alpha });
+    gl.disable(gl.SCISSOR_TEST);
+  }
+  gl.viewport(0, 0, canvas.width, canvas.height);
   gl.disable(gl.BLEND);
 
   // 5. names
-  if (labelsDirty) {
-    labelsDirty = false;
-    labels.draw(cam, state.style, L.labels);
-    drawMarks();
-  }
+  if (labelsDirty) { labelsDirty = false; drawNames(); }
   // 6. panels
   fs.detail = det.detail;
   if (now - (fs.uiAt || 0) > 250) { fs.uiAt = now; ui.clock(); ui.hud(k, hover, det.detail === 'full' ? (detail.busy ? 'fetching finer tiles…' : '') : det.detail === 'preview' ? 'refining detail…' : 'loading terrain…'); }
   if (now - (fs.dashAt || 0) > 1000) { fs.dashAt = now; updateDash(false); if (state.clock !== 'paused' && card) refreshCard(); }
+}
+
+/** Lines that lie on the ground, through any camera of the atlas (the main map's, an inset's). a: overall strength. */
+function drawLines(camU, k, a) {
+  const L = state.layers, dpr = cam.dpr;
+  const line = (name, o = {}) => batches[name] && batches[name].draw(camU, { widthScale: dpr, ...o, alpha: (o.alpha === undefined ? 1 : o.alpha) * a });
+  if (L.graticule) { line('graticule'); line('equator'); }
+  if (L.marks) line('circles', { dashKm: k * 14, duty: 0.55 });
+  if (L.rivers) line('rivers', { alpha: Math.min(1, 14 / k) });
+  if (L.borders) { line('borders', { alpha: Math.min(1, 0.55 + 6 / k) }); line('disputed', { dashKm: Math.max(18, k * 9), duty: 0.55 }); }
+  if (L.plates) { line('plates'); line('subduction'); }
+}
+/** The same for the catalogued points. */
+function drawPoints(camU, k, a) {
+  const L = state.layers, dpr = cam.dpr;
+  const point = (name, o = {}) => batches[name] && batches[name].draw(camU, { sizeScale: dpr, ...o, alpha: (o.alpha === undefined ? 1 : o.alpha) * a });
+  if (L.flights && k < 5) point('airports', { alpha: Math.min(1, (5 - k) / 2) });
+  if (L.quakes) point('quakes');
+  if (L.volcanoes) point('volcanoes', { alpha: Math.min(1, 0.45 + 5 / k) });
+  if (L.power) point(k < 6 ? 'powerAll' : 'powerBig');
+}
+
+/** Read the panels' rectangles from the page. True when one moved, opened or closed (the names are then set again). */
+function measurePanels() {
+  const out = [];
+  for (const id of PANELS) {
+    const e = document.getElementById(id), r = e && e.getBoundingClientRect();
+    if (r && r.width >= 2 && r.height >= 2) out.push([r.left - PANEL_PAD, r.top - PANEL_PAD, r.right + PANEL_PAD, r.bottom + PANEL_PAD]);
+  }
+  const sig = out.map((r) => r.map(Math.round).join(',')).join(';');
+  if (sig === panelSig) return false;
+  panelSig = sig; panelRects = out; labelsDirty = true;
+  return true;
+}
+
+/** Where each inset goes this frame, or that it does not show: only on the sheet, only with names on, only near
+ *  the whole-Earth scale (insets.js), each clear of the panels and of the one before it. */
+function layoutInsets() {
+  const alpha = cam.view === 'sheet' && state.layers.labels && data.political ? insetAlpha(cam.kmPerPx()) : 0;
+  const taken = panelRects.slice();
+  let changed = false;
+  for (const I of insets) {
+    if (I.layout(cam, alpha > 0 ? taken : null, alpha, cam.dpr)) changed = true;
+    if (I.rect) taken.push([I.rect.x - INSET_PAD, I.rect.y - INSET_PAD, I.rect.x + I.rect.w + INSET_PAD, I.rect.y + I.rect.h + INSET_PAD]);
+  }
+  if (changed) earthDirty = labelsDirty = true;
+}
+/** An inset's own render target, the size of its frame in device pixels, and where that frame is in the drawing buffer. */
+function insetTarget(I) {
+  const pw = Math.round(I.rect.w * cam.dpr), ph = Math.round(I.rect.h * cam.dpr);
+  if (!I.fb || I.pw !== pw || I.ph !== ph) {
+    if (I.fb) { gl.deleteFramebuffer(I.fb); gl.deleteTexture(I.tex); }
+    I.tex = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, I.tex); gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8, pw, ph);
+    I.fb = gl.createFramebuffer(); gl.bindFramebuffer(gl.FRAMEBUFFER, I.fb);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, I.tex, 0);
+    I.pw = pw; I.ph = ph;
+  }
+  I.vx = Math.round(I.rect.x * cam.dpr); I.vy = canvas.height - Math.round(I.rect.y * cam.dpr) - ph;
+}
+
+const INSET_FONT = '600 9px -apple-system, "Helvetica Neue", "Segoe UI", system-ui, sans-serif';
+/** Every name: the main map's, set clear of the panels and of the insets' frames; then each inset's own, by the same
+ *  machinery through the inset's camera; then the frames. */
+function drawNames() {
+  const show = state.layers.labels, shown = insets.filter((I) => I.rect);
+  labels.setBlocked(panelRects.concat(shown.map((I) => [I.rect.x - 3, I.rect.y - 3, I.rect.x + I.rect.w + 3, I.rect.y + I.rect.h + 3])));
+  // under the main map's names: a thin outline around the ground each inset magnifies
+  labels.underlay = shown.length ? (c, atlas) => { for (const I of shown) { const s = I.source(cam); c.globalAlpha = I.alpha; rule(c, atlas, s[0], s[1], s[2] - s[0], s[3] - s[1]); } c.globalAlpha = 1; } : null;
+  labels.draw(cam, state.style, show);
+  const c = labels.ctx, atlas = state.style === 'atlas';
+  for (const I of insets) {
+    if (!I.rect || !show) { I.labels.placed = []; continue; }
+    // the title sits in the frame's top-left corner; the inset's names keep clear of it
+    c.setTransform(labels.dpr, 0, 0, labels.dpr, 0, 0); c.font = INSET_FONT;
+    if ('letterSpacing' in c) c.letterSpacing = '1.2px';
+    const title = I.def.title.toUpperCase(), tw = Math.ceil(c.measureText(title).width) + 9, th = 14;
+    if ('letterSpacing' in c) c.letterSpacing = '0px';
+    I.tab = [0, 0, tw, th];
+    I.labels.place(I.rect.x, I.rect.y, I.rect.w, I.rect.h, labels.dpr);
+    I.labels.setBlocked([[0, 0, tw + 2, th + 2]]);
+    I.labels.alpha = I.alpha;
+    I.labels.draw(I.cam, state.style, true);
+    c.setTransform(labels.dpr, 0, 0, labels.dpr, 0, 0); c.globalAlpha = I.alpha;
+    c.fillStyle = atlas ? 'rgba(255,255,255,.86)' : 'rgba(4,10,20,.78)'; c.fillRect(I.rect.x, I.rect.y, tw, th);
+    c.font = INSET_FONT; c.textBaseline = 'middle'; c.fillStyle = atlas ? 'rgba(28,26,30,.92)' : 'rgba(255,255,255,.9)';
+    if ('letterSpacing' in c) c.letterSpacing = '1.2px';
+    c.fillText(title, I.rect.x + 5, I.rect.y + th / 2 + 0.5);
+    if ('letterSpacing' in c) c.letterSpacing = '0px';
+    rule(c, atlas, I.rect.x - 0.5, I.rect.y - 0.5, I.rect.w + 1, I.rect.h + 1);
+    c.globalAlpha = 1;
+  }
+  drawMarks();
+}
+/** The thin rule of an inset's frame and of its outline on the main map: one weight, one ink. */
+function rule(c, atlas, x, y, w, h) {
+  c.lineJoin = 'miter';
+  c.lineWidth = 2.6; c.strokeStyle = atlas ? 'rgba(255,255,255,.55)' : 'rgba(0,6,16,.5)'; c.strokeRect(x, y, w, h);
+  c.lineWidth = 1; c.strokeStyle = atlas ? 'rgba(28,26,30,.85)' : 'rgba(255,255,255,.85)'; c.strokeRect(x, y, w, h);
 }
 
 function drawMarks() {
@@ -354,32 +477,42 @@ let drag = null, hover = '', moved = 0;
 canvas.addEventListener('pointerdown', (e) => { drag = [e.clientX, e.clientY]; moved = 0; canvas.setPointerCapture(e.pointerId); canvas.classList.add('dragging'); fly = null; });
 canvas.addEventListener('pointermove', (e) => {
   if (drag) { const dx = e.clientX - drag[0], dy = e.clientY - drag[1]; moved += Math.abs(dx) + Math.abs(dy); cam.pan(dx, dy); drag = [e.clientX, e.clientY]; earthDirty = labelsDirty = true; settledAt = performance.now(); }
-  const ll = cam.unproject(e.clientX, e.clientY);
+  const V = viewAt(e.clientX, e.clientY), ll = V.cam.unproject(V.x, V.y);
   if (ll) { const z = fields.elevation(ll[0], ll[1]); hover = `${Cards.coord(ll[0], ll[1])}${Number.isFinite(z) ? ` · ${Math.round(z).toLocaleString('en-US')} m` : ''}`; } else hover = '';
 });
 canvas.addEventListener('pointerup', (e) => { canvas.classList.remove('dragging'); if (drag && moved < 5) click(e.clientX, e.clientY); drag = null; saveHash(); });
 canvas.addEventListener('wheel', (e) => { e.preventDefault(); fly = null; cam.zoom(Math.exp(e.deltaY * (e.ctrlKey ? 0.01 : 0.0016)), e.clientX, e.clientY); earthDirty = labelsDirty = true; settledAt = performance.now(); saveHash(); }, { passive: false });
-canvas.addEventListener('dblclick', (e) => { const ll = cam.unproject(e.clientX, e.clientY); if (ll) flyTo(ll[0], ll[1], cam.kmPerPx() / 2.5); });
+canvas.addEventListener('dblclick', (e) => { const V = viewAt(e.clientX, e.clientY), ll = V.cam.unproject(V.x, V.y); if (ll) flyTo(ll[0], ll[1], cam.kmPerPx() / 2.5); });
 
-function click(x, y) {
-  const L = state.layers;
-  const lab = L.labels ? labels.hit(x, y) : null;
-  if (lab) return openRef(lab.ref);
-  cam.beginFrame();
+/** Which view of the atlas a window point is in: an inset that is showing, or the main map. x, y: the point in that view's own coordinates. */
+function viewAt(x, y) {
+  for (const I of insets) if (I.alpha > 0.5 && I.holds(x, y)) return { cam: I.cam, labels: I.labels, x: x - I.rect.x, y: y - I.rect.y, inset: I };
+  return { cam, labels, x, y, inset: null };
+}
+/** What a click at a window point selects: the reference its card opens from (openRef), or null off the Earth.
+ *  The same rule in every view: a name, then a marked point, then the ground. */
+function pick(wx, wy) {
+  const L = state.layers, V = viewAt(wx, wy), vc = V.cam, x = V.x, y = V.y, vk = vc.kmPerPx();
+  const lab = L.labels ? V.labels.hit(x, y) : null;
+  if (lab) return lab.ref;
+  vc.beginFrame();
   let best = null, bd = 10;
-  const near = (lon, lat, h, ref) => { const p = cam.project(lon, lat, h); if (!p) return; const d = Math.hypot(p[0] - x, p[1] - y); if (d < bd) { bd = d; best = ref; } };
+  const near = (lon, lat, h, ref) => { const p = vc.project(lon, lat, h); if (!p) return; const d = Math.hypot(p[0] - x, p[1] - y); if (d < bd) { bd = d; best = ref; } };
   if (L.quakesLive && live.quakes && isNow()) for (const q of live.quakes.rows) near(q[1], q[2], 0, ['quake', q, true]);
   if (L.quakes && data.quakes) for (const q of data.quakes.rows) near(q[1], q[2], 0, ['quake', q, false]);
   if (L.volcanoes && data.volcanoes) for (const v of data.volcanoes.rows) near(v[1], v[2], 0, ['volcano', v]);
-  if (L.power && data.power) { const W = data.power, min = cam.kmPerPx() < 6 ? 0 : 1000; for (let i = 0; i < W.mw.length; i++) if (W.mw[i] >= min) near(W.lon[i], W.lat[i], 0, ['plant', i]); }
-  if (L.flights && data.air && cam.kmPerPx() < 5) for (const a of data.air.airports) near(a.lon, a.lat, 0, ['airport', a]);
+  if (L.power && data.power) { const W = data.power, min = vk < 6 ? 0 : 1000; for (let i = 0; i < W.mw.length; i++) if (W.mw[i] >= min) near(W.lon[i], W.lat[i], 0, ['plant', i]); }
+  if (L.flights && data.air && vk < 5) for (const a of data.air.airports) near(a.lon, a.lat, 0, ['airport', a]);
   if (fs.sats) for (const s of fs.sats) near(s.lon, s.lat, s.h, ['sat', s]);
-  if (best) return openRef(best);
-  const ll = cam.unproject(x, y);
-  if (!ll) return app.closeCard();
-  if (state.style === 'atlas' && cam.kmPerPx() > 9) { const c = data.countryAt(ll[0], ll[1]); if (c) return openRef(['country', c]); }
-  openRef(['probe', ll]);
+  if (best) return best;
+  const ll = vc.unproject(x, y);
+  if (!ll) return null;
+  // the ground: a state's card on the political sheet seen from afar, the probe otherwise. An inset belongs to the
+  // whole-Earth sheet, so its ground answers as the main map's does at that moment.
+  if (state.style === 'atlas' && cam.kmPerPx() > 9) { const c = data.countryAt(ll[0], ll[1]); if (c) return ['country', c]; }
+  return ['probe', ll];
 }
+function click(x, y) { const ref = pick(x, y); if (ref) openRef(ref); else app.closeCard(); }
 
 // ---------------------------------------------------------------------------------- URL state
 function saveHash() {
@@ -414,6 +547,15 @@ async function shot(name = 'frame.jpg', crop) {
   return `${await r.text()} ${w}x${h} dpr ${cam.dpr}`;
 }
 
+/** The names an inset can show: every country (a state is placed by its own geometry wherever it is), and the
+ *  seas, cities and landforms near its ground. Fresh objects: a label layer keeps its working state on its items. */
+function insetItems(def) {
+  const all = data.labelItems(), dLat = def.spanKm[1] / 222.4 + 4, dLon = def.spanKm[0] / 222.4 / Math.max(0.2, Math.cos(def.center[1] * D2R)) + 6;
+  const out = all.filter((it) => it.cls === 'country' || (Math.abs(it.lat - def.center[1]) < dLat && Math.abs(((it.lon - def.center[0] + 540) % 360) - 180) < dLon));
+  out.geo = all.geo;
+  return out;
+}
+
 /** Every field and every lazy table the current layers need has arrived, the focus window included when its layer is on. */
 function allLoaded() {
   const h = fields.has;
@@ -444,6 +586,9 @@ async function frozenFrame() {
   }
   fs.hold = false; earthDirty = labelsDirty = true; fs.uiAt = fs.dashAt = 0;
   tick(now += 16.7);
+  // the last tick wrote the panels after it set the names: if a panel changed size in it, set them once more
+  // (tracers drawn where they stand, not stepped, so the frame stays the same frame)
+  for (let i = 0; i < 3 && measurePanels(); i++) { fs.still = true; earthDirty = labelsDirty = true; fs.uiAt = fs.dashAt = 0; tick(now += 16.7); fs.still = false; }
   window.__FRAME_READY = true;
 }
 
@@ -473,12 +618,13 @@ async function frozenFrame() {
     samplers = makeSamplers(fields, () => astro.month);
     buildStatic(); buildTracers();
     labels.setItems(data.labelItems());
+    for (const I of insets) I.labels.setItems(insetItems(I.def));
     for (const id in state.layers) if (state.layers[id]) ensureLayer(id);
     if (LENSES[state.lens] && LENSES[state.lens].static) { pending.add('lens'); fields.loadStatic(LENSES[state.lens].static).then(() => { pending.delete('lens'); earthDirty = true; }); }
     ui.syncControls(); feedStatus();
     const boot = document.getElementById('boot'); boot.classList.add('gone'); setTimeout(() => boot.remove(), FROZEN ? 0 : 900);
     if (!FROZEN) setInterval(() => { if (state.layers.quakesLive && isNow()) live.loadQuakes(); if (state.layers.aurora && isNow()) live.loadAurora(); }, 10 * 60000);
-    window.ATLAS = { ...app, gl, astro, labels, tracers, batches, shot, step: (n = 1) => { for (let i = 0; i < n; i++) tick(Math.max(lastFrame + 16.7, FROZEN ? 0 : performance.now())); return n; }, get flights() { return flights; }, redraw: () => { earthDirty = labelsDirty = true; } };
+    window.ATLAS = { ...app, gl, astro, labels, tracers, batches, shot, insets, pickAt: pick, panels: () => panelRects, step: (n = 1) => { for (let i = 0; i < n; i++) tick(Math.max(lastFrame + 16.7, FROZEN ? 0 : performance.now())); return n; }, get flights() { return flights; }, redraw: () => { earthDirty = labelsDirty = true; } };
     window.ATLAS.refView = (lon, lat, dist, discFrac) => { cam.refView(lon, lat, dist, discFrac); earthDirty = labelsDirty = true; resetTracers(); };
     window.ATLAS.stdView = () => { cam.stdView(); earthDirty = labelsDirty = true; resetTracers(); };
     window.ATLAS.settled = () => fs.detail === 'full' && allLoaded();

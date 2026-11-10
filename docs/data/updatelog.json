@@ -1,5 +1,39 @@
 [
  {
+  "version": "1.1",
+  "date": "10 November 2026",
+  "title": "Cloud that reads as cloud, and a sheet with insets",
+  "summary": "Two things the first release said were wrong. Close in, cloud was generated and looked it; its fine structure is now taken from satellite photographs of real cloud. And the whole-Earth sheet could not name Central Europe or the small islands of the Caribbean; it now carries an inset for each.",
+  "sections": [
+   {
+    "name": "Cloud, close in",
+    "items": [
+     "Closer than about 10 km a pixel, cloud now has real cloud's cells, fibres and ragged edges. They come from three satellite scenes at 2 km a pixel: a stratocumulus sheet off Namibia, shallow cumulus in the Indian Ocean and a Southern Ocean storm. How much cloud there is, and how bright, still comes from the climatology.",
+     "Against fifteen other satellite scenes, how the atlas's cloud is shared among sizes from 4 to 256 km is nearly three times closer to the photographs than it was, and inside their own day-to-day variation over the North Atlantic, the south-east Pacific and the trades.",
+     "Stratocumulus sheets were a third brighter than the satellite record says. Off Peru the scene is now 0.06 above the photographs in reflectance, where it was 0.13."
+    ]
+   },
+   {
+    "name": "The sheet",
+    "items": [
+     "The whole-Earth sheet has a Europe inset and a Lesser Antilles inset: the same rendered map, magnified three times, with its own names, and every name and country in them opens its card. Poland, Czechia, Hungary, the Baltic states and eight more are named for the first time at this scale, and all eight island states of the Lesser Antilles.",
+     "Of the 177 states a reader can see on the sheet at 1440 by 900, 125 are named, where 106 were. The first release said 129: 22 of those names were under the dashboard panel, where no one could read them. Names now keep clear of the panels and move when one opens or closes.",
+     "Continent names are back, in wide quiet capitals behind the states.",
+     "The insets appear only when there is open sea for them between the panels; in a small window they are left out, not squeezed."
+    ]
+   },
+   {
+    "name": "Known to be wrong",
+    "items": [
+     "The cloud's fine structure is borrowed: one real sheet stands in for every sheet and one real storm for every storm, and each repeats every 2,000 km. It is not the cloud of the place.",
+     "Over the Amazon the real afternoon sky is fine cumulus everywhere; the atlas draws fewer, larger, brighter pieces. Over the Congo it draws twice the bright cloud the photographs show.",
+     "Sixteen European states are still unnamed on the whole-Earth sheet, among them Belgium, Switzerland, Denmark and most of the western Balkans; the Levant and the Caucasus have no inset. Zoom in and they are named.",
+     "Everything in the first release's list still stands: the Hudson Bay strip, grey snow at a low Sun, the bright outer ring, modelled traffic."
+    ]
+   }
+  ]
+ },
+ {
   "version": "1.0",
   "date": "10 November 2026",
   "title": "First public release",

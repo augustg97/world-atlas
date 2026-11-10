@@ -105,6 +105,7 @@ node build/test_app_math.mjs                     # ephemeris vs almanac, project
 # rebuild data (each step asserts landmarks and stamps web/version.json)
 ./venv/bin/python build/fetch_sources.py        # ~3.6 GB into data/ (gitignored); idempotent
 ./venv/bin/python build/fields_surface.py       # water albedo elev night clouds   (albedo:7 = one month)
+./venv/bin/python build/cloud_grain.py          # cloudgrain.jpg: three VIIRS scenes as rank fields (fetch_sources.py cloudtex first; --preview to look)
 ./venv/bin/python build/fields_climate.py       # atmo ocean currents
 ./venv/bin/python build/fields_human.py         # pop ships lanes co2 countries
 ./venv/bin/python build/vectors.py              # political places physical plates quakes volcanoes power stats air
@@ -190,9 +191,24 @@ node build/test_app_math.mjs                     # ephemeris vs almanac, project
 - **Noise in longitude-latitude space is stretched by 1 / cos(latitude).** Generated cloud at 45 N came out four
   times too one-directional. Generate on the sphere (`clumps3`).
 - **A threshold on noise gives the cover its quantile curve gives, not the one you asked for.** A straight-line
-  rule gave 8% when asked for 20%. Measure the noise's distribution (`cutFor`).
+  rule gave 8% when asked for 20%. Measure the noise's distribution (or cut a rank field, which is uniform).
 - **Statistics improving is not the picture improving.** Three cloud versions scored better and looked like pepper,
   cracked mud and paint chips. Read the pairs in `Research/figures/clouds/` every time.
+- **Generated texture reads as generated; take shape from the real thing and amount from the model.** Three
+  rounds of noise-built cloud never passed for cloud. A real scene reduced to RANKS (each pixel's place among its
+  neighbours) answers "which pixels, at this amount?" exactly, and keeps every cell and ragged edge
+  (`build/cloud_grain.py`). The exemplar must not be one of the scenes the audit scores against.
+- **A resize that reads single points is not an average, and an average of display values is not an average of
+  light.** The EPIC audit shrank both pictures 2.3 times that way for two rounds. Shrink by averaging, on
+  linear values, and give the instrument a selftest with stripes.
+- **A gain that describes a field must not be applied to its resolved pieces.** The Sun-side brightening is a
+  concave function of cloud light; applied per pixel it gave less as detail appeared, and the same sky dimmed
+  with zoom. Work field-level gains out on the far view's value.
+- **A second witness can veto a fix the first one asked for.** VIIRS wanted cumulus spread more evenly; EPIC's
+  clear ocean came out 3 levels too bright when it was. Score every change on every instrument before keeping it.
+- **Channels of unrelated data in one colour image need full chroma resolution.** WebP's lossy coder halves it
+  and cost the cloud grain 4.5% of its range; JPEG with `subsampling=0` costs 1.7%. And fetch sources as PNG:
+  a JPEG source's 8 x 8 blocks showed in the atlas's cloud.
 - **`water4.npy` and `water.webp` say south-west Hudson Bay is land.** They agree with each other and are both
   wrong (register A5). Two instruments from one source are one instrument.
 

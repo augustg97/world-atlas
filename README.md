@@ -81,6 +81,7 @@ build/        the offline pipeline (Python) and the tests
   fetch_sources.py   every source, with URL and licence - the executable source table
   frames.py          THE canonical frame and every conversion into it     test_frames.py
   fields_surface.py  water, 12 months of reflectance, elevation, relief gradient, night lights, clouds
+  cloud_grain.py     cloud's fine structure: three VIIRS scenes reduced to tileable rank fields
   fields_climate.py  atmosphere and ocean climatologies -> month-stacked atlases + climate.json
   fields_human.py    population, shipping density and lane ridges, CO2, country raster
   vectors.py         political geometry, places, names, plates, quakes, volcanoes, power, air model, statistics
@@ -137,6 +138,7 @@ node build/test_app_math.mjs                     # ephemeris vs almanac, project
 # rebuild data (each step asserts landmarks and stamps web/version.json)
 ./venv/bin/python build/fetch_sources.py        # ~3.6 GB into data/ (gitignored); idempotent
 ./venv/bin/python build/fields_surface.py       # water albedo elev night clouds   (albedo:7 = one month)
+./venv/bin/python build/cloud_grain.py          # cloud grain (fetch_sources.py cloudtex first)
 ./venv/bin/python build/fields_climate.py       # atmo ocean currents
 ./venv/bin/python build/fields_human.py         # pop ships lanes co2 countries
 ./venv/bin/python build/vectors.py              # political places physical plates quakes volcanoes power stats air
@@ -200,6 +202,7 @@ Failures that have each cost real time here. *(The general catalogue is in
 | elevation and bathymetry | NOAA NCEI ETOPO 2022 60 arc-second ice surface, doi:10.25921/fd45-gt74 - public domain |
 | night lights | NASA Black Marble 2016 (Roman et al. 2018) - public domain |
 | clouds (texture) | NASA Blue Marble: Clouds (Stockli 2002) - public domain |
+| clouds (fine structure) | NASA VIIRS (NOAA-20) corrected reflectance via GIBS, three scenes of 2023 - public domain |
 | wind, temperature, pressure, cloud fraction | NCEP/NCAR Reanalysis 1 (Kalnay et al. 1996), 1991-2020 means, NOAA PSL - public domain |
 | precipitation | GPCP v2.3 (Adler et al. 2018), 1991-2020 means - public domain |
 | sea-surface temperature, lake ice | NOAA OISST v2.1 (Huang et al. 2021), 1991-2020 means - public domain |
@@ -228,14 +231,14 @@ The section that makes the rest credible. State plainly what is reconstructed, w
 and what the model cannot know.
 
 - **This is a typical year, not this year.** No weather history, no forecast.
-- **Clouds are illustrative.** How much cloud there is and how much light it returns come from a satellite climatology (ISCCP) and are checked against VIIRS and EPIC; where each cloud is, is modelled; and close in the cloud is generated and reads as generated (register B1).
+- **Clouds are illustrative.** How much cloud there is and how much light it returns come from a satellite climatology (ISCCP) and are checked against VIIRS and EPIC; where each cloud is, is modelled. Close in, the fine structure is real cloud's, borrowed: one photographed sheet, one cumulus field and one storm stand in for all of their kind and repeat every 2048 km. It reads as cloud; it is not the cloud of the place. Wrong in measured ways over the Amazon, the trades and the Congo (register B1).
 - **Sea-ice extent matches NSIDC because the edge is placed to make it match**; ice area inside the edge runs up to 15% low. Lakes outside the Great Lakes and Ladoga never freeze, and neither does a 150 km band of south-west Hudson Bay that the water mask calls land (C1, A5).
 - **The ground's albedo is Blue Marble re-read against EPIC's view from the Sun's side**, not measured reflectance; dense forest is probably drawn too bright in the red (A7).
 - **Below 5 km per pixel the finer ground is streamed** from NASA and AWS while you look (the page says so in About); without a network it falls back to magnified fields. The sea floor is not refined (A2).
 - **Air traffic and ship motion are modelled flows.** No vehicle on screen is a real vehicle.
 - **Vintages differ**: land surface 2004, night lights 2016, borders 2022, emissions 2022, population 2025.
-- **At whole-Earth framing 129 of 198 states are named**; Central Europe, the Balkans and other crowded regions need an inset or a key (F1).
-- **Against NASA EPIC the Space style is close, with named exceptions**: cloud over land above the median, the outermost 2% of the disc, snow at a low Sun (A1, A8, A9). The full list is `Research/MODEL-GAPS.md`: 36 items, 1 at P1
+- **At whole-Earth framing 125 of the 177 states in view are named**, 18 of them only in the Europe and Lesser Antilles insets. Sixteen European states, the Levant and the Caucasus still are not; the insets need open sea between the panels and are left out in a small window (F1).
+- **Against NASA EPIC the Space style is close, with named exceptions**: cloud over land above the median, the outermost 2% of the disc, snow at a low Sun (A1, A8, A9). The full list is `Research/MODEL-GAPS.md`: 36 items, none at P1
 
 ---
 
