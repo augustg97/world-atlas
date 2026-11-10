@@ -143,6 +143,31 @@ def isccp_monthly(W, H):
     return out
 
 
+def air_temperature(W=360, H=180):
+    """(t2, t0), each (12, H, W) in degrees C: the reanalysis's 2 m air temperature, and the same reduced to
+    sea level. The app, and the lake-ice model, recover the air temperature anywhere as t0 - LAPSE * z, with z
+    the real ground there: z here is the terrain as the reanalysis sees it, ETOPO smoothed to about 2 degrees."""
+    d = local("air.2m.mon.ltm.nc")
+    v = np.ma.filled(np.ma.masked_invalid(d["air"][:]).astype(np.float64), np.nan)
+    t2 = F.resample_grid(v, d["lon"][:], d["lat"][:], W, H) - 273.15
+    z1 = np.maximum(F.reduce_aligned(np.load(os.path.join(CACHE, "elev_1deg.npy")), W, H) if (W, H) != (360, 180) else np.load(os.path.join(CACHE, "elev_1deg.npy")), 0.0)
+    zs = ndimage.gaussian_filter(z1, sigma=(H / 180.0, W / 360.0), mode=("nearest", "wrap"))
+    return t2, t2 + LAPSE * zs[None] / 1000.0
+
+
+def land_air_t0():
+    """(12, 180, 360): sea-level air temperature as the LAND has it. Over a large lake or an inland sea the
+    reanalysis's air is warmed by its own open water (January over the Sea of Azov: +1.2 C, where the shore
+    has -2 to -4), and a lake-ice model fed that air never freezes the lake. A lake freezes under the air
+    that comes off the land round it: every cell that is mostly water takes its nearest land cell's value."""
+    _, t0 = air_temperature(360, 180)
+    w1 = F.reduce_aligned(np.load(os.path.join(CACHE, "water4.npy")).astype(np.float32), 360, 180)
+    wet = np.concatenate([w1[:, -60:], w1, w1[:, :60]], 1) >= 0.5          # padded so "nearest" crosses the antimeridian
+    idx = ndimage.distance_transform_edt(wet, return_distances=False, return_indices=True)
+    t0p = np.concatenate([t0[:, :, -60:], t0, t0[:, :, :60]], 2)
+    return t0p[:, idx[0], idx[1]][:, :, 60:-60]
+
+
 def step_atmo():
     print("atmosphere")
     W, H = 360, 180
@@ -156,7 +181,7 @@ def step_atmo():
     u = grid("uwnd.sig995.mon.ltm.nc", "uwnd")
     v = grid("vwnd.sig995.mon.ltm.nc", "vwnd")
     slp = grid("slp.mon.ltm.nc", "slp")
-    t2 = grid("air.2m.mon.ltm.nc", "air") - 273.15
+    t2, t0 = air_temperature(W, H)
     cld_r1 = grid("tcdc.eatm.mon.ltm.nc", "tcdc") / 100.0
     # Cloud is the satellite's, not the reanalysis's: NCEP R1 has almost none of the stratocumulus decks
     # (measured against VIIRS scenes off Peru: 16% bright cloud in the atlas, 45% in the photographs).
@@ -168,11 +193,6 @@ def step_atmo():
     u250 = grid("uwnd.mon.ltm.nc", "uwnd", (slice(None), k))
     v250 = grid("vwnd.mon.ltm.nc", "vwnd", (slice(None), k))
 
-    # sea-level-reduced temperature: the app recovers T at any pixel as T0 - LAPSE * z_fine.
-    # z here is the terrain as the reanalysis sees it: ETOPO smoothed to roughly T62 (~2 deg).
-    z1 = np.maximum(np.load(os.path.join(CACHE, "elev_1deg.npy")), 0.0)
-    zs = ndimage.gaussian_filter(z1, sigma=(1.0, 1.0), mode=("nearest", "wrap"))
-    t0 = t2 + LAPSE * zs[None] / 1000.0
 
     # landmarks - these fail if a grid is flipped or shifted
     assert at(t2[6], 10, 25) > 28 and at(t2[0], 100, -80) > at(t2[6], 100, -80), "Sahara hot in July; Antarctic warmer in January"
@@ -494,10 +514,20 @@ def step_ocean():
 
     # Inland water. NSIDC's index is a SEA-ice index: it carries the Great Lakes, Ladoga, Baikal and
     # Great Bear as cells that are always open, and the Caspian and Azov lie off its grid. Their winter
-    # ice is real, so water that does not connect to the world ocean keeps OISST's ice (corrected for
-    # PSL's conditional mean, as before). It is marked in the valid channel (200, the sea is 255) so
-    # that the sea-ice count leaves it out, as NSIDC's does.
-    from scipy import ndimage
+    # ice is real. Two sources, in this order:
+    #   observed  OISST's ice, where its mask has the water body at all (the Great Lakes, Ladoga, the
+    #             Caspian, the Black Sea), corrected for PSL's conditional mean, and with its floor taken
+    #             off: it carries 7% "ice" on Lake Ontario in July, and ice in a lake's warmest month is
+    #             not ice.
+    #   modelled  everywhere else, and where OISST has the water and shows no ice in any month (the Caspian,
+    #             the Sea of Azov, the Black Sea: its ice analysis does not reach them): build/lakeice.py, from the air temperature at the
+    #             lake, fitted to half of 174 lakes' own freeze and thaw records and tested on the other
+    #             half (Research/modeling/audit_lakeice.py).
+    # The valid channel says which: 255 the sea; 200 inland water with observed ice and a water temperature;
+    # 215 inland water with a water temperature and MODELLED ice; 150 inland water with modelled ice and no
+    # temperature; 180 the shore band (drawn, not counted). Neither kind of lake ice is
+    # counted in the sea-ice extent, as it is not in NSIDC's.
+    import lakeice
     lab, _ = ndimage.label(valid[0])
     sizes = np.bincount(lab.ravel()); sizes[0] = 0
     lake = valid[0] & (lab != sizes.argmax())
@@ -507,17 +537,57 @@ def step_ocean():
     ice_o = np.nan_to_num(F.resample_grid(ice_o, lon_o, lat_o, W, H), nan=0.0)
     if np.nanmax(ice_o) > 1.5:
         ice_o = ice_o / 100.0
-    ice = np.where(lake[None], ice_o, ice)
+    floor_o = ice_o.min(0)
+    print(f"  OISST lake ice: floor removed, up to {float(floor_o[lake].max()):.2f} (Lake Ontario in its warmest month: {float(at(floor_o, -77.8, 43.6)):.2f})")
+    ice_o = np.clip(ice_o - floor_o[None], 0, 1)
+
+    # the air at each cell's water: sea-level temperature, lowered to the lake's own surface. A cell's mean
+    # height is not the lake's (it takes in the hills round it, or the lake's floor): the lake's surface is
+    # the lowest land on its shore, so the lowest land within a cell of it is taken.
+    w4 = np.load(wpath).astype(np.float32)
+    e4 = np.load(os.path.join(CACHE, "elev4.npy")).astype(np.float32)
+    # (elev4 is 4096 wide, 0.088 degrees a pixel: a 9-pixel window is the cell and its neighbours)
+    shore4 = ndimage.minimum_filter(np.where(w4 < 0.5, np.maximum(e4, 0.0), np.inf), size=9, mode=("nearest", "wrap"))
+    jj = np.clip(((np.arange(H) + 0.5) * e4.shape[0] / H).astype(int), 0, e4.shape[0] - 1)
+    ii = np.clip(((np.arange(W) + 0.5) * e4.shape[1] / W).astype(int), 0, e4.shape[1] - 1)
+    shore_z = shore4[jj][:, ii]
+    mean_z = F.reduce_aligned(np.maximum(e4, 0.0), W, H)
+    z_lake = np.where(np.isfinite(shore_z), shore_z, mean_z)
+    t0 = land_air_t0()
+    yy = (np.arange(H) + 0.5) * 180.0 / H - 0.5
+    xx = (np.arange(W) + 0.5) * 360.0 / W - 0.5
+    gy, gx = np.meshgrid(yy, xx, indexing="ij")
+    t_lake = np.stack([ndimage.map_coordinates(np.pad(t0[m], ((0, 0), (1, 1)), mode="wrap"), [gy, gx + 1.0], order=1, mode="nearest") for m in range(12)]) - LAPSE * z_lake[None] / 1000.0
+    inland_frac = F.reduce_aligned(w4, W, H)
+    near_water = ndimage.maximum_filter(inland_frac, size=3, mode=("nearest", "wrap")) > 0.01
+    todo = near_water & ~(valid[0] & ~lake)                       # every cell with water in or beside it that is not the sea
+    model = np.zeros((12, H, W), dtype=np.float32)
+    model[:, todo] = lakeice.monthly_ice(t_lake[:, todo])
+    silent = lake & (ice_o.max(0) < 0.02)                         # OISST has the water and no ice in any month: there the model speaks (and says none, over warm water)
+    modelled = (todo & ~lake) | silent
+    lake_ice = np.where(silent[None], model, ice_o)
+    ice = np.where(lake[None], lake_ice, ice)
+    ice = np.where((modelled & ~lake)[None], model, ice)
     inside = inside & ~lake[None]
     sea = valid & ~lake[None]
-    lake_area = (lake * (F.cell_area_km2(W, H) * np.ones((1, W)))).sum() / 1e6
-    print(f"  inland water kept on OISST ice: {lake_area:.2f} M km2 in {len(np.unique(lab[lake]))} bodies")
-    # OISST's own mask has no Baikal, Great Bear or Victoria: those lakes still never freeze (register A5).
+    cell = F.cell_area_km2(W, H) * np.ones((1, W))
+    print(f"  inland water on OISST ice: {float((lake & ~silent).sum() and ((lake & ~silent) * cell).sum() / 1e6):.2f} M km2 of cells; on modelled ice: {float((modelled * cell * (inland_frac > 0.01)).sum() / 1e6):.2f} M km2 of cells, "
+          f"{float((silent * (model.max(0) > 0.02) * cell).sum() / 1e6):.2f} of them where OISST shows none all year and the model some")
     assert at(lake, -87.5, 47.7) and at(lake, 51, 42) and at(lake, 31.5, 60.8), "Lake Superior, the Caspian and Ladoga are inland water"
     assert not at(lake, 20, 58) and not at(lake, -85, 60) and not at(lake, -40, -68), "the Baltic, Hudson Bay and the Weddell Sea are the sea"
-    assert at(ice[1], -81.2, 42.2) > 0.3 and at(ice[7], -81.2, 42.2) < 0.08, "Lake Erie: ice in February, open in August"
+    assert at(ice[1], -81.2, 42.2) > 0.3 and at(ice[7], -81.2, 42.2) < 0.03, "Lake Erie: ice in February, open in August"
     assert at(ice[2], 31.5, 60.8) > 0.4 and at(ice[7], 31.5, 60.8) == 0, "Lake Ladoga: ice in March, none in August"
-    # OISST carries no ice at all on the Caspian or the Sea of Azov, which do freeze in the north: still open (A5).
+    assert at(ice[6], -77.8, 43.6) < 0.02, "Lake Ontario has no ice in July"
+    # modelled lakes: the ones that never froze on screen
+    assert at(modelled, 108.0, 53.5) and at(ice[2], 108.0, 53.5) > 0.9 and at(ice[7], 108.0, 53.5) == 0, "Baikal: frozen in March, open in August"
+    assert at(ice[2], -121.0, 66.0) > 0.95 and at(ice[7], -121.0, 66.0) < 0.05, "Great Bear Lake: frozen in March, open in August"
+    assert at(ice[1], 50.5, 45.8) > 0.5 and at(ice[1], 51.0, 40.0) == 0 and at(ice[7], 50.5, 45.8) == 0, "the Caspian: its north freezes in February, its middle never, and nothing in August"
+    assert at(ice[1], 37.0, 46.2) > 0.2 and at(ice[1], 33.0, 43.0) < 0.05, ("the Sea of Azov has ice in February; the middle of the Black Sea has next to none",
+        float(at(ice[1], 37.0, 46.2)), float(at(ice[1], 33.0, 43.0)), bool(at(lake, 37.0, 46.2)), float(at(ice_o.max(0), 37.0, 46.2)), float(at(model.max(0), 37.0, 46.2)), float(at(t_lake[0], 37.0, 46.2)))
+    assert at(ice[0], 33.0, -1.0) == 0 and at(ice[6], 33.0, -1.0) == 0, "Lake Victoria never freezes"
+    assert at(ice[6], -69.4, -15.8) < 0.05, "Lake Titicaca (3800 m, 16 S) does not freeze in July (the model leaves it one day in the coldest of its five years)"
+    # Known to be wrong, and not asserted away: the model knows no depth. By the lakes' own records it ices
+    # Mjosa 145 days (50), Lake Constance 54 (0), Baikal at its southern station 148 (102). Register C4.
 
     assert at(sst[8], -150, 5) > 26 and at(sst[2], 0, -60) < 3, "warm pool; Southern Ocean"
     assert at(ice[2], 0, 85) > 0.9 and at(ice[8], 0, 85) > 0.5, "central Arctic ice"
@@ -531,7 +601,7 @@ def step_ocean():
     assert at(ice[8], -60, -58) < 0.02 and at(ice[8], 20, -50) < 0.02, "September: Drake Passage and the ocean south of Africa are open"
     assert not at(valid[0], 10, 23) and at(valid[0], -150, 0), "Sahara is not ocean; the Pacific is"
     j35 = int(55 / 180 * H)
-    assert np.nanmax(ice[:, j35: H - j35]) == 0, "no sea ice within 35 degrees of the equator"
+    assert np.nanmax(np.where(sea, ice, 0.0)[:, j35: H - j35]) == 0, "no sea ice within 35 degrees of the equator (lake ice there is real: Tibet, the Andes)"
     assert at(ice[0], 122, 40.4) > 0.3 and at(ice[6], 122, 40.4) == 0, "the lowest-latitude sea ice: Liaodong Bay in January"
 
     b_ice = enc("ice", fill_nearest(ice), 0, 1, units="fraction")
@@ -552,7 +622,9 @@ def step_ocean():
     # Two cells past the mask are marked 180: drawn (both fields are already filled outward), not counted.
     shore = ndimage.binary_dilation(valid[0], iterations=2) & ~valid[0]
     vch = np.where(lake[None], 200, valid * 255)
-    vch = np.where(shore[None] & ~valid, 180, vch).astype(np.uint8)
+    vch = np.where(silent[None], 215, vch)                                              # OISST's water and temperature, the model's ice
+    vch = np.where(shore[None] & ~valid, 180, vch)
+    vch = np.where((modelled & ~lake)[None] & (vch == 0), 150, vch).astype(np.uint8)     # modelled lake ice, no sea temperature
     atlas("oceanA.png", enc("sst", fill_nearest(sst), -2, 35, units="C"), b_ice, vch)
     np.save(os.path.join(CACHE, "ice_extent_valid.npy"), valid[0])
 

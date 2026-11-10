@@ -2,8 +2,8 @@
 // already shows - the population field under the terminator, the ice field over the sea -
 // so the panel cannot disagree with the globe.
 
-import { D2R } from './astro.js?v=20261110T205316Z';
-import { R_KM } from './camera.js?v=20261110T205316Z';
+import { D2R } from './astro.js?v=20261110T223704Z';
+import { R_KM } from './camera.js?v=20261110T223704Z';
 
 /** People in daylight / twilight / night, and in waking hours, from 1-degree population counts. */
 export function peopleBySun(pop1, sunNow) {
@@ -26,8 +26,9 @@ export function peopleBySun(pop1, sunNow) {
 }
 
 /** Sea-ice extent (million km2, cells with >= 15% cover) per month and hemisphere, from the shipped field.
- *  The valid channel is 255 for the sea and 200 for inland water (the Great Lakes, the Caspian): lake ice
- *  is drawn but not counted, because the NSIDC index this is held against is a sea-ice index. */
+ *  The valid channel is 255 for the sea, 200 for inland water with observed ice (the Great Lakes, Ladoga) and
+ *  150 for inland water with modelled ice: lake ice is drawn but not counted, because the NSIDC index this
+ *  is held against is a sea-ice index. */
 export function iceExtents(fields) {
   const f = fields.cpu.oceanA, enc = fields.meta.climate.encodings.ice;
   const thr = ((0.15 - enc.lo) / (enc.hi - enc.lo)) * 255;

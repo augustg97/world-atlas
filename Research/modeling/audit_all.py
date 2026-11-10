@@ -43,14 +43,32 @@ CHECKS = [
     ("shaders", [[PY, B("check_shaders.py")]], {"failures": 0}, False,
      "a shader that does not compile (the black canvas with working panels)"),
     ("selftests", [[PY, "-W", "ignore", M("epic_compare.py"), "--selftest"], [PY, "-W", "ignore", M("epic_clearsky.py"), "--selftest"], [PY, "-W", "ignore", M("cloud_texture.py"), "--selftest"],
-                   [PY, M("audit_ice.py"), "--selftest"], [PY, M("audit_population.py"), "--selftest"], [PY, "-W", "ignore", B("cloud_grain.py"), "--selftest"]],
+                   [PY, M("audit_ice.py"), "--selftest"], [PY, M("audit_population.py"), "--selftest"], [PY, "-W", "ignore", B("cloud_grain.py"), "--selftest"],
+                   [PY, M("audit_water.py"), "--selftest"], [PY, M("audit_lakeice.py"), "--selftest"]],
      {"failures": 0}, False, "an audit that has stopped measuring what it says it measures"),
+    # The water mask against ETOPO 2022's ocean-connected sea, north of 60 S (register A5). Before the mask was
+    # rebuilt from a coastline (2026-11-10) these were 5.27, 0.11 and 460: Blue Marble paints every shelf sea in a
+    # colour of its own, and "sea is wherever the picture is fill" classed the bright ones as land. What is left
+    # is the coast itself at 5 km (fjords, lagoons, polders); the register file lists the patches.
+    ("water", [[PY, M("audit_water.py"), "--json"]], {"sea_as_land_Mkm2": 0.309, "land_as_sea_Mkm2": 0.568, "worst_patch_kkm2": 12.1}, False,
+     "sea drawn as land or land as sea: the water mask drifting from the coast"),
+    # Lake ice against 174 lakes' own freeze and thaw records (NSIDC G01377). test_*: the model on the half of
+    # the lakes it was not fitted to. shipped_*: what the field draws at the lakes it has ice for. Before the
+    # model (2026-11-10) the field had ice at 18 of the 174 and was 59 days a year short there; lakes that never
+    # freeze would score 0.392 and 142 days. undrawn: lakes too small to be water at 5 km, where nothing is drawn.
+    ("lake-ice", [[PY, "-W", "ignore", M("audit_lakeice.py"), "--json"]],
+     {"lakeice_test_mae": 0.0433, "lakeice_test_days": 10.9, "lakeice_shipped_mae": 0.0577, "lakeice_shipped_days": 16.1, "lakeice_undrawn": 68}, False,
+     "lake ice drifting from the lakes' own records"),
     # Rebuilt from NSIDC's 720 monthly grids (register C1). The edge is PLACED so the extent matches NSIDC's
     # mean, so these three are a regression guard, not evidence; the evidence is the per-year check the
     # build asserts (fields_climate.step_ocean) and audit_ice.py --peryear. Ice AREA is not solved for:
     # mean concentration inside the edge is diluted by open years, up to 15.5% under in Antarctic February.
     ("sea-ice", [[PY, M("audit_ice.py"), "--json"]],
-     {"arctic_max_over_pct": 0.1, "antarctic_max_over_pct": 0.0, "mean_abs_pct": 0.0, "area_max_under_pct": 15.5}, False,
+     # RE-SET 2026-11-10 (fourth round) with the new water mask: arctic 0.1 -> 0.2 and mean 0.0 -> 0.1, BACKWARDS by
+     # a rounding step. The edge is solved cell by cell and lands within 0.16% of NSIDC's mean extent in the worst
+     # month (the build asserts 0.5%); the coast now has more cells and the solver's last step is coarser there.
+     # Area improved, 15.5 -> 15.3.
+     {"arctic_max_over_pct": 0.2, "antarctic_max_over_pct": 0.0, "mean_abs_pct": 0.1, "area_max_under_pct": 15.3}, False,
      "sea-ice extent or area drifting from the NSIDC Sea Ice Index"),
     # 26 units differ by more than 10% (vintage, small islands, city states); register F2 lists them.
     ("population", [[PY, M("audit_population.py"), "--json"]], {"units_off_10pct": 26, "total_err_pct": 0.37}, False,
@@ -87,14 +105,20 @@ CHECKS = [
      #    and glint 0.11 -> 0.13 WORSE. Classified TRUE, small: sheet cloud was a third brighter than ISCCP says
      #    (and 0.12 brighter than VIIRS off Peru); at ISCCP's figure the two December frames, already 2-6 points
      #    short of EPIC's white share, are a point or two shorter. The old excess was covering for that.
-     {"lum_err": 2.66, "contrast_err": 1.54, "white_err": 0.027, "disc_err": 4.13, "limb_err": 0.118, "ocean_rgb_err": 5.0,
-      "land_rgb_err": 13.2, "halo_err": 0.2, "glint_err": 0.13, "epic_shift_px": 2}, True,
+     # RE-SET 2026-11-10 (fourth round: the water mask). The mask is in the scene and in this audit's own sorting of
+     # pixels into sea and land, so both moved. Better and tightened: lum 2.66 -> 2.62, contrast 1.54 -> 1.53, white
+     # 0.027 -> 0.026, ocean 5.0 -> 4.7, land 13.2 -> 13.1. BACKWARDS by a last digit: disc 4.13 -> 4.16, limb 0.118 ->
+     # 0.119 (every frame's ring-to-centre ratio rose 0.001-0.002: the Arctic shelf seas at the limb are sea now, with
+     # the sea's sky reflection at a grazing angle), glint 0.13 -> 0.14 (the pixels counted as water round the
+     # specular point changed by 0-22 of about 5000). Classified CANCELLATION: none is a change to the light model.
+     {"lum_err": 2.62, "contrast_err": 1.53, "white_err": 0.026, "disc_err": 4.16, "limb_err": 0.119, "ocean_rgb_err": 4.7,
+      "land_rgb_err": 13.1, "halo_err": 0.2, "glint_err": 0.14, "epic_shift_px": 2}, True,
      "the lit globe moving away from the photograph: exposure, contrast, cloud, the disc profile, ocean, ground, glint"),
     # The ground alone: clouds off, against a cloud-free composite of about a hundred EPIC frames (register A7).
     # Needs reference/epic/clearsky (epic_clearsky.py --fetch, 300 MB). instrument_bias is the numpy copy of the
     # shader against the shader's own render: if it grows, shader_model.py has drifted and nothing here means anything.
     ("clear-sky", [[SPY, M("epic_render.py"), "clr", "air,daylight,ice"], [PY, "-W", "ignore", M("land_transfer.py"), "--json"]],
-     {"instrument_bias": 1.1, "clearsky_land_abs": 5.0, "clearsky_land_bias": 0.7}, True,
+     {"instrument_bias": 1.1, "clearsky_land_abs": 4.9, "clearsky_land_bias": 0.7}, True,
      "the cloud-free ground moving away from EPIC's, or the audit's copy of the shader drifting from the shader"),
     # Cloud at the zoom floor: five regimes at 2 km a pixel against three VIIRS days each (register B1). Each
     # number is how far the atlas sits OUTSIDE the day-to-day spread of the photographs, summed over the
@@ -106,7 +130,7 @@ CHECKS = [
     # resolved pieces show it where flat grey ones hid it). Amazon and trades are TRUE: fewer, larger, brighter
     # pieces than the real fine cumulus. Amazon's size spectrum also went backwards (bands 0.38 -> 0.53). In B1.
     ("cloud-texture", [[SPY, M("cloud_scenes_render.py"), "cur"], [PY, "-W", "ignore", M("cloud_texture.py"), "--tag", "cur", "--json"]],
-     {"texture_bands_excess": 0.226, "texture_aniso_excess": 0.032, "texture_cover_excess": 0.254, "texture_contrast_excess": 0.088}, True,
+     {"texture_bands_excess": 0.226, "texture_aniso_excess": 0.032, "texture_cover_excess": 0.253, "texture_contrast_excess": 0.088}, True,
      "close-in cloud drifting from real cloud's grain, direction, cover or contrast"),
     ("visual", [[SPY, os.path.join(STUDIO, "tools", "frame_baseline.py"), "check", "--project", ROOT]], {"failures": 0}, True,
      "any of the six canonical frames changing without a recorded reason (Research/baselines/FRAME-LOG.md)"),

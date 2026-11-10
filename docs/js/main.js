@@ -3,21 +3,21 @@
 // The substrate is drawn into a cache whenever state or camera changes; things that move
 // (tracers, aircraft, satellites, pulses) are drawn over it every frame.
 
-import { Camera, R_KM } from './camera.js?v=20261110T205316Z';
-import { Fields, UNIT } from './fields.js?v=20261110T205316Z';
-import { Earth, LENSES } from './earth.js?v=20261110T205316Z';
-import { Detail } from './detail.js?v=20261110T205316Z';
-import { sun, moon, monthState, seasonName, D2R } from './astro.js?v=20261110T205316Z';
-import { program, setUniforms, texFromImage, loadVersion } from './gl.js?v=20261110T205316Z';
-import { LineBatch, PointBatch, Labels, segmentsFromLines, deq, graticule, parallels } from './overlays.js?v=20261110T205316Z';
-import { FlowTracers, Flights, makeSamplers, seedRandom } from './particles.js?v=20261110T205316Z';
-import { SYSTEMS, LAYERS, paletteCanvas, FUEL_COLORS } from './catalog.js?v=20261110T205316Z';
-import { Data } from './data.js?v=20261110T205316Z';
-import { INSETS, Inset, insetAlpha, INSET_PAD } from './insets.js?v=20261110T205316Z';
-import { Live, HOUR, DAY } from './live.js?v=20261110T205316Z';
-import { UI, SPEEDS } from './ui.js?v=20261110T205316Z';
-import * as Cards from './cards.js?v=20261110T205316Z';
-import { peopleBySun, iceExtents, meanTemps, mixMonth } from './dash.js?v=20261110T205316Z';
+import { Camera, R_KM } from './camera.js?v=20261110T223704Z';
+import { Fields, UNIT } from './fields.js?v=20261110T223704Z';
+import { Earth, LENSES } from './earth.js?v=20261110T223704Z';
+import { Detail } from './detail.js?v=20261110T223704Z';
+import { sun, moon, monthState, seasonName, D2R } from './astro.js?v=20261110T223704Z';
+import { program, setUniforms, texFromImage, loadVersion } from './gl.js?v=20261110T223704Z';
+import { LineBatch, PointBatch, Labels, segmentsFromLines, deq, graticule, parallels } from './overlays.js?v=20261110T223704Z';
+import { FlowTracers, Flights, makeSamplers, seedRandom } from './particles.js?v=20261110T223704Z';
+import { SYSTEMS, LAYERS, paletteCanvas, FUEL_COLORS } from './catalog.js?v=20261110T223704Z';
+import { Data } from './data.js?v=20261110T223704Z';
+import { INSETS, Inset, insetAlpha, INSET_PAD } from './insets.js?v=20261110T223704Z';
+import { Live, HOUR, DAY } from './live.js?v=20261110T223704Z';
+import { UI, SPEEDS } from './ui.js?v=20261110T223704Z';
+import * as Cards from './cards.js?v=20261110T223704Z';
+import { peopleBySun, iceExtents, meanTemps, mixMonth } from './dash.js?v=20261110T223704Z';
 
 const canvas = document.getElementById('gl');
 const gl = canvas.getContext('webgl2', { antialias: false, alpha: false, powerPreference: 'high-performance', preserveDrawingBuffer: true });

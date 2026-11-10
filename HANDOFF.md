@@ -17,12 +17,13 @@ Paste this whole file as the first message of a new session.
 
 ## The current task
 
-Kickoff, the first build, a verify round and three build rounds are done, and the atlas is published. The
-contract is `SCOPE.md`; the open work is `Research/MODEL-GAPS.md` (36 items, none at P1). Against NASA's
+Kickoff, the first build, a verify round and four build rounds are done, and the atlas is published. The
+contract is `SCOPE.md`; the open work is `Research/MODEL-GAPS.md` (38 items, none at P1). Against NASA's
 photographs the Space register is **close, with named exceptions**. Cloud close in now takes its fine
 structure from real cloud and reads as a satellite photograph; it is not the cloud of the place, and it is
 wrong in measured ways over the Amazon, the trades and the Congo (B1). The whole-Earth sheet carries a Europe
-inset and a Lesser Antilles inset and its continent names (F1).
+inset and a Lesser Antilles inset and its continent names (F1). The water mask is a real coastline and lakes
+freeze, by a model that knows the air and not the lake's depth (A5 delivered; C4, A10 open).
 
 ## Reference material and the measurement harness
 
@@ -58,16 +59,36 @@ The comparison is only meaningful at **matched scale**. All of this exists; reus
 
 ## State right now
 
-- Last live deploy: **2026-11-10**, release 1.1 (cloud grain, insets); the stamps are in `docs/version.json` and must match the live `version.json`
+- Last live deploy: **2026-11-10**, release 1.2 (water mask, lake ice); the stamps are in `docs/version.json` and must match the live `version.json`
 - Branch `main` is what is published; `verify-round` was merged into it at release 1.0
 - `data/` holds about 3.6 GB of sources and caches (gitignored); `python build/fetch_sources.py` rebuilds it,
   including 438 MB of NSIDC grids and 581 MB of ISCCP. Three reference sets live under `reference/`
   (gitignored): `epic/` and `epic/clearsky/` (300 MB) and `gibs_clouds/` (5 MB); each has a `--fetch`.
-  `data/cloudtex/` holds the three grain scenes (`fetch_sources.py cloudtex`).
-- `./venv/bin/python Research/modeling/audit_all.py` passes: eleven checks, about 4 min.
+  `data/cloudtex/` holds the three grain scenes (`fetch_sources.py cloudtex`); `data/lakeice/` the lake-ice
+  records (`fetch_sources.py lakeice`); `data/ne/` now also Natural Earth's 1:10m land and lakes.
+- `./venv/bin/python Research/modeling/audit_all.py` passes: thirteen checks, about 5 min.
 - **The app now talks to two outside hosts when zoomed in** (NASA GIBS, AWS Terrain Tiles), by default, and
   says so in About. Read register A2 before publishing: one line of the tile documentation needs the owner's eye.
 - **The earth shader uses 16 of 16 texture units.** See G7.
+
+## What the fourth round found (2026-11-10)
+
+1. **5.3 million km2 of sea was classed as land**, not "a strip of Hudson Bay". Blue Marble paints every
+   shelf sea in a colour of its own and the mask was "sea is the fill". Found by `audit_water.py` (ETOPO below
+   sea level, connected to the ocean). Now Natural Earth's 1:10m coast: 5.27 to 0.31 million km2.
+2. **My first account of the cause was wrong** (I said the July picture showed the shelf under ice; the
+   picture's sea is the same in all twelve months). Sample the source before explaining it.
+3. **The fix took the turquoise off the Bahama banks**, which the error had been carrying. `shoal.webp` (blue
+   channel of the water texture) says where water takes the picture's own colour.
+4. **Antarctica's ice front decides whether the sea-ice conversion passes**: Natural Earth's shelves 6.8%
+   worst year, ETOPO's 5.9%, the picture's ice 4.0%.
+5. **Lake ice is a model now** (`build/lakeice.py`): 11 days a year out on 83 lakes it never saw. It has no
+   depth: Mjøsa 145 days against 50, Baikal 148 against 102.
+6. **The reanalysis's air over a lake is warmed by the lake.** Lakes are fed the nearest land's air.
+7. **The lake-ice witness scored Lake Champlain as never freezing**: undated frozen seasons were dropped and
+   open ones kept. Fixed in the instrument (203 lakes became 174).
+8. **A water-mask change moves everything downstream**: sea ice (per-year check 0.6% to 1.5% median in the
+   north), ships, and the EPIC audit's own sorting of pixels.
 
 ## What the third round found (2026-11-10)
 
@@ -167,12 +188,13 @@ Plus the standing ones:
 
 ## The work queue
 
-1. **A5** - the water mask from bathymetry, then lake ice. The most visible plain error left.
+1. **C4** - lake depth in the lake-ice model, and part-frozen great lakes.
 2. **B1** - a continental-cumulus grain for the Amazon (needs a texture channel: uClouds is full, and so are
    the 16 units), bright cloud over the summer Southern Ocean, a daily cycle for convective cloud over land.
 3. **G7** - one audit on a real GPU.
 4. **F2** - population by polygon, not by the country raster.
 5. **F1** - what the label round left open (see its row).
+6. **A10** - wide rivers as water.
 
 **If you touch the light model** (`earth.frag.glsl`, Space branch): the order is `epic_anchors.py` (refit
 exposure and gamma), then `land_transfer.py --fit` (refit the albedo table, paste the printed line), then

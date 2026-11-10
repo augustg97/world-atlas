@@ -16,14 +16,14 @@ uniform sampler2D uAlbA;           // land reflectance, month 0 (sRGB)
 uniform sampler2D uAlbB;           // land reflectance, month 1
 uniform float uAlbMix;
 uniform sampler2D uRelief;         // RG: companded dz/d(east), dz/d(north)
-uniform sampler2D uWaterNight;     // R: water fraction   G: sqrt(night lights)
+uniform sampler2D uWaterNight;     // R: water fraction   G: sqrt(night lights)   B: water whose colour is the picture's (0 when not shipped)
 uniform sampler2D uElev;           // RG: 16-bit elevation
 uniform sampler2D uClouds;         // R: the cloud photograph. GBA: cloud grain tiles, 4 x 2 (sheet, cumulus, frontal)
 uniform sampler2DArray uAtmoA;     // u10, v10, t0
 uniform sampler2DArray uAtmoB;     // layers 0-11: slp, cloud fraction, precip. Layers 12-23 (when uHasCloudT): ISCCP sky share of
                                    // stratocumulus sheets, of thin broken cloud, and the mean reflectance of the rest.
                                    // One array, not two: WebGL2 guarantees only 16 texture units and this shader uses all 16.
-uniform sampler2DArray uOceanA;    // sst, ice, valid
+uniform sampler2DArray uOceanA;    // sst, ice, valid (255 sea; 215 inland, sst, modelled ice; 200 inland, observed ice; 180 shore; 150 inland, modelled ice, no sst)
 uniform float uHasCloudT;
 uniform float uHasGrain;          // 1 when uClouds carries the cloud grain in G, B, A (build/cloud_grain.py)
 uniform vec2 uE_deck, uE_cu, uE_light;
@@ -440,7 +440,7 @@ void main() {
     bm = clamp(bm + fineBm * inWin * uDetAlbW * (1.0 - snowy), 0.0, 1.0);
   }
   vec3 alb = albedoOf(bm);
-  vec2 wn = tex(uWaterNight, uv).rg;
+  vec3 wn = tex(uWaterNight, uv).rgb;
   float water = uHasWater > 0.5 ? smoothstep(0.35, 0.65, wn.r) : 0.0;
   float night = wn.g * wn.g;
   float z = uHasElev > 0.5 ? elevation(uv) : 0.0;
@@ -552,6 +552,12 @@ void main() {
     // water: one colour, shaded; a shelf tint; sky reflection; Sun glint whose width is the wind's
     float depth = max(-z, 0.0);
     vec3 seaC = mix(SEA_DEEP, vec3(0.018, 0.085, 0.110), 0.75 * exp(-depth / 75.0) * uHasElev);
+    // Where Blue Marble shows the water itself and not its ocean fill (shallow banks, river plumes, silty
+    // shelves, lakes: fields/shoal.webp), the light the water sends back is the picture's, read through the
+    // same table as the land: the Bahama banks are turquoise and the Amazon's mouth is brown because they
+    // are. Not where this month's picture is near white there: that is ice, and the ice field draws ice.
+    float picWater = wn.b * (1.0 - smoothstep(0.38, 0.55, min(bm.r, min(bm.g, bm.b))));
+    seaC = mix(seaC, alb, picWater);
     vec3 sea = seaC * (sunL * shadow * 0.9 + skyL * 1.6 + moonL * 2.0);
     float nv = max(dot(N, V), 0.0);
     float fres = 0.02 + 0.98 * pow(1.0 - nv, 5.0);
@@ -684,7 +690,7 @@ void main() {
     else if (uLens == LENS_SLP) v = (slp - 980.0) / 60.0;
     else if (uLens == LENS_WIND) v = windSp / 16.0;
     else if (uLens == LENS_CLOUD) v = cloudFrac;
-    else if (uLens == LENS_SST) { v = (sst + 2.0) / 34.0; a *= water * step(0.5, oc.b); }
+    else if (uLens == LENS_SST) { v = (sst + 2.0) / 34.0; a *= water * step(0.66, oc.b); }   // not where the field holds modelled lake ice only (valid 150 of 255)
     else if (uLens == LENS_ICE) { v = ice; a *= water * smoothstep(0.02, 0.15, ice); }
     else if (uLens == LENS_POP) { v = tex(uLens2D, uv).r; a *= smoothstep(0.0, 0.10, v) * (1.0 - water); }
     else if (uLens == LENS_CO2) { v = tex(uLens2D, uv).r; a *= smoothstep(0.02, 0.22, v); }

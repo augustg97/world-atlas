@@ -114,18 +114,20 @@ export function texSolid(gl, rgba = [0, 0, 0, 255]) {
 }
 
 /** Pack two single-channel images into one RG8 texture on the GPU (no CPU readback). */
-export function packRG(gl, imgR, imgG, w, h) {
+/** Two single-channel images into one RG texture; with a third, one RGB texture (the third in blue). */
+export function packRG(gl, imgR, imgG, w, h, imgB = null) {
   const a = texFromImage(gl, imgR, { format: 'r', mips: false });
   const b = texFromImage(gl, imgG, { format: 'r', mips: false });
+  const c = imgB ? texFromImage(gl, imgB, { format: 'r', mips: false }) : texSolid(gl, [0, 0, 0, 255]);
   const out = gl.createTexture();
   gl.bindTexture(gl.TEXTURE_2D, out);
-  gl.texStorage2D(gl.TEXTURE_2D, Math.floor(Math.log2(Math.max(w, h))) + 1, gl.RG8, w, h);
+  gl.texStorage2D(gl.TEXTURE_2D, Math.floor(Math.log2(Math.max(w, h))) + 1, imgB ? gl.RGB8 : gl.RG8, w, h);
   const fb = gl.createFramebuffer();
   gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
   gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, out, 0);
   if (!packRG.prog) {
     const vs = compile(gl, gl.VERTEX_SHADER, '#version 300 es\nout vec2 v;void main(){vec2 p=vec2(float((gl_VertexID<<1)&2),float(gl_VertexID&2));v=p;gl_Position=vec4(p*2.0-1.0,0.0,1.0);}', 'pack.vert');
-    const fs = compile(gl, gl.FRAGMENT_SHADER, '#version 300 es\nprecision highp float;uniform sampler2D a;uniform sampler2D b;in vec2 v;out vec4 o;void main(){o=vec4(texture(a,v).r,texture(b,v).r,0.0,1.0);}', 'pack.frag');
+    const fs = compile(gl, gl.FRAGMENT_SHADER, '#version 300 es\nprecision highp float;uniform sampler2D a;uniform sampler2D b;uniform sampler2D c;in vec2 v;out vec4 o;void main(){o=vec4(texture(a,v).r,texture(b,v).r,texture(c,v).r,1.0);}', 'pack.frag');
     const p = gl.createProgram(); gl.attachShader(p, vs); gl.attachShader(p, fs); gl.linkProgram(p);
     packRG.prog = p;
   }
@@ -134,11 +136,13 @@ export function packRG(gl, imgR, imgG, w, h) {
   gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, b);
   gl.uniform1i(gl.getUniformLocation(packRG.prog, 'a'), 0);
   gl.uniform1i(gl.getUniformLocation(packRG.prog, 'b'), 1);
+  gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, c);
+  gl.uniform1i(gl.getUniformLocation(packRG.prog, 'c'), 2);
   gl.viewport(0, 0, w, h);
   gl.disable(gl.BLEND);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-  gl.deleteFramebuffer(fb); gl.deleteTexture(a); gl.deleteTexture(b);
+  gl.deleteFramebuffer(fb); gl.deleteTexture(a); gl.deleteTexture(b); gl.deleteTexture(c);
   gl.activeTexture(gl.TEXTURE0);
   gl.bindTexture(gl.TEXTURE_2D, out);
   finishTex(gl, {});

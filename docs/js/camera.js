@@ -1,7 +1,7 @@
 // The two cameras: a perspective globe and a Winkel Tripel sheet. The projection maths here is
 // the JS twin of web/shaders/common.glsl; js/selftest.js checks that the two agree.
 
-import { D2R, R2D, lonLatToVec, norm180 } from './astro.js?v=20261110T205316Z';
+import { D2R, R2D, lonLatToVec, norm180 } from './astro.js?v=20261110T223704Z';
 
 export const R_KM = 6371.0088;
 const TAN_HALF_FOV_DEFAULT = Math.tan(15 * D2R);  // 30 degree vertical field of view

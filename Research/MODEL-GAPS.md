@@ -24,6 +24,99 @@ IDs are referenced from code comments and commit messages. **Never recycle one.*
 | stale-data guard | `web/version.json` stamp on every fetch | a cached two-key `climate.json` had crashed the tracers once |
 | ephemeris check | `build/test_app_math.mjs` | Sun declination within 0.004° at the four 2026 seasonal instants |
 
+## APPLIED (fourth round, 2026-11-10)
+
+Scope agreed for the round: the water mask, then lake ice (A5).
+
+**The register had this wrong, and so did I for three rounds.** A5 said "a band up to 150 km wide along
+south-west Hudson Bay is classed as land". Measured against a witness (`audit_water.py`: ETOPO 2022, every
+cell below sea level that connects to the world ocean), it was **5.3 million km2 of sea classed as land**:
+the East Siberian Sea (460 thousand km2 in one piece), the Kara, Chukchi and Barents shelves, the mouth of
+the Amazon, the Yellow Sea, the Arafura Sea, Foxe Basin, the Bahama banks. Cause: the mask was "sea is
+wherever Blue Marble is its flat ocean fill", and Blue Marble paints every shelf sea, bank and plume in a
+colour of its own, the same in all twelve months. The dark ones were caught by the lake rule; the bright
+ones became land. It went unseen because land drawn in the picture's water colour looks like water. It
+never iced, never glinted, and answered a click as land.
+
+| water mask against ETOPO 2022, north of 60 S | before | after |
+|---|---|---|
+| sea drawn as land, million km2 | 5.27 | 0.31 |
+| largest single patch, thousand km2 | 460 | 12 |
+| south-west Hudson Bay and James Bay, thousand km2 | 106 | 2 |
+| Bahama banks | 110 | 4 |
+| Yellow Sea and Bohai | 197 | 4 |
+| mouth of the Amazon | 94 | 2 |
+| land drawn as sea, million km2 | 0.11 | **0.57, worse** |
+
+*Land drawn as sea went up fivefold and is classified RESOLUTION-LIMITED.* The old mask could not err that
+way: anything not fill was land. A real coastline can, and 0.57 million km2 along 1.6 million km of coast is
+a third of a kilometre of mean offset between Natural Earth's 1:10m coast and the zero contour of a 1.85 km
+grid. The largest patch, 12 thousand km2, is Lake Maracaibo: Natural Earth calls it sea, and the witness
+cannot follow a strait narrower than its own cell. `REGISTER-water.md` lists the forty largest.
+
+**What the mask is now** (`fields_surface.step_water`): land is Natural Earth's 1:10m land and minor
+islands; south of 60 S it is joined to whatever the picture shows as ice. Inland water is Natural Earth's
+1:10m lakes plus the dark fresh water the picture shows; twelve salt lakes that are bright in the picture
+(Eyre, Tuz, Assal...) stay dry. Land comes to 149.0 million km2 (the Earth: 148.9).
+
+- *Antarctica's ice front was tried three ways* against the per-year check of the sea-ice conversion,
+  which fails when the atlas draws sea in cells NSIDC holds as land: Natural Earth's shelves (worst year
+  6.8%), ETOPO's front (5.9%), the picture's ice (4.0%, used). South of 60 S the mask and ETOPO differ by
+  0.29 million km2, reported apart and not gated: fast ice and moved fronts.
+- *The colour came back as water.* With the banks and plumes classed as water they turned plain sea-blue,
+  which is less true than before. A new field (`fields/shoal.webp`, the blue channel of the water texture;
+  24.7 million km2, the world's shelves and lakes) says where the water's own colour is the picture's: the
+  Bahama banks are turquoise, the Amazon's mouth brown, the Yellow Sea silty, as water, with the Sun's
+  glint on them. Seen on the Mac's own GPU.
+- **Not done:** wide rivers. The Amazon's main stem is brown in the picture and a line in Natural Earth;
+  neither source has ever made it water here (new item A10).
+
+**Lake ice (was: "Baikal, Great Bear and the Caspian never freeze").** A model, because no gridded
+observation in hand covers lakes: freeze-up when the air's 48-day mean falls below freezing, Stefan growth,
+degree-day melt, run over five colder and warmer years so that the answer is how often a day is frozen
+(`build/lakeice.py`). Two numbers are fitted (the 48 days and the melt rate) to half of the 174 usable lakes
+in NSIDC's lake-ice phenology database (ten or more seasons since 1980, with dates for at least four fifths
+of the seasons they froze); the other half is the test (`audit_lakeice.py`). Nothing from it is shipped.
+
+| lake ice against the lakes' own records | before | after |
+|---|---|---|
+| lakes of the 174 the field has ice for | 18 | 106 (the other 68 are too small to be water at 5 km) |
+| days iced a year, mean error at those lakes | 59 (all of it short) | 16 |
+| share of each month iced, mean error | 0.241 | 0.058 |
+| the model on the 83 lakes it was not fitted to | - | 11 days a year, 0.043 of a month |
+| for scale: lakes that never freeze | 142 days, 0.392 | |
+
+*The witness had a fault of its own, found when Lake Champlain scored "never freezes".* Seasons with a date
+missing were dropped and open seasons kept, so a lake whose frozen seasons are mostly undated was averaged
+over its open ones. Such lakes are left out now (203 lakes became 174), and the selftest holds it.
+
+- OISST's lake ice is kept where it has the lake and any ice (the Great Lakes, Ladoga), with its floor taken
+  off: it carried 7% "ice" on Lake Ontario in July. Where it has the water and no ice in any month (the
+  Caspian, the Sea of Azov, the Black Sea) the model speaks: the north Caspian and the Azov freeze now.
+- *Two faults of the model's input, each fixed at its cause.* The reanalysis's air over a large lake is
+  warmed by the lake's own open water (January over the Azov: +1.2 C, the shore -2 to -4): lakes are fed
+  the nearest LAND's air. And one figure for how much winters differ (2.5 C) put ice on Lake Titicaca,
+  where July is +2 C every year: the spread now follows each place's seasonal range.
+- **Known to be wrong, measured, not fixed:** the model knows no depth, and the largest errors in the record
+  are all deep lakes iced too long: Mjosa 145 days against 50, Lake Superior's Bayfield shore 132 against 66,
+  Lake Constance 54 against none, Baikal at its southern station 148 against 102. A great lake left to the
+  model would freeze whole. New item C4.
+- The valid channel of the ice field now says how each cell's ice is known (255 sea, 215 and 150 modelled
+  lake, 200 observed lake); a click on a modelled lake says "frozen N % of the month, MODELLED".
+
+**Sea ice, the side effect.** The mask is in the sea-ice build (which cells are sea, where the coast fill
+goes). Extent still equals NSIDC's mean by construction (largest gap 0.16%, was under 0.1%). The per-year
+check, which is the evidence: north 1.45% median and 1.81% worst, south 0.78% and 4.02% (it was 0.6% and
+3.7% over both). Slightly worse in the north; classified TRUE, small: more coast cells borrow ice.
+Area under NSIDC's improved, 15.5% to 15.3%.
+
+**Whole disc (EPIC), per measure:** brightness 2.66 to 2.62, contrast 1.54 to 1.53, white fraction 0.027 to
+0.026, clear ocean 5.0 to 4.7, clear ground 13.2 to 13.1; disc profile 4.13 to 4.16, limb ring 0.118 to
+0.119 and glint 0.13 to 0.14 worse by a last digit (CANCELLATION: the mask is in the audit's own sorting of
+pixels as well as in the scene; no change to the light model).
+
+---
+
 ## APPLIED (third round, 2026-11-10)
 
 Scope agreed for the round: cloud close in (B1), and insets, continent names and panels for the labels (F1).
@@ -289,12 +382,13 @@ texture is a magnified photograph, and vegetated land still reads darker than EP
 | A2 | — | **DELIVERED 2026-11-10.** Closer in than 5 km a pixel the page streams Blue Marble (NASA GIBS, 1-2 km) and terrain tiles (AWS Terrain Tiles, about 2 km) into a focus window (`detail.js`); the shader adds the picture's fine structure to the month's shipped colour and takes height and slope from the tiles on land. Measured: streamed land against shipped land, rms 10-25 m with no shift (0.01-0.03 km) in four mountain regions; a half-cell slide would read 109-172 m. 86-127 requests and 3-7 MB per window, 2-3.6 s to ready. Seen on the Mac's own GPU at the Himalaya: ridges, valleys, lakes and rivers resolve and stay registered. **Limits:** at 2 km a pixel the elevation texel is 1.7-2.3 km, coarser than the 1.6 km the rule asks (holding the whole globe view at the wanted level would take 135-150 tiles; the budget is 96), and at 3 km a pixel the finer fields cover only the middle of three of five test views; the tiles' sea floor is ETOPO1 and sits 1-4 km off the shipped ETOPO 2022, so it is not used; the streamed picture is August, so half-snowy pixels take August's pattern; nothing is streamed with a pole on screen; compositing runs on the main thread (up to 190 ms a window). **Before publishing:** the Terrain Tiles documentation carries the line "The S3 tiles are meant for efficient networking with EC2 resources only" (from Mapzen's hosted-service days; the bucket is in the AWS open-data registry today) and requires an eleven-line attribution, which is in About. The owner should read both before the page goes public | `web/js/detail.js`, shader focus-window block | SCOPE §2 |
 | A3 | P3 | **APPLIED 2026-11-09, corrected 2026-11-10.** The field holds the mean wind VECTOR, slower than the mean wind speed, so the glint was too narrow; a 4.5 m/s spread is added in quadrature. After the cloud rework (less cloud over the specular point in the December Americas frame) all five frames are within 0.22 and the mean error is 0.08. The 4.5 is one number for the whole ocean | `earth.frag.glsl` water block | EPIC |
 | A4 | P2 | Relief shading at regional zoom now uses real 2 km slopes on land where the detail layer is on (A2). Still open: no sub-grid detail grown from mechanism, and the sea floor shades from the shipped 5 km slope field | `Earth.reliefK`, shader | visual review |
-| A5 | P2 | **The water mask is Blue Marble's ocean fill, and it is wrong in shallow or turbid water.** Seen 2026-11-10: a band up to 150 km wide along south-west Hudson Bay and James Bay is classed as land, drawn in Blue Marble's water colour, and never ices; the Bahamas banks render as land colour. Fix: sea from ETOPO (below sea level and connected to the ocean), lakes from a lake dataset. Also still true: Baikal, Great Bear, Victoria are not in OISST's mask and the Caspian and Azov carry no ice in it, so they never freeze; the Great Lakes and Ladoga do (C1) | `fields_surface.step_water` | visual review |
+| A5 | — | **DELIVERED 2026-11-10 (fourth round).** The water mask is a coastline now (Natural Earth 1:10m land, islands, lakes; Antarctica's ice front from the picture), held by `audit_water.py` against ETOPO 2022: sea drawn as land 5.27 to 0.31 million km2 north of 60 S. The cause was not shallow turbid water in a few places, as this row used to say: Blue Marble paints every shelf sea in a colour of its own and the mask was 'sea is the fill'. The colour of shallow water stays the picture's (`shoal.webp`). Lakes freeze: observed on the Great Lakes and Ladoga, modelled everywhere else (`build/lakeice.py`, `audit_lakeice.py`: 11 days a year on unseen lakes). Table and what is still wrong in APPLIED; the open parts are A10 and C4 | `fields_surface.step_water`, `fields_climate.step_ocean`, `build/lakeice.py` | visual review |
 | A6 | P3 | The Atlas style's permanent-ice test is a brightness-and-latitude heuristic; mountain glaciers and seasonal snow can be misread | `earth.frag.glsl` atlas block | build notes |
 
 | A7 | — | **RESOLVED 2026-11-10.** Cause established with a clear-sky composite of about a hundred EPIC frames (`epic_clearsky.py`): Blue Marble read as sRGB understated dark land threefold, and the display transform had been fitted around it. Now a nine-knot table per channel (`ALB_LUT`), fitted by `land_transfer.py`; held-out error 11.6 to 6.2; table above. **What the table is not:** surface reflectance. It is the albedo that reproduces EPIC's view, straight back along the sunlight, where rough ground hides its shadows. Dense forest sits at 0.07-0.09 in the red where field measurements say 0.03: the stable-pixel test passes few rainforest pixels (424 in the darkest bin), so the darkest end of the red curve rests on little | `earth.frag.glsl` `albedoOf()`, `shader_model.py` | EPIC |
 | A8 | P3 | Snow and ice at a low Sun read grey. Partly better 2026-11-10: white Blue Marble pixels are now given snow's albedo (0.90) by rule, since the picture clips there, and Antarctica in December reads white. Sea ice and winter snow at high latitude are still grey: the surface model is Lambert (plus a Lommel-Seeliger share for land) and snow scatters forward. Seen, not measured: the composite excludes latitudes above 60 | shader | EPIC |
 | A9 | P3 | **The outermost ring of the disc is 5-10 levels too bright and too green** (cos 0.1-0.2: atlas 85, 94, 100; EPIC 80, 84, 95). Rayleigh scattering saturates there in the model as in a plane atmosphere; the real loss is probably ozone, which EPIC's product does not show elsewhere on the disc, so it was not added. Would need a spherical-shell treatment of the last 2% of the radius | shader air block | EPIC |
+| A10 | P3 | **Wide rivers are not water.** The Amazon, Congo, Ob and Yangtze main stems are several kilometres wide and are drawn as vector lines over land colour: brown in Blue Marble (so the dark-water rule misses them) and lines in Natural Earth 1:10m. Their estuaries are sea now. A river-width dataset, or Natural Earth's own river polygons where it has them, would answer it | `fields_surface.step_water` | fourth round |
 
 ## B. Atmosphere
 
@@ -313,6 +407,7 @@ texture is a magnified photograph, and vegetated land still reads darker than EP
 | C1 | — | **RESOLVED 2026-11-10** for extent. The field is built from NSIDC's Sea Ice Index v4 monthly grids, all 720 of 1991-2020, through a tested polar-stereographic conversion (`frames.py`). Per cell: how often it was iced and its mean concentration; the typical-year edge is drawn so that the extent, counted as the dashboard counts it, equals NSIDC's mean of yearly extents. **So the 0.0% is by construction.** The evidence is the per-year check: each grid on its own reproduces NSIDC's cell count within 0.6% median, 3.7% worst. Findings: the median ice edge (iced in half the years) overshoots the mean extent by up to 13.8%, and no fixed threshold works (16-28% by month), which is why the edge is solved per month. Ice AREA is not solved: concentration inside the edge is the plain mean and runs up to 15.5% under NSIDC's area (Antarctic February). Lake ice kept from OISST, not counted. Not done: the month-to-month blend was not watched in motion; 8.9 M km² of OISST-valid cells the atlas draws as less than half water were not investigated | `fields_climate.step_ocean`, `REGISTER-ice.md` | NSIDC |
 | C2 | P2 | Currents come from a 1° ocean model: no eddies, a weak Gulf Stream (0.12 m/s where drifters give ~1), nothing poleward of 65°N / 74°S. A drifter-derived climatology would be the better source | `fields_climate.step_currents` | landmark check |
 | C3 | P3 | Ocean colour is one hue plus a shelf tint; no chlorophyll field | shader water block | source survey (NEO gone) |
+| C4 | P2 | **Lake ice is modelled from the air alone and knows no depth.** Fitted and tested on NSIDC's lake-ice phenology records (11 days a year on 83 unseen lakes), and wrong in a known direction for deep lakes, by the lakes' own records: Mjøsa iced 145 days against 50, Lake Constance 54 against none, Baikal's southern station 148 against 102, Superior's Bayfield shore 132 against 66. Issyk-Kul and Tahoe, which are not in the record and are generally known not to freeze, are iced about 120 days. A great lake left to it would freeze whole (the Great Lakes are on OISST for that reason, and OISST's lake ice is itself weak: a floor of up to 0.34 had to be removed). The north-west Black Sea shelf is iced half of January and February, which looks too much and is unchecked. Answer: lake depth (HydroLAKES, CC BY) as heat storage in the freeze-up lag, and solar melt for high lakes; or an observed lake-ice climatology (NOAA GLERL for the Great Lakes, IMS elsewhere). The air temperature is a 2-degree reanalysis lowered to the lake's height by a fixed lapse rate | `build/lakeice.py`, `fields_climate.step_ocean` | fourth round |
 
 ## D. Solid Earth
 
@@ -351,15 +446,15 @@ texture is a magnified photograph, and vegetated land still reads darker than EP
 | G3 | P2 | First-frame budget not measured. SCOPE says ≤ 6 MB and ≤ 1.5 s; the boot set is about 8 MB plus 23 MB of relief and elevation behind it | `fields.boot` | SCOPE §11 |
 | G4 | P3 | Performance is unmeasured: full-screen shader at 2× device pixels, re-run on every camera move | `main.js` cache | build notes |
 | G5 | P3 | **Mostly RESOLVED 2026-11-09.** Driven with real pointer and key events at 1440 x 900: drag turns the globe, wheel zooms both ways, G, A, space, N, / and Esc do what About says, a typed search flies to the place and opens its card (globe and sheet), both time sliders move the clock. One fault found and fixed (the fly-to clamp). **Still not done:** panel scrolling at small window sizes; satellites picked out by eye | `ui.js`, `main.js` | this session |
-| G6 | P3 | Headless Chromium under software GL loses its first WebGL context at boot nearly every time. The app now reloads itself (three tries) and the second boot renders; cause not investigated. A frozen frame takes about 18 s there | `main.js` | this session |
+| G6 | P3 | Headless Chromium under software GL loses its first WebGL context at boot nearly every time. The app now reloads itself (three tries) and the second boot renders; cause not investigated. A frozen frame takes about 18 s there **Seen again 2026-11-10 (fourth round):** one of about eight runs of the visual check timed out on `sheet-atlas` (the frame never reported ready in 240 s) inside `build_site.py`, and passed when run again at once with no change. The build refused, as it should; the cost is a five-minute re-run | `main.js` | this session |
 | G7 | P2 | **The earth shader uses all 16 texture units WebGL2 guarantees.** A seventeenth linked under the audits' software GL (limit 32) and gave a black page on the Mac's own GPU; caught by the streaming work, fixed by folding the cloud-kind atlas into the atmoB array, guarded now by `check_shaders.py`. The next field that needs a sampler must share one. And the audit suite still never runs on a real GPU: a check through the browser pane or ANGLE Metal headless would close that | `fields.js` UNIT, `check_shaders.py` | this session |
 
 ---
 
-**Count: 36 items; none open at P1** (B1 to P2 and F1 to P3 after the third round, 2026-11-10). In order:
+**Count: 38 items; none open at P1** (A5 delivered in the fourth round, 2026-11-10; A10 and C4 added). In order:
 
-1. **A5** - the water mask from bathymetry (south-west Hudson Bay is "land"), then lake ice.
-2. **B1** - a continental-cumulus grain for the Amazon; bright cloud over the summer Southern Ocean; a daily cycle for convective cloud over land.
+1. **B1** - a continental-cumulus grain for the Amazon; bright cloud over the summer Southern Ocean; a daily cycle for convective cloud over land.
+2. **C4** - lake depth in the lake-ice model (Mjøsa, Constance, Baikal), and partial cover for great lakes.
 3. **G7** - run one audit on a real GPU.
 4. **F2** - population by polygon.
 5. **F1** - the sixteen European states the sheet still cannot name; an inset for the Levant and Caucasus.

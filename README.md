@@ -82,6 +82,7 @@ build/        the offline pipeline (Python) and the tests
   frames.py          THE canonical frame and every conversion into it     test_frames.py
   fields_surface.py  water, 12 months of reflectance, elevation, relief gradient, night lights, clouds
   cloud_grain.py     cloud's fine structure: three VIIRS scenes reduced to tileable rank fields
+  lakeice.py         lake ice from air temperature (used by fields_climate.py ocean)
   fields_climate.py  atmosphere and ocean climatologies -> month-stacked atlases + climate.json
   fields_human.py    population, shipping density and lane ridges, CO2, country raster
   vectors.py         political geometry, places, names, plates, quakes, volcanoes, power, air model, statistics
@@ -209,6 +210,8 @@ Failures that have each cost real time here. *(The general catalogue is in
 | sea ice | NSIDC Sea Ice Index v4 (G02135; Fetterer et al. 2025), 720 monthly grids 1991-2020 - public domain, citation requested |
 | surface currents | NCEP GODAS 5 m, 2019-2023 means - public domain |
 | countries, borders, places, names | Natural Earth 5.1.2, de facto worldview - public domain |
+| where the sea, the land and the lakes are | Natural Earth 5.1.2, 1:10m land, minor islands, lakes - public domain; Antarctica's ice front and the colour of shallow water from Blue Marble |
+| lake ice (witness only, not shipped) | NSIDC Global Lake and River Ice Phenology Database, G01377 - citation required |
 | plate boundaries | Bird (2003) PB2002, G-cubed 4(3) 1027; GeoJSON H. Ahlenius - ODC PDDL |
 | earthquakes | USGS ANSS ComCat (record) and real-time feed (live) - public domain |
 | volcanoes | NOAA NCEI Global Volcano Locations - public domain |
@@ -231,14 +234,15 @@ The section that makes the rest credible. State plainly what is reconstructed, w
 and what the model cannot know.
 
 - **This is a typical year, not this year.** No weather history, no forecast.
+- **Lake ice is modelled, and knows no depth.** Outside the Great Lakes and Ladoga a lake's ice comes from the air temperature there (`build/lakeice.py`): 11 days a year out on lakes it was not fitted to, and too long on deep ones (Mjøsa 145 days against 50, Baikal 148 against 102). Wide rivers are lines, not water (C4, A10).
 - **Clouds are illustrative.** How much cloud there is and how much light it returns come from a satellite climatology (ISCCP) and are checked against VIIRS and EPIC; where each cloud is, is modelled. Close in, the fine structure is real cloud's, borrowed: one photographed sheet, one cumulus field and one storm stand in for all of their kind and repeat every 2048 km. It reads as cloud; it is not the cloud of the place. Wrong in measured ways over the Amazon, the trades and the Congo (register B1).
-- **Sea-ice extent matches NSIDC because the edge is placed to make it match**; ice area inside the edge runs up to 15% low. Lakes outside the Great Lakes and Ladoga never freeze, and neither does a 150 km band of south-west Hudson Bay that the water mask calls land (C1, A5).
+- **Sea-ice extent matches NSIDC because the edge is placed to make it match**; ice area inside the edge runs up to 15% low. Each of NSIDC's 720 monthly grids on its own converts within 1.5% in the middle case and 4.0% at worst (C1).
 - **The ground's albedo is Blue Marble re-read against EPIC's view from the Sun's side**, not measured reflectance; dense forest is probably drawn too bright in the red (A7).
 - **Below 5 km per pixel the finer ground is streamed** from NASA and AWS while you look (the page says so in About); without a network it falls back to magnified fields. The sea floor is not refined (A2).
 - **Air traffic and ship motion are modelled flows.** No vehicle on screen is a real vehicle.
 - **Vintages differ**: land surface 2004, night lights 2016, borders 2022, emissions 2022, population 2025.
 - **At whole-Earth framing 125 of the 177 states in view are named**, 18 of them only in the Europe and Lesser Antilles insets. Sixteen European states, the Levant and the Caucasus still are not; the insets need open sea between the panels and are left out in a small window (F1).
-- **Against NASA EPIC the Space style is close, with named exceptions**: cloud over land above the median, the outermost 2% of the disc, snow at a low Sun (A1, A8, A9). The full list is `Research/MODEL-GAPS.md`: 36 items, none at P1
+- **Against NASA EPIC the Space style is close, with named exceptions**: cloud over land above the median, the outermost 2% of the disc, snow at a low Sun (A1, A8, A9). The full list is `Research/MODEL-GAPS.md`: 38 items, none at P1
 
 ---
 

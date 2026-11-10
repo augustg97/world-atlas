@@ -1,8 +1,8 @@
 // Feature data: countries, borders, places, physical names, plates, quakes, volcanoes, power
 // stations, airports. Loaded once; everything else asks this module.
 
-import { kmBetween } from './cards.js?v=20261110T205316Z';
-import { getJSON } from './gl.js?v=20261110T205316Z';
+import { kmBetween } from './cards.js?v=20261110T223704Z';
+import { getJSON } from './gl.js?v=20261110T223704Z';
 
 const get = (f) => getJSON('data/' + f);
 

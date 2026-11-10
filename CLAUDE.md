@@ -104,13 +104,13 @@ node build/test_app_math.mjs                     # ephemeris vs almanac, project
 
 # rebuild data (each step asserts landmarks and stamps web/version.json)
 ./venv/bin/python build/fetch_sources.py        # ~3.6 GB into data/ (gitignored); idempotent
-./venv/bin/python build/fields_surface.py       # water albedo elev night clouds   (albedo:7 = one month)
+./venv/bin/python build/fields_surface.py       # water albedo elev night clouds   (albedo:7 = one month). After `water`: fields_climate.py ocean, fields_human.py ships
 ./venv/bin/python build/cloud_grain.py          # cloudgrain.jpg: three VIIRS scenes as rank fields (fetch_sources.py cloudtex first; --preview to look)
 ./venv/bin/python build/fields_climate.py       # atmo ocean currents
 ./venv/bin/python build/fields_human.py         # pop ships lanes co2 countries
 ./venv/bin/python build/vectors.py              # political places physical plates quakes volcanoes power stats air
 
-# the whole audit suite against its baselines (eleven checks, 3-4 min; --quick skips the browser checks)
+# the whole audit suite against its baselines (thirteen checks, about 5 min; --quick skips the browser checks)
 ./venv/bin/python Research/modeling/audit_all.py
 # score against NASA EPIC by hand: render (headless), then compare
 "$HOME/Modeling Studio/.venv/bin/python" Research/modeling/epic_render.py cur
@@ -209,8 +209,25 @@ node build/test_app_math.mjs                     # ephemeris vs almanac, project
 - **Channels of unrelated data in one colour image need full chroma resolution.** WebP's lossy coder halves it
   and cost the cloud grain 4.5% of its range; JPEG with `subsampling=0` costs 1.7%. And fetch sources as PNG:
   a JPEG source's 8 x 8 blocks showed in the atlas's cloud.
-- **`water4.npy` and `water.webp` say south-west Hudson Bay is land.** They agree with each other and are both
-  wrong (register A5). Two instruments from one source are one instrument.
+- **A mask made from a picture is a mask of the picture.** "Sea is wherever Blue Marble is its ocean fill" classed
+  5.3 million km2 of shelf sea as land, because Blue Marble paints every shelf in a colour of its own. It was drawn
+  in that colour, so it looked like water for three rounds; the register called it "a strip of Hudson Bay". The
+  cache and the shipped file agreed with each other and were both wrong: two instruments from one source are one
+  instrument. Measure a mask against a witness that needs no mask (`audit_water.py`: ETOPO below sea level and
+  connected to the ocean).
+- **I explained the mask's fault before looking, and was wrong.** I wrote that the July picture showed the Arctic
+  shelf under ice. The picture's sea is the same in all twelve months. Sample the source's pixels before writing
+  why (`fields_surface.step_water` docstring has the corrected account).
+- **Fixing a class can take away something true that the error was carrying.** As "land", the Bahama banks were
+  turquoise; as water they turned plain blue. Look at before and after side by side at the named places, not only
+  at the audit, and carry the true part across (`shoal.webp`).
+- **A reanalysis's air over a lake is the lake's own air.** January over the Sea of Azov is +1.2 C in the grid and
+  -2 to -4 on its shore. A model of whether the lake freezes must be fed the land's air (`land_air_t0`).
+- **A witness built from records must not average over the records it could not read.** Lake seasons with a date
+  missing were dropped and open seasons kept; Lake Champlain came out as never freezing. The largest "error" of a
+  new model is the first place to check the instrument.
+- **A change to the water mask is a change to everything downstream of it**: sea ice (rebuild `fields_climate.py
+  ocean`), ships and lanes (`fields_human.py ships`), and the EPIC audits' own sorting of pixels.
 
 Plus the standing ones: a process backgrounded with `&` inside a tool call dies when that call
 ends; a waiter on a `pgrep` pattern can match itself — wait on a **PID**; a static host can serve

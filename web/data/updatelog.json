@@ -1,5 +1,36 @@
 [
  {
+  "version": "1.2",
+  "date": "10 November 2026",
+  "title": "The sea where the sea is, and lakes that freeze",
+  "summary": "The first release said a strip of Hudson Bay was drawn as land. Measured, it was 5.3 million square kilometres of sea, most of it on the Arctic shelf. The coastline is now a coastline, and lakes freeze in winter.",
+  "sections": [
+   {
+    "name": "Sea and land",
+    "items": [
+     "The East Siberian, Kara and Chukchi shelf seas, south-west Hudson Bay, the mouth of the Amazon, the Yellow Sea and the Bahama banks are sea: they ice over, catch the Sun's glint, and answer a click as water. They had been classed as land since the first build, and went unseen because they were painted in a water colour.",
+     "Against an independent survey of the sea floor, sea drawn as land fell from 5.3 to 0.3 million square kilometres. What is left is the coast itself at 5 km: fjords, lagoons, polders.",
+     "Shallow and silty water keeps its own colour: the Bahama banks are turquoise, the Amazon's mouth brown, as water."
+    ]
+   },
+   {
+    "name": "Lake ice",
+    "items": [
+     "Baikal, Great Bear, Great Slave, the lakes of Finland and Tibet, the north Caspian and the Sea of Azov freeze in winter and open in spring. Only the Great Lakes and Ladoga did before.",
+     "Outside the Great Lakes and Ladoga the ice is modelled from the air temperature at the lake, and is labelled so. Against the freeze and thaw dates of 83 lakes it was not fitted to, it is 11 days a year out on average. At the lakes it draws, the atlas was 59 days short and is now within 16."
+    ]
+   },
+   {
+    "name": "Known to be wrong",
+    "items": [
+     "The lake-ice model does not know how deep a lake is. Deep lakes are iced too long: Mjøsa 145 days a year against 50 in its record, Lake Constance 54 against none, Baikal 148 against 102.",
+     "Wide rivers are still drawn as lines: the Amazon's main stem is not water.",
+     "The first two releases' lists still stand, except the Hudson Bay strip and the lakes that never froze."
+    ]
+   }
+  ]
+ },
+ {
   "version": "1.1",
   "date": "10 November 2026",
   "title": "Cloud that reads as cloud, and a sheet with insets",

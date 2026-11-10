@@ -6,6 +6,7 @@
     ./venv/bin/python build/fetch_sources.py etopo ne   # by group
     ./venv/bin/python build/fetch_sources.py nsidc      # 720 monthly sea-ice grids + 24 extent tables
     ./venv/bin/python build/fetch_sources.py isccp      # 120 monthly cloud-type grids, 530 MB
+    ./venv/bin/python build/fetch_sources.py lakeice    # freeze and thaw dates of 865 lakes (witness only), 3 MB
     ./venv/bin/python build/fetch_sources.py cloudtex   # three VIIRS cloud scenes for the cloud grain, 8 MB
 
 This table IS the project's source record: name, URL, licence. Research/SOURCE-SURVEY.md
@@ -109,6 +110,14 @@ for name, (lon, lat, day) in CLOUDTEX.items():
         f"&BBOX={lat - half:.4f},{lon - hx:.4f},{lat + half:.4f},{lon + hx:.4f}&WIDTH=1248&HEIGHT=1248&FORMAT=image/png&TIME={day}",
         "public domain (NASA EOSDIS GIBS, VIIRS NOAA-20 corrected reflectance; NASA asks for acknowledgement)")
 
+# --- lake ice, the witness: freeze and thaw dates for 865 lakes and rivers -------------------
+# Measured against only (Research/modeling/audit_lakeice.py); nothing from it is shipped. NSIDC asks for citation:
+# Benson, B., Magnuson, J. and Sharma, S. (2000, updated 2020), Global Lake and River Ice Phenology Database,
+# Version 1, NSIDC G01377, doi:10.7265/N5W66HP8.
+for f in ("liag_freeze_thaw_table.csv", "liag_physical_character_table.csv"):
+    add("lakeice", f"lakeice/{f}", f"https://noaadata.apps.nsidc.org/NOAA/G01377/{f}",
+        "no licence named; citation required (Benson, Magnuson & Sharma 2000, NSIDC G01377)")
+
 NSIDC = "https://noaadata.apps.nsidc.org/NOAA/G02135"
 # NSIDC names no licence for this product. Its landing page states one condition: "As a condition of
 # using these data, you must cite the use of this data set"; its data policy says most of its
@@ -133,7 +142,9 @@ for f in ["ne_50m_admin_0_countries", "ne_50m_admin_0_boundary_lines_land",
           "ne_10m_populated_places_simple", "ne_50m_rivers_lake_centerlines", "ne_50m_lakes",
           "ne_50m_geography_regions_polys", "ne_50m_geography_marine_polys",
           "ne_50m_geography_regions_points", "ne_50m_geography_regions_elevation_points",
-          "ne_50m_coastline", "ne_10m_time_zones"]:
+          "ne_50m_coastline", "ne_10m_time_zones",
+          # the water mask (fields_surface.step_water): land, small islands, lakes and the ice shelves at 1:10m
+          "ne_10m_land", "ne_10m_minor_islands", "ne_10m_lakes", "ne_10m_antarctic_ice_shelves_polys"]:
     add("ne", f"ne/{f}.geojson", f"{NE}/{f}.geojson", "public domain (Natural Earth 5.1.2)")
 
 add("plates", "plates/PB2002_boundaries.json",

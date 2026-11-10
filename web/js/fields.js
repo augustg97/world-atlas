@@ -51,8 +51,11 @@ export class Fields {
       .then(([c, h]) => { this.meta.climate = c; this.meta.human = h; });
     const first = Promise.all([this._preview(ms.i0), this._preview(ms.i1)]);
     const water = this._load('water', async () => {
-      const [w, n] = await Promise.all([loadBitmap(F + 'water.webp'), loadBitmap(F + 'night.webp')]);
-      this.tex.waterNight = packRG(gl, w, n, w.width, w.height);
+      // blue: where water takes the picture's own colour (shallow banks, plumes, lakes). Absent, the sea is one colour
+      const [w, n, sh] = await Promise.all([loadBitmap(F + 'water.webp'), loadBitmap(F + 'night.webp'), loadBitmap(F + 'shoal.webp').catch(() => null)]);
+      const shOk = sh && sh.width === w.width && sh.height === w.height;
+      this.tex.waterNight = packRG(gl, w, n, w.width, w.height, shOk ? sh : null);
+      if (sh) sh.close();
       const px = pixelsOf(w, 2048, 1024);
       const cw = new Uint8Array(2048 * 1024); for (let i = 0; i < cw.length; i++) cw[i] = px[i * 4];
       const pn = pixelsOf(n, 2048, 1024);
@@ -236,12 +239,21 @@ export class Fields {
     const f = this.cpu[where[0]];
     if (!f) return NaN;                                               // an atlas that has not shipped
     if (where[0].startsWith('ocean')) {
+      // the valid channel: 255 the sea, 215 inland water with a temperature and modelled ice, 200 inland water with
+      // observed ice, 180 the shore band, 150 inland water whose ice is modelled and which has no temperature, 0 nothing
       const valid = f.d[ms.i0 * f.h * f.w * 4 + this._px(f, lon, lat) * 4 + 2];
-      if (valid < 128) return NaN;
+      if (valid < (name === 'ice' ? 128 : 170)) return NaN;
     }
     const a = this._atlas(f, where[1], ms.i0, lon, lat), b = this._atlas(f, where[1], ms.i1, lon, lat);
     // decode each month, then mix: the curves are not linear
     return this._decode(name, a) * (1 - ms.f) + this._decode(name, b) * ms.f;
+  }
+  /** How the ice at a place is known: 'sea' (NSIDC), 'lake' (OISST), 'model' (lake-ice model), or null. */
+  iceKind(lon, lat) {
+    const f = this.cpu.oceanA;
+    if (!f) return null;
+    const v = f.d[this._px(f, lon, lat) * 4 + 2];
+    return v > 227 ? 'sea' : v >= 208 ? 'model' : v >= 190 ? 'lake' : v >= 170 ? 'sea' : v >= 128 ? 'model' : null;
   }
   elevation(lon, lat) {
     const f = this.cpu.elev; if (!f) return NaN;

@@ -77,7 +77,10 @@ export function probeCard(ctx, lon, lat) {
   let sea = '';
   if (isWater) {
     const sst = F.climate('sst', lon, lat, ms), ice = F.climate('ice', lon, lat, ms), cu = F.climate('ucur', lon, lat, ms), cv = F.climate('vcur', lon, lat, ms);
-    sea = row('Sea-surface temperature', Number.isNaN(sst) ? 'no data (inland water)' : `${fmt(sst, 1)} °C`, 'climatology') + (ice > 0.01 ? row('Sea ice', `${fmt(ice * 100)} % cover`, 'climatology') : '')
+    // ice: the sea's is NSIDC's; a lake's is OISST's where that has the lake, and otherwise a model of how often it is frozen
+    const kind = F.iceKind(lon, lat);
+    const iceRow = !(ice > 0.01) ? '' : kind === 'model' ? row('Lake ice', `frozen ${fmt(ice * 100)} % of ${monthName}`, 'modelled') : row(kind === 'lake' ? 'Lake ice' : 'Sea ice', `${fmt(ice * 100)} % cover`, 'climatology');
+    sea = row(kind === 'sea' ? 'Sea-surface temperature' : 'Water temperature', Number.isNaN(sst) ? 'no data (inland water)' : `${fmt(sst, 1)} °C`, 'climatology') + iceRow
       + row('Surface current', Number.isNaN(cu) ? 'no data here' : `${fmt(Math.hypot(cu, cv) * 100)} cm/s towards the ${compass(-cu, -cv)}`, 'climatology', '2019–23');
   }
   const pop = F.staticValue('pop', lon, lat), co2 = F.staticValue('co2', lon, lat), nl = F.nightLight(lon, lat), sh = F.staticValue('ships', lon, lat);

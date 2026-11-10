@@ -1,9 +1,9 @@
 // Feature overlays that sit ON the rendered world: instanced lines and points (projected in
 // the vertex shader by the same camera code as the substrate) and a 2D canvas for labels.
 
-import { program, setUniforms } from './gl.js?v=20261110T205316Z';
-import { D2R } from './astro.js?v=20261110T205316Z';
-import { R_KM, wtForward, wtInverse, WT_XMAX, WT_YMAX } from './camera.js?v=20261110T205316Z';
+import { program, setUniforms } from './gl.js?v=20261110T223704Z';
+import { D2R } from './astro.js?v=20261110T223704Z';
+import { R_KM, wtForward, wtInverse, WT_XMAX, WT_YMAX } from './camera.js?v=20261110T223704Z';
 
 const QUAD = new Float32Array([0, -1, 1, -1, 0, 1, 0, 1, 1, -1, 1, 1]);
 const SQ = new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]);
