@@ -1,5 +1,7 @@
 # World Atlas
 
+**Live: https://augustg97.github.io/world-atlas/**
+
 A living atlas of the present-day Earth: one year of the planet and its people, composed per pixel and anchored at now.
 
 **Live:** not published. Local only: `python3 build/serve.py` then http://localhost:8150 (publishing is the owner's explicit decision - SCOPE section 11)
