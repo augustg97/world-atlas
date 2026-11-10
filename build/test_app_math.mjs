@@ -30,6 +30,17 @@ ok('new Moon 12 Aug 2026', moon(T('2026-08-12T17:37:00Z')).lit < 0.005, moon(T('
   const sep = Math.acos(s.vec[0] * m.vec[0] + s.vec[1] * m.vec[1] + s.vec[2] * m.vec[2]) * 180 / Math.PI;
   ok('Sun-Moon separation at the 12 Aug 2026 eclipse < 1.5 deg', sep < 1.5, sep.toFixed(2));
 }
+// An independent witness for where the Sun is over the turning Earth: NASA EPIC publishes, with every
+// frame, the J2000 positions of the Sun and of the spacecraft and the longitude under the spacecraft.
+// From those alone (no sidereal-time formula of ours) the sub-solar point follows; see
+// Research/modeling/epic_compare.py, sub_solar(). EPIC's own timing is good to about a minute (0.25 deg).
+for (const [t, lon, lat] of [
+  ['2025-03-20T10:56:46Z', 17.727, 0.031], ['2025-03-20T18:08:57Z', -90.193, 0.150], ['2025-06-21T05:07:44Z', 103.632, 23.436],
+  ['2025-06-21T22:35:03Z', -158.156, 23.434], ['2024-09-22T06:28:44Z', 81.075, 0.104], ['2024-09-22T22:41:07Z', -162.089, -0.158],
+  ['2025-12-21T10:04:47Z', 28.471, -23.436], ['2025-12-21T17:16:56Z', -79.500, -23.436]]) {
+  const s = sun(T(t));
+  ok(`sub-solar point vs EPIC, ${t.slice(0, 16)}`, near(s.lon, lon, 0.25) && near(s.lat, lat, 0.02), `lon ${s.lon.toFixed(3)} vs ${lon}, lat ${s.lat.toFixed(3)} vs ${lat}`);
+}
 ok('day length at the equator ~12.1 h', near(dayLength(0, 0), 12.11, 0.05));
 ok('polar night and midnight sun', dayLength(80, -23.4) === 0 && dayLength(80, 23.4) === 24);
 { const m = monthState(T('2026-01-16T12:00:00Z')); ok('mid-January is keyframe 0 exactly', m.i0 === 0 && m.f < 0.02, `${m.i0} ${m.f.toFixed(3)}`); }

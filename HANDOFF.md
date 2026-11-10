@@ -17,53 +17,66 @@ Paste this whole file as the first message of a new session.
 
 ## The current task
 
-Kickoff is complete and the first build exists. The contract is `SCOPE.md`; the open work is
-`Research/MODEL-GAPS.md` (31 items, 6 at P1). The next round is a **verify round**, not a feature round:
-the app renders and reads as a planet, and nothing has yet been scored against its reference standard.
-
-<!-- If the user set an explicit loop, state it verbatim and state its stopping condition,
-     because a loop overrides the standing "always deploy every round" rule:
-
-> "keep going and making improvements until <condition>. After making updates, compare against
->  <reference>, then assess honestly. If yes, deploy; if no, continue and repeat."
--->
+Kickoff, the first build and one verify round are done. The contract is `SCOPE.md`; the open work is
+`Research/MODEL-GAPS.md` (34 items, 4 open at P1). The Space register has now been scored against its
+reference and the answer is **not yet**: colour, exposure, ocean, desert and the limb sit within a few
+display levels of NASA's photographs; cloud and vegetated land do not. The next round is a **build round**
+on those two (B1, A7) and on sea ice (C1).
 
 ## Reference material and the measurement harness
 
-The comparison is only meaningful at **matched scale**, and getting there takes a while — reuse
-this rather than rebuilding it.
+The comparison is only meaningful at **matched scale**. All of this exists; reuse it.
 
-- `reference/` (gitignored) is empty. The National Geographic sheet the owner supplied is the Atlas-register baseline:
-  measure against it, never reproduce or commit it. NASA EPIC frames for the Space register have not been fetched (A1).
-
-- `ATLAS.step(n)` runs n frames without `requestAnimationFrame`; `await ATLAS.shot('x.jpg', [x,y,w,h])` posts the
-  composited frame to `build/serve.py`, which writes `scratchpad/x.jpg` at device resolution. Every state is a URL:
-  `#t=2026-07-10T05:30Z&v=globe&s=space&ll=80,22&km=4&lens=temp&on=clouds,air,labels`.
-- `build/test_frames.py`, `build/test_app_math.mjs`, `build/check_shaders.py`, and landmark asserts inside every build step.
+- `reference/epic/` (gitignored): eight NASA EPIC natural-colour frames and `frames.json` (where the
+  spacecraft and Sun were). Rebuild with `./venv/bin/python Research/modeling/epic_compare.py --fetch`.
+  Public domain. The National Geographic sheet is the Atlas-register baseline: measured against, never
+  reproduced or committed.
+- `ATLAS.refView(lon, lat, distRadii, discFrac)` stands the camera where EPIC stood. `web/js/refshots.js`
+  renders all eight (`await (await import('/js/refshots.js')).renderEpic('tag')`, 1024 x 1024 window);
+  `Research/modeling/epic_render.py` does the same headless.
+- `Research/modeling/epic_compare.py --tag <tag>` prints the per-frame table and writes side-by-side
+  pairs to `Research/figures/epic/`. `epic_cloud_cdf.py <tag> [--land]` compares cloud brightness
+  distributions. `_r0` is before this round, `_r7` after.
+- **Use the time in EPIC's image name, not its `date` field.** They differ by about five minutes and the
+  centroid longitude belongs to the image name: with `date`, the Sun sat 1.1 degrees off in every frame.
+- `?frozen=1` gives a deterministic frame (`window.__FRAME_READY`). Six of them are baselines in
+  `Research/baselines/frames/`; the manifest is `Research/baselines/frames.json`.
+- `ATLAS.step(n)` runs frames without `requestAnimationFrame`; `await ATLAS.shot('x.jpg')` writes
+  `scratchpad/x.jpg` at device resolution. Every state is a URL.
 
 ## State right now
 
-- Last live deploy: **never deployed** (commit `n/a`)
-- Committed and not deployed: everything. One local commit ("World Atlas: kickoff and first build")
-- Uncommitted: nothing at the time of writing
-- `data/` holds 2.6 GB of sources and caches (gitignored); `python build/fetch_sources.py` rebuilds it. `~/.claude/launch.json` has a `world-atlas` preview entry.
+- Last live deploy: **never deployed**
+- Committed locally and not pushed: everything, three commits
+- `data/` holds 2.6 GB of sources and caches (gitignored); `python build/fetch_sources.py` rebuilds it.
+  `~/.claude/launch.json` has a `world-atlas` preview entry.
+- `./venv/bin/python Research/modeling/audit_all.py` passes: nine checks, 2 min 19 s.
 
-## What this round found
+## What the verify round found
 
-All measured, none guessed.
+All measured. Numbers are display values 0-255 over eight EPIC frames unless stated.
 
-1. **The witness earned its place on day one.** NOAA's long-term-mean sea ice is conditional on ice being present;
-   the NSIDC comparison caught a fourfold error that looked plausible on screen. Corrected, with a stated residual (C1).
-2. **A population-only gravity model ranks Dhaka above Atlanta.** Air traffic follows catchment income; and catchments
-   must be nearest-airport, or Philadelphia inherits New York.
-3. **A sea lane is a coherent ridge, not a density.** Tracers on smoothed density swirl over open ocean.
-4. **BMNG's ocean is one exact fill colour (2,5,20)**, which gives a water mask registered to the imagery by construction.
-5. **The shipping-density lens is the most legible single frame in the atlas**; the default view should perhaps lead with it less shyly.
-6. **Verified by looking, at device resolution:** globe and sheet in both registers; the terminator, limb and night lights;
-   12-month surface; clouds; wind, current and ship tracers; aircraft; labels; the probe (Agra, July: 30.2 C at 10:40 solar
-   time, mean 32.0, 740 people/km2); the dashboard (7.1 bn people in daylight at 09:00 UTC in July; mean July air
-   temperature 15.9 C against an observed ~16); the temperature, population and shipping lenses; Today's Earth from GIBS;
-   live earthquakes. Every card type, search, About, the play modes and the three live feeds were then run by script without error, and a frame with all 23 layers on was viewed. **Not yet done by hand in a visible browser:** drag, wheel, keyboard, sliders (register G5)
+1. **The limb glow was twenty times too thick.** Its two scale heights were 57 km and 190 km; the air's is 8.
+   EPIC shows nothing outside the disc. One Rayleigh model now serves the haze and the limb. Glow outside the
+   limb: 73.9 to 0.15.
+2. **The frame was 27 levels too bright and the ocean too blue.** Exposure and gamma fitted to clear ocean,
+   desert and bright cloud. Ocean colour error 40 to 4.6; ground 51 to 16; mean brightness 27 to 7.
+3. **EPIC's vegetated land is studded with daytime cumulus the atlas had no mechanism for.** Added, driven by
+   rainfall and local solar time. Land is still 10-15 levels dim against EPIC at every percentile (A7, B1).
+4. **Sea ice is worse than kickoff said.** Against NSIDC's twelve monthly means: Arctic +11 to +31%, Antarctic
+   +16 to +94%. The cheap fix was tried and does not work; the excess is in the source field (C1).
+5. **21 of 204 states are named** at the baseline sheet's framing (F1).
+6. **Population by country:** total within 0.4% of the World Bank; 26 units off by more than 10% (F2).
+7. **The app's Sun agrees with EPIC's own vectors** to 0.22 degrees of longitude and 0.005 of latitude in all
+   eight frames. An independent witness: no sidereal-time formula of ours is in EPIC's numbers.
+8. **Controls work**: drag, wheel, G, A, space, N, /, Esc, search, both sliders, by real input events. One
+   fault found and fixed: fly-to could throw the sheet camera to 0,0.
+
+The rule-0 check on `Research/baselines/frames/globe-default.png`: it reads as a lit planet (per-pixel
+ground, Sun, air, cloud, city lights); a viewer can read off it that it is afternoon over Africa and night
+over India, that the Sahara is bare and the Sahel under cloud, and where the cities of the Gulf and the
+Ganges plain are; the subject itself is on screen; the scale bar is drawn and the relief exaggeration is
+stated in About.
 
 ## Traps that have each cost real time
 
@@ -80,15 +93,16 @@ Plus the standing ones:
 
 ## The work queue
 
-Ranked by how much of the remaining gap each closes.
+1. **B1 + A7** - cloud that resolves below 10 km, a satellite cloud climatology for coverage, and why
+   vegetated land reads dark (build a clear-sky EPIC composite first; do not tune to it blind).
+2. **C1** - sea ice from NSIDC's yearly concentration grids (needs a polar-stereographic `frames` conversion).
+3. **A2** - streamed elevation and imagery to reach the 2 km floor.
+4. **F1** - label placement: 21 of 204 states today.
+5. **F2** - population by polygon, not by the country raster.
 
-1. **A1** - EPIC side-by-side; this defines "done" for the Space register.
-2. **G1** - audit suite + visual ratchet (`/model-verify`).
-3. **G5** - click through every card type, the search, About and the play modes in a visible browser; fix what breaks.
-4. **C1** - sea ice per year + `audit_ice.py`.
-5. **B1** - a real cloud climatology.
-6. **A2** - streamed elevation and imagery to reach the 2 km floor.
-7. **F1** - label coverage against the baseline sheet
+When a baseline frame moves, look at `Research/baselines/_diff/`, then
+`frame_baseline.py accept --frame <name> --reason "..."`. When an audit number improves, tighten it in
+`audit_all.py` in the same commit.
 
 ## Commands
 

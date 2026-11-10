@@ -89,7 +89,7 @@ web/          the app: no build step, ES modules
               catalog (every layer, tier, source, limit)  cards  data  dash  live  ui
   fields/     69 MB of rasters      data/  4 MB of features      version.json
 data/         2.6 GB of sources and caches - gitignored
-Research/     SOURCE-SURVEY.md  MODEL-GAPS.md  (dossiers, models and audits to come) - never imported by build/
+Research/     SOURCE-SURVEY.md  MODEL-GAPS.md  modeling/ (audits, the EPIC harness)  baselines/ (six frozen frames)  figures/epic/ - never imported by build/
 docs/         empty until the owner decides to publish
 ```
 ```
@@ -146,8 +146,8 @@ node build/test_app_math.mjs                     # ephemeris vs almanac, project
 The build **runs the validators first and refuses to publish if one moved backwards**:
 
 ```bash
-python audit_all.py           # all of them
-python audit_all.py --quick   # skip the slow ones
+./venv/bin/python Research/modeling/audit_all.py           # nine checks, 2-3 min
+./venv/bin/python Research/modeling/audit_all.py --quick   # skip the three that need a browser
 ```
 
 | check | baseline | what it catches |
@@ -238,7 +238,7 @@ and what the model cannot know.
 
 - **National Geographic, *The World - Political*** (Winkel Tripel) - the baseline for the Atlas register. Copyright
   National Geographic Society: measured against, never reproduced, never committed (`reference/` is gitignored).
-- **NASA EPIC (DSCOVR) full-disc imagery** - the standard for the Space register (not yet fetched: register A1).
+- **NASA EPIC (DSCOVR) full-disc imagery** - the standard for the Space register. Eight frames scored in the verify round; `Research/modeling/epic_compare.py`, pairs in `Research/figures/epic/`.
 - **NSIDC Sea Ice Index** - the witness for sea ice. **Published almanac values** - the witness for the Sun and Moon.
 
 `HANDOFF.md` carries the live state, the measured facts, and the work queue for a fresh session.

@@ -98,7 +98,7 @@ off or changes its badge, and the clock reads *Typical year*. Offline, live laye
 
 | disagreement | shape | handling |
 |---|---|---|
-| **OISST long-term-mean ice vs the NSIDC Sea Ice Index** | amount. PSL's mean averages only years with ice: extent came out 12.3 M km² for the Antarctic February minimum against NSIDC's ~3.0. Corrected with `valid_yr_count / 30` → 5.6. Residual: Arctic 16.8 vs 15.3 (Mar), 7.2 vs 6.2 (Sep); Antarctic 21.6 vs 18.5 (Sep), 5.6 vs 3.0 (Feb) | corrected; residual stated on the layer card and the dashboard; register C1 |
+| **OISST long-term-mean ice vs the NSIDC Sea Ice Index** | amount. PSL's mean averages only years with ice: extent came out 12.3 M km² for the Antarctic February minimum against NSIDC's ~3.0. Corrected with `valid_yr_count / 30` → 5.6. Residual against NSIDC's twelve 1991–2020 monthly means (measured in the verify round; the kickoff figures were approximate): Arctic 16.75 vs 15.03 (Mar), 7.20 vs 5.58 (Sep); Antarctic 21.54 vs 18.61 (Sep), 5.61 vs 3.09 (Feb) | corrected; residual stated on the layer card and the dashboard; register C1 |
 | de facto vs claimed borders | existence / position | de facto drawn, disputes dashed, 27 dispute cards, hatched in the Atlas style |
 | gridded population products | amount (rural cells) | GHSL only, named; totals conserved exactly through the pipeline (8.192 bn) |
 | vintages: surface 2004, lights 2016, borders 2022, population 2025 | existence | every layer states its vintage |
@@ -110,11 +110,12 @@ off or changes its badge, and the clock reads *Typical year*. Offline, live laye
 | what | witness | status |
 |---|---|---|
 | Sun and Moon | published almanac values: 2026 equinox and solstice instants, equation of time, the 3 March and 12 August 2026 eclipses | **built**: `build/test_app_math.mjs`, all pass (declination within 0.004°; Sun–Moon separation at the solar eclipse 0.84°) |
-| sea ice | NSIDC Sea Ice Index monthly climatology | used at kickoff (it found the defect above); not yet a script — register C1 |
+| sea ice | NSIDC Sea Ice Index v4, monthly extent, mean of 1991–2020 from the yearly files (`Research/modeling/witness/`) | **built**: `audit_ice.py`. Arctic +11 to +31%, Antarctic +16 to +94% by month. The four figures quoted at kickoff were rounder and kinder than the record — register C1 |
 | global mean temperature | observed ~12.5 °C January, ~16 °C July | reproduced: 12.48 / 15.95 |
-| population | UN / World Bank national totals vs the field summed per country | data written to `data/_cache/pop_by_country.json`; audit not yet written — register F2 |
+| population | World Bank national totals vs the field summed per country | **built**: `audit_population.py`. Total −0.4%; 26 of 192 units differ by more than 10% — register F2 |
 | wind, cloud, precipitation, currents | ERA5 / satellite retrievals | **none in the repository.** A known limit |
-| the lit globe as a picture | NASA EPIC full-disc imagery at a stated instant | not yet compared — register A1 |
+| the lit globe as a picture | NASA EPIC natural colour, eight frames (public domain; `epic.gsfc.nasa.gov`), camera and clock matched | **built**: `epic_compare.py`; table in MODEL-GAPS. Clear ocean within 5 display levels, ground within 16, cloud and vegetated land short — registers A7, B1 |
+| the Sun over the turning Earth | EPIC's J2000 Sun and spacecraft vectors with the sub-spacecraft longitude | **built** into `build/test_app_math.mjs`: eight instants, within 0.22° of longitude and 0.005° of latitude |
 
 ## 6. Layers with no usable source
 

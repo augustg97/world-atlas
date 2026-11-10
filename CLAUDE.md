@@ -48,7 +48,8 @@ The general protocol lives in `/Users/augustgweon/Modeling Studio`. Its skills a
    done, say so explicitly and say why — do not omit it.
 
 6. **Always deploy, and verify the live artefact.** Every round ends with a build, a commit, a
-   push, and a check of the live data-version stamp.
+   push, and a check of the live data-version stamp. *(Suspended here by rule 16 until the owner
+   decides to publish: rounds end with `audit_all.py` green and a local commit.)*
 
 7. **Never ship on an average.** Score every item individually, before and after, and classify
    every regression.
@@ -103,6 +104,14 @@ node build/test_app_math.mjs                     # ephemeris vs almanac, project
 ./venv/bin/python build/fields_human.py         # pop ships lanes co2 countries
 ./venv/bin/python build/vectors.py              # political places physical plates quakes volcanoes power stats air
 
+# the whole audit suite against its baselines (2-3 min; --quick skips the browser checks)
+./venv/bin/python Research/modeling/audit_all.py
+# score against NASA EPIC by hand: render (headless), then compare
+"$HOME/Modeling Studio/.venv/bin/python" Research/modeling/epic_render.py cur
+./venv/bin/python Research/modeling/epic_compare.py --tag cur
+# the visual ratchet alone; accept a moved frame only with a reason
+"$HOME/Modeling Studio/.venv/bin/python" "$HOME/Modeling Studio/tools/frame_baseline.py" check --project .
+
 # look at a frame at full resolution (the browser pane may be hidden or scaled)
 #   in the page:  ATLAS.step(200); await ATLAS.shot('name.jpg')   ->  scratchpad/name.jpg
 ```
@@ -126,6 +135,20 @@ node build/test_app_math.mjs                     # ephemeris vs almanac, project
   gives a pixel centre, not a corner; EDGAR and ETOPO are south-first. Read the georeferencing; go through `frames.py`.
 - **A lane is not a density.** Smoothed AIS density sent ship tracers swirling over open ocean; a lane is a coherent
   ridge. Model the object (WORKING-RULES 3).
+
+- **EPIC carries two times per frame.** The centroid longitude goes with the time in the image NAME, about five
+  minutes after `date`. With `date` the Sun sat 1.1 degrees off in every frame and looked like an ephemeris error.
+- **A reference photograph's display values are not radiance.** EPIC's product fits exposure 0.43 and gamma 1.91
+  in this shader's units, not sRGB. Fit the display transform to clear ocean, desert and bright cloud FIRST;
+  every other comparison is meaningless until then.
+- **A thresholded texture does not average to its coverage.** The first cumulus layer went to flat white slabs
+  far away and blobs close in. Coverage must go to its mean when a pixel holds many cells.
+- **Headless Chromium loses its first GL context under software GL**, and draws tracers at half a second a
+  frame. The app reloads itself on context loss; the frozen frame steps tracers without drawing.
+- **Any wording change in the dashboard moves all six baseline frames** (the panel is in the screenshot). Look at
+  the diff image before accepting: it should be confined to the panel.
+- **The kickoff sea-ice witness was four round numbers and was too kind.** Witness values come from the source's
+  own files (`Research/modeling/witness/`), never from memory.
 
 Plus the standing ones: a process backgrounded with `&` inside a tool call dies when that call
 ends; a waiter on a `pgrep` pattern can match itself — wait on a **PID**; a static host can serve

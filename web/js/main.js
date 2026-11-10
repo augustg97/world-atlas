@@ -9,7 +9,7 @@ import { Earth, LENSES } from './earth.js';
 import { sun, moon, monthState, seasonName, D2R } from './astro.js';
 import { program, setUniforms, texFromImage, loadVersion } from './gl.js';
 import { LineBatch, PointBatch, Labels, segmentsFromLines, deq, graticule, parallels } from './overlays.js';
-import { FlowTracers, Flights, makeSamplers } from './particles.js';
+import { FlowTracers, Flights, makeSamplers, seedRandom } from './particles.js';
 import { SYSTEMS, LAYERS, paletteCanvas, FUEL_COLORS } from './catalog.js';
 import { Data } from './data.js';
 import { Live, HOUR, DAY } from './live.js';
@@ -21,6 +21,15 @@ const canvas = document.getElementById('gl');
 const gl = canvas.getContext('webgl2', { antialias: false, alpha: false, powerPreference: 'high-performance', preserveDrawingBuffer: true });
 const bootMsg = (s) => { document.getElementById('boot-msg').textContent = s; };
 if (!gl) { bootMsg('This atlas needs WebGL 2, which this browser does not provide.'); throw new Error('no webgl2'); }
+
+// ?frozen=1 is the deterministic mode the visual ratchet needs (Research/baselines/frames.json):
+// the clock is pinned to #t=, nothing is driven by requestAnimationFrame or the wall clock, the
+// tracers run a fixed number of seeded steps, and window.__FRAME_READY goes true when the frame
+// on screen is final. Two loads of the same URL then give the same pixels.
+const FROZEN = new URLSearchParams(location.search).has('frozen');
+const FROZEN_T = Date.UTC(2026, 5, 21, 12, 0, 0);
+const FROZEN_STEPS = 240;
+if (FROZEN) seedRandom(20261109);
 
 const cam = new Camera();
 const state = {
@@ -37,7 +46,7 @@ const astro = { sun: sun(state.t), moon: moon(state.t), month: monthState(state.
 let progs = {}, batches = {}, tracers = {}, flights = null, samplers = null, cache = null, dashCache = {}, ui = null;
 
 const hexRgb = (h) => [parseInt(h.slice(1, 3), 16) / 255, parseInt(h.slice(3, 5), 16) / 255, parseInt(h.slice(5, 7), 16) / 255];
-const isNow = () => state.clock === 'live' || Math.abs(state.t - Date.now()) < HOUR;
+const isNow = () => !FROZEN && (state.clock === 'live' || Math.abs(state.t - Date.now()) < HOUR);
 
 // ------------------------------------------------------------------------------------ app API
 const app = {
@@ -49,7 +58,7 @@ const app = {
   },
   setLens(id) {
     state.lens = id; earthDirty = true;
-    const L = LENSES[id]; if (L && L.static) fields.loadStatic(L.static).then(() => { earthDirty = true; });
+    const L = LENSES[id]; if (L && L.static) { pending.add('lens'); fields.loadStatic(L.static).then(() => { pending.delete('lens'); earthDirty = true; }); }
     ui.syncControls(); saveHash();
   },
   setView(v) { cam.setView(v); earthDirty = labelsDirty = true; resetTracers(); ui.syncControls(); saveHash(); },
@@ -93,6 +102,7 @@ function refreshCard() {
 }
 
 let fly = null;
+const pending = new Set();       // lazy data still on its way; a frozen frame waits for it
 function flyTo(lon, lat, km) {
   const c = cam.center();
   fly = { t0: performance.now(), from: [c[0], c[1], cam.kmPerPx()], to: [lon, lat, km] };
@@ -106,7 +116,7 @@ function astroUpdate() { astro.sun = sun(state.t); astro.moon = moon(state.t); a
 // ----------------------------------------------------------------------------- layer plumbing
 function ensureLayer(id) {
   const lazy = { plates: 'plates', quakes: 'quakes', volcanoes: 'volcanoes', power: 'power', flights: 'air' }[id];
-  if (lazy) data.loadLazy(lazy).then(() => { buildStatic(); if (id === 'flights' && !flights) flights = new Flights(gl, progs.lines, data.air); });
+  if (lazy) pending.add(lazy), data.loadLazy(lazy).then(() => { pending.delete(lazy); buildStatic(); if (id === 'flights' && !flights) flights = new Flights(gl, progs.lines, data.air); });
   if (id === 'quakesLive') live.loadQuakes();
   if (id === 'aurora') live.loadAurora();
   if (id === 'today') live.loadToday(state.t);
@@ -221,7 +231,7 @@ function tick(now) {
 
   // 2. camera animation
   if (fly) {
-    const u = Math.min(1, (now - fly.t0) / 900), e = u < 0.5 ? 2 * u * u : 1 - 2 * (1 - u) * (1 - u);
+    const u = Math.max(0, Math.min(1, (now - fly.t0) / 900)), e = u < 0.5 ? 2 * u * u : 1 - 2 * (1 - u) * (1 - u);
     let dl = fly.to[0] - fly.from[0]; if (dl > 180) dl -= 360; if (dl < -180) dl += 360;
     cam.setKmPerPx(Math.exp(Math.log(fly.from[2]) * (1 - e) + Math.log(fly.to[2]) * e));
     cam.lookAt(fly.from[0] + dl * e, fly.from[1] + (fly.to[1] - fly.from[1]) * e);
@@ -256,7 +266,7 @@ function tick(now) {
   if (L.borders) { line('borders', { alpha: Math.min(1, 0.55 + 6 / k) }); line('disputed', { dashKm: Math.max(18, k * 9), duty: 0.55 }); }
   if (L.plates) { line('plates'); line('subduction'); }
   const f = Math.min(3, dt / 16.7);
-  if (samplers) {
+  if (samplers && !fs.hold) {
     if (L.currents && fields.has.ocean) { tracers.currents.step(cam, samplers.currents, f); tracers.currents.draw(camU, 1); }
     if (L.wind && fields.has.climate) { tracers.wind.step(cam, samplers.wind, f); tracers.wind.draw(camU, atlas ? 0.9 : 0.75); }
     if (L.jet && fields.has.climate) { tracers.jet.step(cam, samplers.jet, f); tracers.jet.draw(camU, 0.9); }
@@ -297,6 +307,7 @@ function tick(now) {
     drawMarks();
   }
   // 6. panels
+  fs.detail = det.detail;
   if (now - (fs.uiAt || 0) > 250) { fs.uiAt = now; ui.clock(); ui.hud(k, hover, det.detail === 'full' ? '' : det.detail === 'preview' ? 'refining detail…' : 'loading terrain…'); }
   if (now - (fs.dashAt || 0) > 1000) { fs.dashAt = now; updateDash(false); if (state.clock !== 'paused' && card) refreshCard(); }
 }
@@ -378,6 +389,7 @@ function saveHash() {
 }
 function loadHash() {
   const p = new URLSearchParams((location.hash || '').slice(1) || location.search.slice(1));
+  if (FROZEN) { state.t = FROZEN_T; state.clock = 'paused'; }
   if (p.get('t')) { const t = Date.parse(p.get('t')); if (Number.isFinite(t)) { state.t = t; state.clock = 'paused'; } }
   if (p.get('s') === 'atlas') state.style = 'atlas';
   if (p.get('lens') && LENSES[p.get('lens')]) state.lens = p.get('lens');
@@ -394,6 +406,37 @@ async function shot(name = 'frame.jpg', crop) {
   g.drawImage(canvas, x, y, w, h, 0, 0, w, h); g.drawImage(labels.canvas, x, y, w, h, 0, 0, w, h);
   const r = await fetch('/__shot/' + name, { method: 'POST', body: c.toDataURL('image/jpeg', 0.9) });
   return `${await r.text()} ${w}x${h} dpr ${cam.dpr}`;
+}
+
+/** Every field and every lazy table the current layers need has arrived. */
+function allLoaded() {
+  const h = fields.has;
+  return h.water && h.climate && h.ocean && h.relief && h.elev && h.countries && !!fields.cpu.lanes && !!fields.cpu.pop1 && !!fields.cpu.co21 && pending.size === 0;
+}
+
+/** The frozen frame: wait for the data, then run a fixed number of seeded steps and stop. */
+async function frozenFrame() {
+  let now = lastFrame + 1e6;                                   // far past any "settled" timer
+  const deadline = performance.now() + 120000;
+  for (;;) {
+    fs.hold = true; tick(now += 1000);                         // hold: nothing random is consumed while waiting
+    if (fs.detail === 'full' && allLoaded()) break;
+    if (performance.now() > deadline) throw new Error('frozen frame: the fields never finished loading');
+    await new Promise((r) => setTimeout(r, 150));
+  }
+  await document.fonts.ready;
+  // advance the tracers without drawing (a software renderer takes half a second a frame), then draw once
+  resetTracers();
+  const L = state.layers;
+  for (let i = 0; i < FROZEN_STEPS; i++) {
+    if (L.currents) tracers.currents.step(cam, samplers.currents, 1);
+    if (L.wind) tracers.wind.step(cam, samplers.wind, 1);
+    if (L.jet) tracers.jet.step(cam, samplers.jet, 1);
+    if (L.ships) tracers.ships.step(cam, samplers.lanes, 1);
+  }
+  fs.hold = false; earthDirty = labelsDirty = true; fs.uiAt = fs.dashAt = 0;
+  tick(now += 16.7);
+  window.__FRAME_READY = true;
 }
 
 // --------------------------------------------------------------------------------------- boot
@@ -423,11 +466,31 @@ async function shot(name = 'frame.jpg', crop) {
     buildStatic(); buildTracers();
     labels.setItems(data.labelItems());
     for (const id in state.layers) if (state.layers[id]) ensureLayer(id);
-    if (LENSES[state.lens] && LENSES[state.lens].static) fields.loadStatic(LENSES[state.lens].static);
+    if (LENSES[state.lens] && LENSES[state.lens].static) { pending.add('lens'); fields.loadStatic(LENSES[state.lens].static).then(() => { pending.delete('lens'); earthDirty = true; }); }
     ui.syncControls(); feedStatus();
-    const boot = document.getElementById('boot'); boot.classList.add('gone'); setTimeout(() => boot.remove(), 900);
-    setInterval(() => { if (state.layers.quakesLive && isNow()) live.loadQuakes(); if (state.layers.aurora && isNow()) live.loadAurora(); }, 10 * 60000);
-    window.ATLAS = { ...app, gl, astro, labels, tracers, batches, shot, step: (n = 1) => { for (let i = 0; i < n; i++) tick(lastFrame + 16.7); return n; }, get flights() { return flights; }, redraw: () => { earthDirty = labelsDirty = true; } };
-    requestAnimationFrame(frame);
-  } catch (e) { bootMsg(String(e.message || e)); console.error(e); }
+    const boot = document.getElementById('boot'); boot.classList.add('gone'); setTimeout(() => boot.remove(), FROZEN ? 0 : 900);
+    if (!FROZEN) setInterval(() => { if (state.layers.quakesLive && isNow()) live.loadQuakes(); if (state.layers.aurora && isNow()) live.loadAurora(); }, 10 * 60000);
+    window.ATLAS = { ...app, gl, astro, labels, tracers, batches, shot, step: (n = 1) => { for (let i = 0; i < n; i++) tick(Math.max(lastFrame + 16.7, FROZEN ? 0 : performance.now())); return n; }, get flights() { return flights; }, redraw: () => { earthDirty = labelsDirty = true; } };
+    window.ATLAS.refView = (lon, lat, dist, discFrac) => { cam.refView(lon, lat, dist, discFrac); earthDirty = labelsDirty = true; resetTracers(); };
+    window.ATLAS.stdView = () => { cam.stdView(); earthDirty = labelsDirty = true; resetTracers(); };
+    window.ATLAS.settled = () => fs.detail === 'full' && allLoaded();
+    if (FROZEN) await frozenFrame(); else requestAnimationFrame(frame);
+    try { sessionStorage.removeItem('atlas-gl-retry'); } catch (e) { /* storage may be unavailable */ }
+  } catch (e) {
+    // A browser can take the GL context away (GPU process restart, a software renderer starting
+    // up). Nothing drawn so far can be trusted, so start again; three tries, then say so.
+    if (gl.isContextLost() && retryAfterContextLoss()) return;
+    bootMsg(String(e.message || e)); console.error(e);
+  }
 })();
+
+function retryAfterContextLoss() {
+  let n = 0;
+  try { n = +(sessionStorage.getItem('atlas-gl-retry') || 0); sessionStorage.setItem('atlas-gl-retry', String(n + 1)); } catch (e) { return false; }
+  if (n >= 3) return false;
+  bootMsg('The graphics context was lost. Starting again…');
+  setTimeout(() => location.reload(), 400 + 600 * n);
+  return true;
+}
+canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); });
+canvas.addEventListener('webglcontextrestored', () => location.reload());

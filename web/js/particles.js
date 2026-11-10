@@ -8,6 +8,14 @@ import { D2R, R2D } from './astro.js';
 
 const S = LineBatch.STRIDE;
 
+// One random source for everything that moves, so a frozen frame (main.js, ?frozen=1) can be
+// reproduced exactly: seedRandom(n) swaps Math.random for a seeded generator (mulberry32).
+let rnd = Math.random;
+export function seedRandom(seed) {
+  let a = seed >>> 0;
+  rnd = () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+}
+
 /** Tracers advected through a vector field sampled by `sample(lon, lat, out)` -> false where there is no data. */
 export class FlowTracers {
   constructor(gl, prog, n, trail, opts) {
@@ -25,13 +33,13 @@ export class FlowTracers {
     // uniform over the SCREEN, so tracer density is the same at every zoom
     let ll = null;
     for (let k = 0; k < (this.o.tries || 6); k++) {
-      ll = cam.unproject(Math.random() * cam.w, Math.random() * cam.h);
+      ll = cam.unproject(rnd() * cam.w, rnd() * cam.h);
       if (ll && (!this.o.accept || this.o.accept(ll[0], ll[1]))) break;
       ll = null;
     }
     if (!ll) { this.age[i] = 1e9; return; }
     for (let t = 0; t < this.trail; t++) { this.lon[i * this.trail + t] = ll[0]; this.lat[i * this.trail + t] = ll[1]; }
-    this.age[i] = 0; this.life[i] = this.o.life * (0.5 + Math.random());
+    this.age[i] = 0; this.life[i] = this.o.life * (0.5 + rnd());
     this.fresh[i] = 1; this.dir[i * 2] = 0; this.dir[i * 2 + 1] = 0;
   }
 
@@ -166,7 +174,7 @@ export function makeSamplers(fields, getMonth) {
     const th = 0.5 * Math.atan2(s2, c2);                              // lane orientation in image coordinates (y south)
     let ex = Math.cos(th), ny = -Math.sin(th);                        // east, north
     // a lane has no sign; each tracer keeps the heading it started with
-    if (dir[i * 2] === 0 && dir[i * 2 + 1] === 0) { if (Math.random() < 0.5) { ex = -ex; ny = -ny; } dir[i * 2] = ex; dir[i * 2 + 1] = ny; }
+    if (dir[i * 2] === 0 && dir[i * 2 + 1] === 0) { if (rnd() < 0.5) { ex = -ex; ny = -ny; } dir[i * 2] = ex; dir[i * 2 + 1] = ny; }
     else if (ex * dir[i * 2] + ny * dir[i * 2 + 1] < 0) { ex = -ex; ny = -ny; }
     // blend with the previous heading: lanes bend smoothly, tensor noise does not
     const bx = dir[i * 2] * 0.6 + ex * 0.4, by = dir[i * 2 + 1] * 0.6 + ny * 0.4, bl = Math.hypot(bx, by) || 1;
@@ -177,7 +185,7 @@ export function makeSamplers(fields, getMonth) {
   const laneAccept = (lon, lat) => {
     const k = laneAt(lon, lat); if (k < 0) return false;
     const r = fields.cpu.lanes.d[k + 2] / 255;
-    return r > 0.2 && Math.random() < r * 1.3;                        // tracers start on ridges, more on stronger ones
+    return r > 0.2 && rnd() < r * 1.3;                        // tracers start on ridges, more on stronger ones
   };
   return { wind: vec('u10', 'v10'), jet: vec('u250', 'v250'), currents: vec('ucur', 'vcur'), lanes, laneAccept };
 }

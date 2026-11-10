@@ -4,7 +4,7 @@
 import { D2R, R2D, lonLatToVec, norm180 } from './astro.js';
 
 export const R_KM = 6371.0088;
-const TAN_HALF_FOV = Math.tan(15 * D2R);          // 30 degree vertical field of view
+const TAN_HALF_FOV_DEFAULT = Math.tan(15 * D2R);  // 30 degree vertical field of view
 const WT_C = 2 / Math.PI;
 export const WT_XMAX = 1 + Math.PI / 2, WT_YMAX = Math.PI / 2;
 
@@ -45,6 +45,7 @@ export class Camera {
     this.mapCenter = [0, 0];                // sheet: projected coords at the screen centre
     this.mapUnitsPerPx = 0.005;             // sheet: projected units per CSS px
     this.w = 1; this.h = 1; this.dpr = 1;
+    this.tanHalfFov = TAN_HALF_FOV_DEFAULT;
   }
   resize(w, h, dpr) {
     this.w = Math.max(1, w); this.h = Math.max(1, h); this.dpr = dpr;
@@ -63,11 +64,11 @@ export class Camera {
 
   /** km of ground per CSS pixel at the view centre. */
   kmPerPx() {
-    if (this.view === 'globe') return (this.dist - 1) * R_KM * 2 * TAN_HALF_FOV / this.h;
+    if (this.view === 'globe') return (this.dist - 1) * R_KM * 2 * this.tanHalfFov / this.h;
     return this.mapUnitsPerPx * R_KM;
   }
   setKmPerPx(k) {
-    if (this.view === 'globe') this.dist = Math.max(1.02, Math.min(12, 1 + k * this.h / (R_KM * 2 * TAN_HALF_FOV)));
+    if (this.view === 'globe') this.dist = Math.max(1.02, Math.min(12, 1 + k * this.h / (R_KM * 2 * this.tanHalfFov)));
     else this.mapUnitsPerPx = Math.max(1e-5, Math.min(0.02, k / R_KM));
   }
 
@@ -78,7 +79,7 @@ export class Camera {
       uViewport: [this.w * this.dpr, this.h * this.dpr],
       uCamPos: b.pos,
       uCamBasis: [...b.right, ...b.up, ...b.f],                    // column-major mat3
-      uTanHalfFov: TAN_HALF_FOV,
+      uTanHalfFov: this.tanHalfFov,
       uMapCenter: this.mapCenter,
       uMapScale: this.mapUnitsPerPx / this.dpr,
     };
@@ -104,7 +105,7 @@ export class Camera {
       const xc = vx * b.right[0] + vy * b.right[1] + vz * b.right[2];
       const yc = vx * b.up[0] + vy * b.up[1] + vz * b.up[2];
       const aspect = this.w / this.h;
-      return [(xc / (zc * TAN_HALF_FOV * aspect) * 0.5 + 0.5) * this.w, (0.5 - yc / (zc * TAN_HALF_FOV) * 0.5) * this.h];
+      return [(xc / (zc * this.tanHalfFov * aspect) * 0.5 + 0.5) * this.w, (0.5 - yc / (zc * this.tanHalfFov) * 0.5) * this.h];
     }
     const xy = wtForward(lon * D2R, lat * D2R);
     return [(xy[0] - this.mapCenter[0]) / this.mapUnitsPerPx + this.w / 2, this.h / 2 - (xy[1] - this.mapCenter[1]) / this.mapUnitsPerPx];
@@ -117,7 +118,7 @@ export class Camera {
     if (this.view === 'globe') {
       const b = this.basis();
       const aspect = this.w / this.h;
-      const nx = (x / this.w * 2 - 1) * TAN_HALF_FOV * aspect, ny = (1 - y / this.h * 2) * TAN_HALF_FOV;
+      const nx = (x / this.w * 2 - 1) * this.tanHalfFov * aspect, ny = (1 - y / this.h * 2) * this.tanHalfFov;
       let d = [0, 1, 2].map((i) => b.right[i] * nx + b.up[i] * ny + b.f[i]);
       const dl = Math.hypot(...d); d = d.map((v) => v / dl);
       const bb = b.pos[0] * d[0] + b.pos[1] * d[1] + b.pos[2] * d[2];
@@ -159,13 +160,26 @@ export class Camera {
       }
     }
   }
-  maxKmPerPx() { return this.view === 'globe' ? 11 * R_KM * 2 * TAN_HALF_FOV / this.h : 2.3 * WT_XMAX * R_KM / this.w; }
+  maxKmPerPx() { return this.view === 'globe' ? 11 * R_KM * 2 * this.tanHalfFov / this.h : 2.3 * WT_XMAX * R_KM / this.w; }
 
   /** The framing that shows the whole Earth. */
   home() {
     if (this.view === 'globe') this.dist = 1 + 4.3 * Math.max(1, (this.h / this.w) * 1.15);
     else { this.mapCenter = [0, 0]; this.mapUnitsPerPx = Math.max(2 * WT_XMAX / (this.w * 0.94), 2 * WT_YMAX / (this.h * 0.86)); }
   }
+
+  /**
+   * A reference camera for scoring against a photograph: stand `dist` Earth radii above (lon, lat)
+   * with north up and a field of view chosen so the disc's diameter is `discFrac` of the frame
+   * height. NASA EPIC sits near 235 radii with the disc at about 0.8 of its frame.
+   */
+  refView(lon, lat, dist, discFrac) {
+    this.view = 'globe'; this._placed = true;
+    this.lon = norm180(lon); this.lat = lat; this.dist = dist;
+    this.tanHalfFov = Math.tan(Math.asin(1 / dist)) / discFrac;
+  }
+  /** Back to the atlas's own 30 degree camera. */
+  stdView() { this.tanHalfFov = TAN_HALF_FOV_DEFAULT; this.home(); }
 
   /** Centre on a place. On the sheet this moves the paper; on the globe it turns the planet. */
   lookAt(lon, lat) {

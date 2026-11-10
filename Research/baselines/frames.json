@@ -1,0 +1,28 @@
+{
+  "base_url": "http://localhost:8150",
+  "viewport": {"width": 1440, "height": 900},
+  "device_scale_factor": 1,
+  "ready": {
+    "expr": "window.__FRAME_READY === true",
+    "timeout_ms": 240000,
+    "note": "?frozen=1 pins the clock to #t=, seeds the tracers, runs 240 tracer steps without the wall clock and then sets __FRAME_READY (web/js/main.js, frozenFrame). Headless Chromium usually loses its first GL context under software GL; the app reloads itself and the second boot renders."
+  },
+  "nav_timeout_ms": 120000,
+  "settle_ms": 300,
+  "thresholds": {"changed_frac": 0.002, "mean_abs": 1.0},
+  "blank_variance_floor": 4.0,
+  "frames": [
+    {"name": "globe-default", "path": "/?frozen=1#t=2026-06-21T12:00Z&v=globe&s=space&ll=30,20&on=daylight,clouds,air,ice,lights,borders,labels",
+     "note": "the frame the rule-0 check is run on: day, dusk and night over Africa and Asia"},
+    {"name": "globe-night-asia", "path": "/?frozen=1#t=2026-01-15T16:00Z&v=globe&s=space&ll=115,30&on=daylight,clouds,air,ice,lights,borders,labels",
+     "note": "city lights, moonlight, the limb against stars"},
+    {"name": "globe-motion-atlantic", "path": "/?frozen=1#t=2026-09-10T15:00Z&v=globe&s=space&ll=-40,30&km=9&on=daylight,clouds,air,ice,wind,currents,ships",
+     "note": "seeded tracers: wind, currents, ship lanes"},
+    {"name": "region-himalaya", "path": "/?frozen=1#t=2026-10-15T06:30Z&v=globe&s=space&ll=86,28&km=3&on=daylight,air,ice,borders,labels,rivers",
+     "note": "relief, snow line and labels near the zoom floor, clouds off"},
+    {"name": "sheet-atlas", "path": "/?frozen=1#t=2026-06-21T12:00Z&v=sheet&s=atlas&on=daylight,borders,labels,ice,graticule",
+     "note": "the National Geographic register: Winkel Tripel, political tints, names"},
+    {"name": "sheet-lens-temp", "path": "/?frozen=1#t=2026-07-15T12:00Z&v=sheet&s=space&lens=temp&on=daylight,ice,borders",
+     "note": "a data lens through the palette table"}
+  ]
+}

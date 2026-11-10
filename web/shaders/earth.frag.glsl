@@ -94,6 +94,66 @@ float cloudAt(vec2 uv, vec2 flowUV, float frac) {
   return clamp(c * gain - 0.10 * (1.0 - frac), 0.0, 1.0);
 }
 
+// ---- the air ----------------------------------------------------------------------------------
+// Rayleigh scattering, single-scattered, per channel (about 650 / 550 / 450 nm). One model serves
+// the haze over the disc and the glow off the limb, so the limb is as thin as the real air is:
+// scale height 8 km. Scored against NASA EPIC by Research/modeling/epic_compare.py (register A1).
+const vec3 TAU_R = vec3(0.045, 0.100, 0.240);      // vertical optical depth of a clear atmosphere
+const float SUN_E = 1.55;                          // the Sun's strength in the units the surface is lit in
+const float AIR_MS = 1.25;                         // multiple scattering, as a gain on the single-scattered light
+const float H_AIR = 0.001256;                      // 8 km in Earth radii
+// relative air mass along a ray at cosine `mu` from the vertical: Kasten & Young (1989); about 38 at the horizon
+float airmass(float mu) {
+  float h = degrees(asin(clamp(mu, 0.0, 1.0)));
+  return 1.0 / (max(mu, 0.0) + 0.50572 * pow(6.07995 + h, -1.6364));
+}
+float rayleighPhase(float c) { return 0.1875 * (1.0 + c * c); }   // (3/16)(1 + cos^2): radiance factor per unit of scattering
+
+// ---- scene light to display -------------------------------------------------------------------
+// One exposure and one gamma, with a soft shoulder so glints and the Sun roll off instead of
+// clipping. Fitted to NASA EPIC's natural-colour product over eight frames: clear ocean, desert
+// and bright cloud land on the photograph's display values (epic_compare.py; register A1).
+const float EXPO = 0.43, GAMMA = 1.914;
+vec3 display(vec3 c) {
+  vec3 s = max(c, 0.0) * EXPO;
+  s = mix(s, 0.6 + 0.4 * tanh((s - 0.6) / 0.4), step(0.6, s));
+  return pow(s, vec3(1.0 / GAMMA));
+}
+// the scene value that will be displayed as d: palettes and map inks are authored in display values
+vec3 fromDisplay(vec3 d) { return pow(d, vec3(GAMMA)) / EXPO; }
+const float NIGHT_GAIN = 3.0;      // faint light (cities, moonlight, stars, aurora) is not scored by a daylit photograph; this keeps it where it was set by eye
+
+// Cumulus over humid land. Through the morning the ground heats, the air above it overturns and
+// small clouds stud every vegetated region until evening; deserts and the open sea stay clear of
+// them. Coverage follows the month's rainfall and the local solar time. The cells are the cloud
+// photograph again at nine times the frequency (about 1 km a texel), cut at the level that gives
+// the wanted coverage: `th` is the texture's own measured quantile curve. MODELLED.
+// Why it exists: against NASA EPIC the clearest twentieth of vegetated land was 25 display levels
+// brighter than bare ground under clear air, in every latitude band, while desert and ocean matched.
+float vnoise(vec2 x) {
+  vec2 i = floor(x), f = fract(x);
+  f = f * f * (3.0 - 2.0 * f);
+  vec2 j = vec2(mod(i.x + 1.0, 16000.0), i.y + 1.0);            // periodic in longitude
+  return mix(mix(hash12(i), hash12(vec2(j.x, i.y)), f.x), mix(hash12(vec2(i.x, j.y)), hash12(j), f.x), f.y);
+}
+float cumulusAt(vec2 uv, float humid, float lst) {
+  float heat = 0.12 + 0.88 * smoothstep(8.0, 12.5, lst) * (1.0 - smoothstep(17.0, 21.0, lst));
+  float c = 0.42 * humid * heat;                                  // fraction of the ground under a cell
+  if (c < 0.004) return 0.0;
+  // cells gather into fields tens to hundreds of km across: the cloud photograph at five times the
+  // frequency sets where the fields are (its mean in this band is 0.194, so the envelope averages 1)
+  vec2 q = vec2(uv.x * 5.0 + 0.13, 0.25 + 0.5 * abs(fract(uv.y * 2.5) * 2.0 - 1.0));
+  float env = clamp(textureGrad(uClouds, q, gDx * 5.0, gDy * 2.5).r / 0.194, 0.0, 2.4);
+  c = min(0.62, c * env);
+  // the cells themselves are 2-3 km: smaller than a pixel from orbit, where they go to their mean
+  vec2 x = uv * vec2(16000.0, 8000.0);
+  float n = 0.65 * vnoise(x) + 0.35 * vnoise(x * 2.13 + 7.7);
+  float th = 0.5 + (0.5 - c) * 0.62;
+  float cells = smoothstep(th - 0.07, th + 0.07, n);
+  float lod = log2(max(length(gDx) * 16000.0, length(gDy) * 8000.0) + 1e-6);
+  return 0.55 * mix(cells, c, smoothstep(-0.5, 1.5, lod));
+}
+
 vec3 palette(float v) { return texture(uLut, vec2(clamp(v, 0.002, 0.998), (uLensRow + 0.5) / 16.0)).rgb; }
 
 // stars, the Sun and the Moon, for rays that leave the planet
@@ -106,7 +166,7 @@ vec3 space(vec3 rd, float limbH, vec3 tangentN) {
   if (h > 0.9972) {
     vec3 c = (g + 0.5) / 260.0;
     float fall = smoothstep(0.0013, 0.0, length(d - c));
-    col += vec3(0.75, 0.82, 1.0) * fall * (0.25 + 4.0 * (h - 0.9972) / 0.0028) * 0.45;
+    col += vec3(0.75, 0.82, 1.0) * fall * (0.25 + 4.0 * (h - 0.9972) / 0.0028) * 0.45 * NIGHT_GAIN;
   }
   float sd = dot(rd, uSun);
   float sunAng = length(cross(rd, uSun));                       // sine of the angle; exact near zero where a dot product is not
@@ -118,15 +178,21 @@ vec3 space(vec3 rd, float limbH, vec3 tangentN) {
     float r2 = dot(off, off);
     if (r2 < 1.0) {
       vec3 nrm = normalize(off - uMoon * sqrt(1.0 - r2));
-      col = vec3(0.62, 0.60, 0.56) * (0.02 + max(dot(nrm, uSun), 0.0)) * 1.4;
+      col = vec3(0.62, 0.60, 0.56) * (0.02 + max(dot(nrm, uSun), 0.0)) * 2.2;
     }
   }
-  if (uAtmoOn > 0.5 && limbH < 0.2) {
+  if (uAtmoOn > 0.5 && limbH < 0.08) {
+    // The limb: a ray that misses the ground still crosses air. Its grazing optical depth is the
+    // vertical one times sqrt(2 pi R / H), about 70, falling with the tangent height's scale height.
+    // Far away the whole glow is thinner than a pixel, so it is spread to half a pixel and dimmed
+    // by the same factor: the light is conserved and the edge is anti-aliased.
     float sunT = dot(tangentN, uSun);
-    vec3 ray = vec3(0.20, 0.42, 0.95);
-    float inten = exp(-limbH / 0.009) * 1.15 + exp(-limbH / 0.030) * 0.22;
-    col += ray * inten * smoothstep(-0.20, 0.22, sunT);
-    col += vec3(1.0, 0.42, 0.14) * exp(-limbH / 0.010) * exp(-pow((sunT + 0.03) / 0.085, 2.0)) * 0.9;
+    float px = sqrt(max(dot(uCamPos, uCamPos) - 1.0, 0.0)) * 2.0 * uTanHalfFov / uViewport.y;
+    float He = max(H_AIR, 0.5 * px);
+    float dens = exp(-limbH / He);
+    float amS = airmass(sunT);
+    vec3 lit = exp(-TAU_R * dens * amS) * smoothstep(-0.12, 0.03, sunT);     // sunlight that reaches the tangent point
+    col += SUN_E * AIR_MS * rayleighPhase(dot(uSun, rd)) * (38.0 / (38.0 + amS)) * (1.0 - exp(-TAU_R * 70.7 * dens)) * lit * (H_AIR / He);
   }
   return col;
 }
@@ -159,9 +225,9 @@ void main() {
   if (!hit) {
     vec3 bg;
     if (uView == 0) bg = uStyle == 0 ? space(rd, limbH, N) : vec3(0.030, 0.045, 0.075) + vec3(0.25, 0.42, 0.7) * exp(-limbH / 0.02) * 0.25;
-    else bg = uStyle == 0 ? vec3(0.006, 0.008, 0.014) : vec3(0.030, 0.045, 0.075);
-    bg = bg / (1.0 + bg);
-    fragColor = vec4(pow(bg, vec3(1.0 / 2.2)) + dither, 1.0);
+    else bg = uStyle == 0 ? vec3(0.010, 0.014, 0.026) : vec3(0.030, 0.045, 0.075);
+    bg = uStyle == 0 ? display(bg) : pow(bg / (1.0 + bg), vec3(1.0 / 2.2));
+    fragColor = vec4(bg + dither, 1.0);
     return;
   }
 
@@ -203,13 +269,14 @@ void main() {
 
   // ---- clouds -------------------------------------------------------------------------------
   vec2 flowUV = vec2(wind.x / coslat / (2.0 * PI), -wind.y / PI) * (3600.0 / 6371008.8) * 2.5;   // uv per hour, x2.5 so drift reads at global scale
-  float cloud = 0.0, cloudSh = 0.0, cloudSun = 0.0;
+  float cloud = 0.0, cloudSh = 0.0, cloudSun = 0.0, cum = 0.0;
   vec2 sunStep = vec2(sunE / coslat / (2.0 * PI), -sunN / PI);
   if (uCloudsOn > 0.5 && uHasLive < 0.5) {
     cloud = cloudAt(uv, flowUV, cloudFrac);
     float slant = 1.0 / max(mu0, 0.18);
     cloudSh = cloudAt(uv + sunStep * 0.0035 * slant, flowUV, cloudFrac);     // what stands between this ground and the Sun
     cloudSun = cloudAt(uv + sunStep * 0.0016, flowUV, cloudFrac);            // the cloud's own sunward neighbour
+    cum = cumulusAt(uv, (1.0 - water) * smoothstep(0.4, 6.0, precip), lst);
   }
 
   // ---- relief normal ------------------------------------------------------------------------
@@ -221,9 +288,9 @@ void main() {
   if (uStyle == 0) {
     // =============================== Earth from space ========================================
     vec3 trans = exp(-vec3(0.040, 0.095, 0.225) * (1.0 / (max(mu0, 0.0) + 0.055) - 0.948));   // sunlight reddens through a long air path
-    vec3 sunL = 1.55 * trans * pow(max(mu0, 0.0), 0.72);
+    vec3 sunL = SUN_E * trans * max(mu0, 0.0);                    // Lambert: the limb of a full disc darkens as the photograph's does
     vec3 skyL = vec3(0.115, 0.165, 0.275) * smoothstep(-0.20, 0.30, mu0);
-    vec3 moonL = vec3(0.010, 0.013, 0.022) * (0.25 + 0.75 * uMoonLit * smoothstep(-0.1, 0.4, dot(N, uMoon))) * (1.0 - dayF);
+    vec3 moonL = NIGHT_GAIN * vec3(0.010, 0.013, 0.022) * (0.25 + 0.75 * uMoonLit * smoothstep(-0.1, 0.4, dot(N, uMoon))) * (1.0 - dayF);
     float shade = clamp(dot(n, uSun) / max(mu0, 0.10), 0.0, 2.4);
     shade = mix(1.0, shade, smoothstep(-0.02, 0.10, mu0) * (1.0 - water));
     lensShade = shade;
@@ -233,7 +300,8 @@ void main() {
 
     // water: one colour, shaded; a shelf tint; sky reflection; Sun glint whose width is the wind's
     float depth = max(-z, 0.0);
-    vec3 seaC = mix(vec3(0.0055, 0.026, 0.070), vec3(0.018, 0.105, 0.135), 0.75 * exp(-depth / 75.0) * uHasElev);
+    // open-ocean water-leaving reflectance is a few percent in the blue and almost nothing in the red
+    vec3 seaC = mix(vec3(0.006, 0.020, 0.044), vec3(0.018, 0.085, 0.110), 0.75 * exp(-depth / 75.0) * uHasElev);
     vec3 sea = seaC * (sunL * shadow * 0.9 + skyL * 1.6 + moonL * 2.0);
     float nv = max(dot(N, V), 0.0);
     float fres = 0.02 + 0.98 * pow(1.0 - nv, 5.0);
@@ -242,7 +310,9 @@ void main() {
     vec3 H = normalize(uSun + V);
     float nh = max(dot(N, H), 1e-3);
     float D = exp(-(1.0 - nh * nh) / (nh * nh) / s2) / (PI * s2 * nh * nh * nh * nh);
-    float glint = D * 0.022 / (4.0 * max(nv, 0.10)) * step(0.0, mu0) * (uView == 0 ? 3.0 : 1.2);
+    // radiance factor of a rough sea: Fresnel 0.021 * pi * D / (4 mu_view), in the Sun's units. On the
+    // sheet there is no single viewpoint, so the glint is kept as a faint mark of the sub-solar point.
+    float glint = D * 0.021 * PI / (4.0 * max(nv, 0.10)) * step(0.0, mu0) * (uView == 0 ? SUN_E : 0.4);
     sea += trans * vec3(1.0, 0.96, 0.88) * glint * (1.0 - cloud) * shadow;
     vec3 iceC = vec3(0.80, 0.86, 0.92) * (sunL * shadow + skyL * 1.2 + moonL * 3.0);
     sea = mix(sea, iceC, smoothstep(0.08, 0.80, ice));
@@ -258,27 +328,37 @@ void main() {
 
     // clouds, lit by the same Sun, self-shaded on their sunward gradient
     float selfSh = clamp(1.0 - (cloudSun - cloud) * 2.2, 0.55, 1.15);
-    vec3 cloudC = vec3(0.93, 0.95, 0.98) * (sunL * selfSh * 1.05 + skyL * 1.25 + moonL * 4.0);
-    col = mix(col, cloudC, cloud * 0.94);
+    vec3 cloudC = vec3(0.96) * (sunL * selfSh * 1.05 + skyL * 0.7 + moonL * 4.0);
+    // Opacity from the texture's density. The upper half is steepened so thick cloud is opaque and
+    // neutral: set by matching the brightness distribution over open ocean to EPIC's, percentile
+    // by percentile (they agreed below the 60th and the atlas ran 20-30% dim above it).
+    float cloudA = min(1.0, cloud * (1.0 + 0.65 * smoothstep(0.25, 0.80, cloud)));
+    cloudA = 1.0 - (1.0 - cloudA) * (1.0 - cum);                   // cumulus under and between the larger systems
+    col = mix(col, cloudC, cloudA);
+    cloud = max(cloud, cum);                                       // what the air and the city lights below see
 
     // the dark side: electric light
     if (uNightOn > 0.5) {
       float glow = night * (1.0 - dayF) * (1.0 - 0.72 * cloud);
-      col += vec3(1.0, 0.72, 0.38) * glow * 2.6 + vec3(1.0, 0.90, 0.75) * glow * glow * 3.0;
+      col += NIGHT_GAIN * (vec3(1.0, 0.72, 0.38) * glow * 2.6 + vec3(1.0, 0.90, 0.75) * glow * glow * 3.0);
     }
     // aurora (LIVE only): OVATION probability on the dark side
     if (uHasAurora > 0.5) {
       float au = texture(uAurora, uv).r;
-      col += vec3(0.10, 0.95, 0.45) * smoothstep(0.04, 0.6, au) * (1.0 - dayF) * 0.9;
+      col += NIGHT_GAIN * vec3(0.10, 0.95, 0.45) * smoothstep(0.04, 0.6, au) * (1.0 - dayF) * 0.9;
     }
     // air between the ground and the camera
     if (uAtmoOn > 0.5) {
-      float am = 1.0 / max(nv, 0.10);
-      vec3 ray = vec3(0.16, 0.33, 0.74);
-      float lit = smoothstep(-0.09, 0.20, mu0);
-      col = col * exp(-vec3(0.010, 0.022, 0.050) * (am - 1.0)) + ray * (1.0 - exp(-0.062 * am)) * lit * 0.95;
-      // the terminator's sunset band: a long slant path, so it shows towards the limb and not from directly above
-      col += vec3(1.0, 0.40, 0.13) * exp(-pow((mu0 - 0.015) / 0.075, 2.0)) * 0.030 * clamp(am - 1.15, 0.0, 6.0);
+      // Less air lies above high ground and above cloud tops. The ground's light is dimmed along the
+      // view path, and the air adds its own: (3/16)(1+cos^2) * muS/(muS+muV) * (1 - exp(-tau(mV+mS))).
+      // The warm band at the terminator is not added here: it is the reddened sunlight (trans) on
+      // whatever it lights.
+      vec3 tau = TAU_R * exp(-max(z, 0.0) / 8000.0) * mix(1.0, 0.40, cloud);
+      float amV = airmass(nv), amS = airmass(mu0);
+      vec3 inscat = SUN_E * AIR_MS * rayleighPhase(dot(uSun, V)) * (amV / (amV + amS)) * (1.0 - exp(-tau * (amV + amS)));
+      // 0.6: about half of what the direct beam loses still arrives as skylight. The +1 is the Sun's
+      // own vertical column; `trans` above carries only the extra path of a low Sun.
+      col = col * exp(-tau * 0.6 * (amV + 1.0)) + inscat * smoothstep(-0.10, 0.02, mu0);
     }
   } else {
     // =================================== Atlas ===============================================
@@ -334,12 +414,12 @@ void main() {
     else if (uLens == LENS_GREEN) { vec3 s = pow(alb, vec3(1.0 / 2.2)); v = clamp((2.0 * s.g - s.r - s.b) * 3.2, 0.0, 1.0); a *= (1.0 - water); }
     else if (uLens == LENS_SOLAR) { v = max(mu0, 0.0); a *= smoothstep(-0.02, 0.05, mu0); }
     else if (uLens == LENS_LIGHTS) { v = sqrt(night); a *= smoothstep(0.0, 0.15, v); }
-    vec3 lc = toLinear(palette(v));
+    vec3 lc = uStyle == 0 ? fromDisplay(palette(v)) : toLinear(palette(v));
     float lit = uStyle == 0 ? max(dayF, 0.55) : 1.0;
     float relief = (uLens == LENS_SST || uLens == LENS_ICE || uLens == LENS_SHIPS) ? 1.0 : mix(1.0, clamp(lensShade, 0.35, 1.6), 0.5);
     col = mix(col, lc * lit * relief, a);
   }
 
-  if (uStyle == 0) col = col * (1.0 + col / 9.0) / (1.0 + col);     // Reinhard, white point 3; the Atlas register is display-referred already
-  fragColor = vec4(pow(max(col, 0.0), vec3(1.0 / 2.2)) + dither, 1.0);
+  // the Atlas register is display-referred already
+  fragColor = vec4((uStyle == 0 ? display(col) : pow(max(col, 0.0), vec3(1.0 / 2.2))) + dither, 1.0);
 }
