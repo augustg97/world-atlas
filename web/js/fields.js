@@ -8,7 +8,14 @@
 import { loadBitmap, texFromImage, texFromData, texSolid, packRG, texArrayFromPixels, pixelsOf, getJSON, stamped } from './gl.js';
 import { monthState } from './astro.js';
 
-export const UNIT = { albA: 0, albB: 1, relief: 2, waterNight: 3, elev: 4, clouds: 5, atmoA: 6, atmoB: 7, oceanA: 8, countries: 9, lens2D: 10, lut: 11, live: 12, aurora: 13 };
+export const UNIT = { albA: 0, albB: 1, relief: 2, waterNight: 3, elev: 4, clouds: 5, atmoA: 6, atmoB: 7, oceanA: 8, countries: 9, lens2D: 10, lut: 11, live: 12, aurora: 13,
+  detAlb: 14, detElev: 15 };     // the focus window's streamed imagery and elevation (js/detail.js)
+// SIXTEEN SAMPLERS IS THE LIMIT. WebGL 2 guarantees a fragment shader 16 texture units and no more, and that is what
+// real hardware gives (Apple M5 Ultra on ANGLE Metal: MAX_TEXTURE_IMAGE_UNITS = 16); software GL allows 32, so a
+// seventeenth sampler links in every headless check and blacks the page in a real browser. No sampler can be added to
+// earth.frag.glsl without removing one. This is why the cloud-type atlas (cloudT) has no unit of its own: its twelve
+// months ride in the atmoB array as layers 12-23. Check on hardware with scratchpad/detail_gpu_limits.py.
+const ARRAYS = new Set(['atmoA', 'atmoB', 'oceanA']);                 // the units that hold a TEXTURE_2D_ARRAY
 const F = 'fields/';
 const pad = (m) => String(m + 1).padStart(2, '0');
 
@@ -21,6 +28,9 @@ export class Fields {
     for (const k of ['albA', 'albB', 'waterNight', 'clouds', 'countries', 'lens2D', 'lut', 'live', 'aurora']) this.tex[k] = black;
     this.tex.relief = grey; this.tex.elev = texSolid(gl, [140, 204, 0, 255]);        // ~0 m
     for (const k of ['atmoA', 'atmoB', 'oceanA']) this.tex[k] = texArrayFromPixels(gl, 1, 1, 12, new Uint8Array(48).fill(128));
+    // the focus window's samplers hold these until js/detail.js has a window, and again when it lets one go
+    this.placeholder = { detAlb: black, detElev: black };
+    this.tex.detAlb = black; this.tex.detElev = black;
     this.albedo = Array.from({ length: 12 }, () => ({ preview: null, full: null, loading: false, used: 0 }));
     this.lens = {};                       // name -> texture for the static lens fields
     this.bytes = 0;
@@ -53,15 +63,23 @@ export class Fields {
     const climate = this._load('climate', async () => {
       await metas;
       const A = this.meta.climate.atlases;
-      const imgs = await Promise.all(['atmoA', 'atmoB', 'atmoC', 'oceanA', 'oceanB'].map((k) => loadBitmap(F + A[k].file)));
-      ['atmoA', 'atmoB', 'atmoC', 'oceanA', 'oceanB'].forEach((k, i) => {
+      const names = ['atmoA', 'atmoB', 'atmoC', 'oceanA', 'oceanB'];
+      if (A.cloudT) names.push('cloudT');                              // only once the build ships it
+      const imgs = await Promise.all(names.map((k) => loadBitmap(F + A[k].file)));
+      names.forEach((k, i) => {
         const { w, h } = A[k];
         const px = pixelsOf(imgs[i]);
         this.cpu[k] = { w, h, d: px, channels: A[k].channels };
-        if (UNIT[k] !== undefined) this.tex[k] = texArrayFromPixels(gl, w, h, 12, px);
+        if (UNIT[k] !== undefined && k !== 'atmoB') this.tex[k] = texArrayFromPixels(gl, w, h, 12, px);
         imgs[i].close();
       });
-      this.has.climate = true; this.has.ocean = true;
+      // atmoB's array carries the cloud-type atlas behind its own twelve months (layers 12-23) when the build ships one
+      // on the same grid; the shader reads those layers only when uHasCloudT says they are there
+      const b = this.cpu.atmoB, c = this.cpu.cloudT, joined = !!c && c.w === b.w && c.h === b.h && c.d.length === b.d.length;
+      if (c && !joined) console.error(`cloudT is ${c.w} x ${c.h}, atmoB ${b.w} x ${b.h}: cloud types left out`);
+      if (joined) { const both = new Uint8Array(b.d.length * 2); both.set(b.d, 0); both.set(c.d, b.d.length); this.tex.atmoB = texArrayFromPixels(gl, b.w, b.h, 24, both); }
+      else this.tex.atmoB = texArrayFromPixels(gl, b.w, b.h, 12, b.d);
+      this.has.climate = true; this.has.ocean = true; this.has.cloudT = joined;
     });
     const clouds = this._load('clouds', async () => { const b = await loadBitmap(F + 'clouds.jpg'); this.tex.clouds = texFromImage(gl, b, { format: 'r' }); b.close(); });
     await Promise.all([first, metas]);
@@ -159,8 +177,7 @@ export class Fields {
     const gl = this.gl;
     for (const k in UNIT) {
       gl.activeTexture(gl.TEXTURE0 + UNIT[k]);
-      const arr = k === 'atmoA' || k === 'atmoB' || k === 'oceanA';
-      gl.bindTexture(arr ? gl.TEXTURE_2D_ARRAY : gl.TEXTURE_2D, this.tex[k]);
+      gl.bindTexture(ARRAYS.has(k) ? gl.TEXTURE_2D_ARRAY : gl.TEXTURE_2D, this.tex[k]);
     }
     gl.activeTexture(gl.TEXTURE0);
   }
@@ -193,8 +210,10 @@ export class Fields {
   climate(name, lon, lat, ms) {
     if (!this.has.climate) return NaN;
     const where = { u10: ['atmoA', 0], v10: ['atmoA', 1], t0: ['atmoA', 2], slp: ['atmoB', 0], cloud: ['atmoB', 1], precip: ['atmoB', 2],
-      u250: ['atmoC', 0], v250: ['atmoC', 1], sst: ['oceanA', 0], ice: ['oceanA', 1], ucur: ['oceanB', 0], vcur: ['oceanB', 1] }[name];
+      u250: ['atmoC', 0], v250: ['atmoC', 1], sst: ['oceanA', 0], ice: ['oceanA', 1], ucur: ['oceanB', 0], vcur: ['oceanB', 1],
+      deck: ['cloudT', 0], cu: ['cloudT', 1], light: ['cloudT', 2] }[name];
     const f = this.cpu[where[0]];
+    if (!f) return NaN;                                               // an atlas that has not shipped
     if (where[0].startsWith('ocean')) {
       const valid = f.d[ms.i0 * f.h * f.w * 4 + this._px(f, lon, lat) * 4 + 2];
       if (valid < 128) return NaN;

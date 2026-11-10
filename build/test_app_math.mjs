@@ -3,6 +3,10 @@
 // projection by round trip, and the camera by projecting and unprojecting the same point.
 import { sun, moon, dayLength, monthState, gmstDeg } from '../web/js/astro.js';
 import { wtForward, wtInverse, Camera } from '../web/js/camera.js';
+import { GIBS, gibsTileDeg, gibsTexelDeg, gibsMatrix, gibsPixel, gibsLonLat, gibsTile, gibsTileBounds, TERRAIN, mercY, mercLat, terrPixel, terrLonLat, terrTile,
+  terrTileBounds, terrDecode, terrTexelDeg, terrTexelKm, tentTaps, compositeElevation, shippedElevation, planDetail, viewBox, windowHolds, windowUniforms, PLAN, KM_PER_DEG } from '../web/js/detail.js';
+import { inflateSync } from 'node:zlib';
+import { readFileSync, existsSync } from 'node:fs';
 
 let bad = 0;
 const ok = (name, cond, detail = '') => { console.log(`  ${cond ? 'ok  ' : 'FAIL'} ${name} ${detail}`); if (!cond) bad++; };
@@ -66,6 +70,246 @@ for (const view of ['globe', 'sheet']) {
   ok(`${view}: km per pixel is what was asked`, near(c.kmPerPx(), 4, 1e-6));
 }
 { const c = new Camera(); c.resize(1440, 900, 2); c.home(); c.lookAt(0, 0); ok('globe: the far side is hidden', c.project(180, 0) === null && c.project(0, 0) !== null); }
+
+
+// ------------------------------------------------------------------ the focus window (js/detail.js)
+// Two tilings are converted into the canonical frame here: NASA GIBS (EPSG:4326, already
+// equirectangular) and the AWS Terrain Tiles (Web Mercator). The arithmetic is checked against each
+// service's own published numbers, by round trip, against an analytic surface, and then against the
+// data: a real tile must hold Mount Everest and the Dead Sea where the arithmetic says they are, and
+// streamed heights averaged onto the shipped elevation grid must match it with no shift.
+
+// GIBS "500m" tile matrix set, as its WMTSCapabilities.xml states it (read 2026-11-10)
+{
+  const caps = [[2, 1], [3, 2], [5, 3], [10, 5], [20, 10], [40, 20], [80, 40], [160, 80]];
+  ok('GIBS 500m: matrix sizes of levels 0-7 are the capabilities document\'s', caps.every(([w, h], L) => gibsMatrix(L).w === w && gibsMatrix(L).h === h));
+  // ScaleDenominator of level 7 is 1747132.075089743: metres per pixel / 0.28 mm, at 111319.4908 m per degree
+  ok('GIBS 500m: level 7 pixel is the capabilities document\'s scale', near(gibsTexelDeg(7) * 111319.49079327358 / 0.00028, 1747132.075089743, 1e-3), (gibsTexelDeg(7) * 111319.49079327358 / 0.00028).toFixed(4));
+  ok('GIBS 500m: levels 3-7 tile the sphere exactly', [3, 4, 5, 6, 7].every((L) => 360 / gibsTileDeg(L) === gibsMatrix(L).w && 180 / gibsTileDeg(L) === gibsMatrix(L).h));
+  // Cairo, 31.24 E 30.04 N. Level 6 tiles are 4.5 degrees: column floor(211.24 / 4.5) = 46, row floor(59.96 / 4.5) = 13
+  const c = gibsTile(31.24, 30.04, 6), b = gibsTileBounds(c.col, c.row, 6);
+  ok('GIBS: Cairo is in level 6 tile row 13, column 46', c.col === 46 && c.row === 13, `${c.row}/${c.col} px ${c.px},${c.py}`);
+  ok('GIBS: that tile\'s bounds hold Cairo', b.west <= 31.24 && 31.24 < b.east && b.south < 30.04 && 30.04 <= b.north, JSON.stringify(b));
+  ok('GIBS: the north-west corner is tile 0/0 pixel 0,0; the south-east corner is the last pixel of the last tile',
+    gibsTile(-180, 90, 6).col === 0 && gibsTile(-180, 90, 6).row === 0 && gibsTile(-180, 90, 6).px === 0 && gibsTile(179.9999, -89.9999, 6).col === 79 && gibsTile(179.9999, -89.9999, 6).row === 39 && gibsTile(179.9999, -89.9999, 6).px === 511 && gibsTile(179.9999, -89.9999, 6).py === 511);
+  let w = 0; for (let lat = -88; lat <= 88; lat += 7.3) for (let lon = -179; lon <= 179; lon += 11.7) { const g = gibsPixel(lon, lat, 6), ll = gibsLonLat(g[0], g[1], 6); w = Math.max(w, Math.abs(ll[0] - lon), Math.abs(ll[1] - lat)); }
+  ok('GIBS: lon/lat -> pixel -> lon/lat', w < 1e-10, `worst ${w.toExponential(2)} deg`);
+  // a level-6 texel is a fifth of the shipped albedo's (8192 px), a level-5 texel two fifths: the shipped grid's edges are on both
+  ok('GIBS: level 6 and 5 texels divide the shipped 8192 px grid', near((360 / 8192) / gibsTexelDeg(6), 5, 1e-12) && near((360 / 8192) / gibsTexelDeg(5), 2.5, 1e-12));
+}
+
+// Web Mercator (EPSG:3857), the terrain tiles' frame
+{
+  ok('Mercator: the equator is the middle row, 85.0511 N the top', near(mercY(0), 0.5, 1e-15) && near(mercY(TERRAIN.latMax), 0, 1e-12) && near(mercY(-TERRAIN.latMax), 1, 1e-12));
+  let w = 0; for (let lat = -85; lat <= 85; lat += 0.37) w = Math.max(w, Math.abs(mercLat(mercY(lat)) - lat));
+  ok('Mercator: lat -> y -> lat', w < 1e-11, `worst ${w.toExponential(2)} deg`);
+  // The dataset's own table (joerd docs/data-sources.md): zoom 7 is 1223.0 m a pixel at the equator, 864.8 at 45, 611.5 at 60,
+  // on the WGS84 equatorial radius. The atlas's sphere is 6371.0088 km, 0.11% smaller.
+  const k = 6378.137 / 6371.0088;
+  ok('terrain: ground resolution matches the dataset\'s table', near(terrTexelKm(0, 7) * k, 1.2230, 5e-4) && near(terrTexelKm(45, 7) * k, 0.8648, 5e-4) && near(terrTexelKm(60, 7) * k, 0.6115, 5e-4) && near(terrTexelKm(0, 0) * k, 156.5430, 5e-3),
+    `${(terrTexelKm(0, 7) * k).toFixed(4)} ${(terrTexelKm(45, 7) * k).toFixed(4)} ${(terrTexelKm(60, 7) * k).toFixed(4)}`);
+  // The dataset's own worked example (docs/formats.md): rgb(137, 219, 68) is 2523.265625 m; its range is rgb(85, 8, 0) to rgb(162, 198, 0)
+  ok('terrarium decode: the dataset\'s worked example', terrDecode(137, 219, 68) === 2523.265625 && terrDecode(85, 8, 0) === -11000 && terrDecode(162, 198, 0) === 8902 && terrDecode(128, 0, 0) === 0);
+  // Mount Everest, 86.9250 E 27.9881 N: zoom 7 tile 94/53. That tile's own header lists its sources as SRTM N27-N29, E084-E087.
+  const e = terrTile(86.9250, 27.9881, 7), b = terrTileBounds(94, 53, 7);
+  ok('terrain: Everest is in zoom 7 tile x 94, y 53', e.x === 94 && e.y === 53, `${e.x}/${e.y} px ${e.px},${e.py}`);
+  ok('terrain: tile 7/94/53 spans 84.375-87.1875 E, 27.06-29.54 N', near(b.west, 84.375, 1e-9) && near(b.east, 87.1875, 1e-9) && near(b.south, 27.0591, 1e-3) && near(b.north, 29.5352, 1e-3), `${b.south.toFixed(4)} ${b.north.toFixed(4)}`);
+  ok('terrain: 0 E 0 N is the first pixel of tile 1/1 at zoom 1; -180 E, 85.05 N of tile 0/0', terrTile(0, 0, 1).x === 1 && terrTile(0, 0, 1).y === 1 && terrTile(0, 0, 1).px === 0 && terrTile(0, 0, 1).py === 0 && terrTile(-180, 85.05, 3).x === 0 && terrTile(-180, 85.05, 3).y === 0);
+  ok('terrain: longitude wraps and latitude clamps', terrTile(181, 0, 4).x === terrTile(-179, 0, 4).x && terrTile(0, 89, 4).y === 0 && terrTile(0, -89, 4).y === 15);
+  w = 0; for (let lat = -84; lat <= 84; lat += 5.1) for (let lon = -179; lon <= 179; lon += 13.3) { const g = terrPixel(lon, lat, 9), ll = terrLonLat(g[0], g[1], 9); w = Math.max(w, Math.abs(ll[0] - lon), Math.abs(ll[1] - lat)); }
+  ok('terrain: lon/lat -> pixel -> lon/lat', w < 1e-10, `worst ${w.toExponential(2)} deg`);
+  { const t = terrTile(35.5, 31.5, 9), bb = terrTileBounds(t.x, t.y, 9); ok('terrain: a tile\'s bounds hold the place that named it', bb.west <= 35.5 && 35.5 < bb.east && bb.south < 31.5 && 31.5 <= bb.north); }
+}
+
+// the resampling filter
+{
+  const sum = (t) => t.reduce((a, v, i) => a + (i & 1 ? v : 0), 0), mean = (t) => { let m = 0; for (let i = 0; i < t.length; i += 2) m += (t[i] + 0.5) * t[i + 1]; return m; };
+  const a = tentTaps(10.5, 1), b = tentTaps(10.75, 1), c = tentTaps(10.3, 2.7), d = tentTaps(11, 1);
+  ok('tent filter: on a pixel centre at scale 1 it is that pixel', a.length === 2 && a[0] === 10 && a[1] === 1);
+  ok('tent filter: between centres at scale 1 it is linear interpolation', b.length === 4 && b[0] === 10 && near(b[1], 0.75, 1e-12) && b[2] === 11 && near(b[3], 0.25, 1e-12) && d.length === 4 && near(d[1], 0.5, 1e-12));
+  ok('tent filter: minifying, weights sum to 1, centre on the sample exactly and span the footprint', near(sum(c), 1, 1e-12) && near(mean(c), 10.3, 1e-12) && c.length / 2 >= 5, `${c.length / 2} taps, centroid ${mean(c).toFixed(6)}`);
+}
+
+// Mercator tiles -> equirectangular grid, against a surface known analytically. The tiles are synthesised: each
+// Mercator pixel holds the surface at its own centre. A half-pixel error anywhere in the chain is 11 m here.
+{
+  const z = 6, surf = (lon, lat) => 1000 * lat + 400 * Math.sin(lon * Math.PI / 180) + 250 * Math.cos(lat * Math.PI / 45);
+  const tiles = new Map();
+  const getTile = (x, y) => {
+    const k = x + '/' + y; if (tiles.has(k)) return tiles.get(k);
+    const d = new Float32Array(65536);
+    for (let j = 0; j < 256; j++) for (let i = 0; i < 256; i++) { const ll = terrLonLat(x * 256 + i + 0.5, y * 256 + j + 0.5, z); d[j * 256 + i] = surf(ll[0], ll[1]); }
+    tiles.set(k, d); return d;
+  };
+  const run = (win, w, h, tol, name, ship) => {
+    const out = compositeElevation(win, z, w, h, getTile, ship || null);
+    let worst = 0, at = '';
+    for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) {
+      const lon = win.west + (i + 0.5) * win.lonSpan / w, lat = win.north - (j + 0.5) * win.latSpan / h;
+      if (Math.abs(lat) > 83.9) continue;
+      const e = Math.abs(out[j * w + i] - surf(lon, lat)); if (e > worst) { worst = e; at = `${lon.toFixed(2)},${lat.toFixed(2)}`; }
+    }
+    ok(name, worst < tol, `worst ${worst.toFixed(3)} m at ${at}; half a source pixel would be ${(500 * terrTexelDeg(z)).toFixed(1)} m`);
+    return out;
+  };
+  // the source's own column spacing, rows as fine as the source at the low-latitude edge: nothing but interpolation error
+  run({ west: 80.013, north: 34.007, lonSpan: 400 * terrTexelDeg(z), latSpan: 8 }, 400, Math.round(8 / (terrTexelDeg(z) * Math.cos(26 * Math.PI / 180))), 0.3, 'composite: mid-latitude window reproduces the surface');
+  run({ west: 172.3, north: -10.2, lonSpan: 16, latSpan: 12 }, Math.round(16 / terrTexelDeg(z)), Math.round(12 / terrTexelDeg(z)), 0.3, 'composite: across the antimeridian (172 E to 188 E)');
+  run({ west: -8, north: 6, lonSpan: 16, latSpan: 12 }, Math.round(16 / terrTexelDeg(z)), Math.round(12 / terrTexelDeg(z)), 0.3, 'composite: across the equator and the prime meridian');
+  // a coarser output than the source (each output texel 2.5 source pixels): an area average, still centred
+  run({ west: 5, north: 50, lonSpan: 12, latSpan: 8 }, Math.round(12 / terrTexelDeg(z) / 2.5), Math.round(8 / terrTexelDeg(z) / 2.5), 0.8, 'composite: minified 2.5x stays centred');
+  // the polar cap: beyond the Mercator square the height is the shipped field's
+  const out = run({ west: 10, north: 90, lonSpan: 8, latSpan: 10 }, 200, 250, 1.5, 'composite: a window to the pole is right up to 84 N', () => -7777);
+  const row = (lat) => Math.floor((90 - lat) / (10 / 250));
+  ok('composite: beyond 85.05 N the grid holds the shipped field, not a stretched last row', out[row(88) * 200 + 50] === -7777 && out[row(85.2) * 200 + 50] === -7777 && out[row(82) * 200 + 50] !== -7777, `${out[row(88) * 200 + 50]} at 88 N, ${out[row(82) * 200 + 50].toFixed(0)} at 82 N`);
+  // the sea: where the water mask says water and the tiles are below sea level, the shipped field; land below sea level stays the tiles'
+  {
+    const flat = () => new Float32Array(65536).fill(-400), win = { west: 20, north: 10, lonSpan: 4, latSpan: 4 };
+    const own = new Float32Array(10000), g = compositeElevation(win, z, 100, 100, flat, () => -3000, (lon) => (lon > 22 ? 1 : 0), own);
+    ok('composite: below sea level under the water mask is the shipped field; below sea level on land is the tiles\'', g[50 * 100 + 90] === -3000 && g[50 * 100 + 10] === -400, `${g[50 * 100 + 90]} m in the water, ${g[50 * 100 + 10]} m on land`);
+    ok('composite: the second channel says whose height each texel is (1 the tiles\', 0 the shipped field\'s)', own[50 * 100 + 90] === 0 && own[50 * 100 + 10] === 1);
+    const lake = compositeElevation(win, z, 100, 100, () => new Float32Array(65536).fill(179), () => -200, () => 1);
+    ok('composite: a lake above sea level keeps the tiles\' surface', lake[5050] === 179);
+  }
+  let threw = false; try { compositeElevation({ west: 0, north: 10, lonSpan: 4, latSpan: 4 }, z, 100, 100, () => null, null); } catch (e) { threw = true; }
+  ok('composite: a missing tile is an error, never a hole', threw);
+}
+
+// the window planner
+{
+  const views = { Himalaya: [86, 28], Alps: [10, 46.5], 'Nile delta': [31, 30.5], 'Grand Canyon': [-112.5, 36.2], 'Fiji (antimeridian)': [179, -17], Svalbard: [15, 78] };
+  for (const [name, [lon, lat]] of Object.entries(views)) for (const k of [2, 3]) {
+    const c = new Camera(); c.resize(1440, 900, 1); c.home(); c.lookAt(lon, lat); c.setKmPerPx(k);
+    const v = viewBox(c), p = planDetail(v, k);
+    if (!p) { ok(`plan: ${name} at ${k} km/px`, lat > 70, 'no plan'); continue; }
+    const W = p.win, a = p.alb, e = p.elev, m6 = a ? gibsMatrix(a.L) : null;
+    const within = (!a || (a.count <= PLAN.maxTiles && a.tiles.length === a.count)) && (!e || (e.count <= PLAN.maxElevTiles && e.tiles.length === e.count));
+    const rowsExist = (!a || a.tiles.every((t) => t.row >= 0 && t.row < m6.h && t.col >= 0 && t.col < m6.w)) && (!e || e.tiles.every((t) => t.y >= 0 && t.y < 2 ** e.z && t.x >= 0 && t.x < 2 ** e.z));
+    // every pixel of the imagery canvas is under exactly one tile, at whole-pixel offsets
+    let covered = !a;
+    if (a) { const xs = new Set(a.tiles.map((t) => t.dx)), ys = new Set(a.tiles.map((t) => t.dy)); covered = Math.min(...xs) <= 0 && Math.max(...xs) + 512 >= a.w && Math.min(...ys) <= 0 && Math.max(...ys) + 512 >= a.h && xs.size * ys.size === a.tiles.length && a.tiles.every((t) => Number.isInteger(t.dx) && Number.isInteger(t.dy)) && Number.isInteger(a.w) && near(a.w * a.texelDeg, W.lonSpan, 1e-9) && near(a.h * a.texelDeg, W.latSpan, 1e-9); }
+    // the first imagery tile's north-west corner, through its offset, is where the tile bounds say it is
+    let placed = !a;
+    if (a) { const t = a.tiles[0], b = gibsTileBounds(t.col, t.row, a.L); let dl = (W.west + t.dx * a.texelDeg) - b.west; dl -= Math.round(dl / 360) * 360; placed = Math.abs(dl) < 1e-9 && near(W.north - t.dy * a.texelDeg, b.north, 1e-9); }
+    const fine = (!a || a.texelKm <= PLAN.gainKm) && (!e || terrTexelKm(lat, e.z) <= PLAN.gainKm);
+    ok(`plan: ${name} at ${k} km/px`, within && rowsExist && covered && placed && fine && windowHolds(W, v, p.margin - 1e-6) && W.north <= 90 && W.north - W.latSpan >= -90 && W.lonSpan <= 360,
+      `margin ${p.margin}, ${W.lonSpan.toFixed(1)} x ${W.latSpan.toFixed(1)} deg; imagery ${a ? `L${a.L} ${a.count} tiles ${a.texelKm.toFixed(2)} km` : 'none'}; elevation ${e ? `z${e.z} ${e.count} tiles ${terrTexelKm(lat, e.z).toFixed(2)} km` : 'none'}`);
+    if (name.startsWith('Fiji') && k === 2) {
+      const u = windowUniforms(p).uDetWin, cols = a.tiles.map((t) => t.col), xs = e.tiles.map((t) => t.x);
+      ok('plan: the antimeridian window takes tiles from both ends of the row', Math.min(...cols) === 0 && Math.max(...cols) === m6.w - 1 && Math.min(...xs) === 0 && Math.max(...xs) === 2 ** e.z - 1, `imagery columns ${Math.min(...cols)}..${Math.max(...cols)}, elevation x ${Math.min(...xs)}..${Math.max(...xs)}`);
+      // the shader's own arithmetic: position in the window of 179 E and of 179 W (= 181 E), 17 S
+      const dwx = (lon2) => { const x = (lon2 / 360 + 0.5) - u[0]; return (x - Math.floor(x)) / u[2]; };
+      ok('plan: 179 E and 179 W are both inside the window, in order, 2 degrees apart', dwx(179) > 0.06 && dwx(-179) < 0.94 && near((dwx(-179) - dwx(179)) * W.lonSpan, 2, 1e-9), `${dwx(179).toFixed(4)} ${dwx(-179).toFixed(4)}`);
+    }
+    if (name === 'Himalaya' && k === 2) {
+      const u = windowUniforms(p);
+      ok('uniforms: window corners in canonical uv', near(u.uDetWin[0], W.west / 360 + 0.5, 1e-12) && near(u.uDetWin[1], 0.5 - W.north / 180, 1e-12) && near(u.uDetWin[0] + u.uDetWin[2], (W.west + W.lonSpan) / 360 + 0.5, 1e-12) && near(u.uDetWin[1] + u.uDetWin[3], 0.5 - (W.north - W.latSpan) / 180, 1e-12));
+      ok('uniforms: the mip whose texel is the shipped albedo\'s', near(2 ** u.uDetAlbLod * a.texelDeg, 360 / 8192, 1e-12), `lod ${u.uDetAlbLod.toFixed(3)} at L${a.L}`);
+      ok('uniforms: elevation texel in window units and in metres', near(u.uDetElevPx[0] * e.w, 1, 1e-12) && near(u.uDetElevM[0] * e.w, W.lonSpan * KM_PER_DEG * 1000, 1e-6) && near(u.uDetElevM[1] * e.h, W.latSpan * KM_PER_DEG * 1000, 1e-6), `${u.uDetElevM[0].toFixed(0)} m x ${u.uDetElevM[1].toFixed(0)} m`);
+    }
+  }
+  const far = new Camera(); far.resize(1440, 900, 1); far.home(); far.lookAt(86, 28); far.setKmPerPx(6);
+  ok('plan: nothing is streamed at 6 km a pixel', planDetail(viewBox(far), 6) === null);
+  const pole = new Camera(); pole.resize(1440, 900, 1); pole.home(); pole.lookAt(0, 89); pole.setKmPerPx(2);
+  { const v = viewBox(pole), p = planDetail(v, 2); ok('plan: with a pole on screen the view is every longitude, and no row beyond the pole is asked for', v.full && v.north === 90 && (!p || ((!p.alb || p.alb.tiles.every((t) => t.row >= 0)) && p.win.north <= 90)), p ? 'a plan' : 'no plan'); }
+}
+
+// ---- the data itself (network). Offline, these print a line and are skipped. ----
+function png(buf) {                                   // 8-bit RGB or RGBA, non-interlaced: all this test needs
+  const w = buf.readUInt32BE(16), h = buf.readUInt32BE(20), depth = buf[24], ct = buf[25], bpp = ct === 2 ? 3 : ct === 6 ? 4 : 0;
+  if (depth !== 8 || !bpp || buf[28] !== 0) throw new Error(`png: unsupported (depth ${depth}, colour type ${ct}, interlace ${buf[28]})`);
+  const parts = []; let o = 8;
+  while (o < buf.length) { const n = buf.readUInt32BE(o), type = buf.toString('latin1', o + 4, o + 8); if (type === 'IDAT') parts.push(buf.subarray(o + 8, o + 8 + n)); o += 12 + n; }
+  const raw = inflateSync(Buffer.concat(parts)), line = w * bpp, out = new Uint8Array(line * h);
+  for (let y = 0; y < h; y++) {
+    const f = raw[y * (line + 1)], src = y * (line + 1) + 1, dst = y * line;
+    for (let x = 0; x < line; x++) {
+      const a = x >= bpp ? out[dst + x - bpp] : 0, b = y ? out[dst - line + x] : 0, c = x >= bpp && y ? out[dst - line + x - bpp] : 0;
+      let v = raw[src + x];
+      if (f === 1) v += a; else if (f === 2) v += b; else if (f === 3) v += (a + b) >> 1;
+      else if (f === 4) { const p = a + b - c, pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c); v += pa <= pb && pa <= pc ? a : pb <= pc ? b : c; }
+      out[dst + x] = v;
+    }
+  }
+  return { w, h, bpp, d: out };
+}
+const tileCache = new Map();
+async function terrainTile(z, x, y) {
+  const k = `${z}/${x}/${y}`; if (tileCache.has(k)) return tileCache.get(k);
+  const r = await fetch(TERRAIN.url(z, x, y), { signal: AbortSignal.timeout(20000) });
+  if (!r.ok) throw new Error(`${k}: HTTP ${r.status}`);
+  const p = png(Buffer.from(await r.arrayBuffer())), d = new Float32Array(65536);
+  if (p.w !== 256 || p.h !== 256) throw new Error(`${k}: ${p.w} x ${p.h}`);
+  for (let i = 0; i < 65536; i++) d[i] = terrDecode(p.d[i * p.bpp], p.d[i * p.bpp + 1], p.d[i * p.bpp + 2]);
+  tileCache.set(k, d); return d;
+}
+let online = true;
+try { await terrainTile(0, 0, 0); } catch (e) { online = false; console.log(`  skip the terrain tiles could not be reached (${e.cause ? e.cause.code || e.cause.message : e.message}): real-value and registration checks not run`); }
+if (online) {
+  // Mount Everest, 86.9250 E 27.9881 N, 8849 m. At zoom 10 a pixel is 135 m: the summit pixel reads a little under the summit.
+  // Mount Everest, 86.9250 E 27.9881 N, 8849 m. The tiles are SRTM there, which reads the summit about 100 m low (8751 m at
+  // zoom 13) and 40-130 m north-east of the surveyed point. At zoom 9 a pixel is 270 m and the summit pixel holds 8704 m.
+  { const z = 9, t = terrTile(86.9250, 27.9881, z), d = await terrainTile(z, t.x, t.y);
+    let mx = -1e9, mi = 0; for (let i = 0; i < 65536; i++) if (d[i] > mx) { mx = d[i]; mi = i; }
+    const here = d[t.py * 256 + t.px], dist = Math.hypot((mi % 256) - t.px, Math.floor(mi / 256) - t.py);
+    ok('real tile: Mount Everest\'s pixel reads 8,600-8,850 m', here > 8600 && here < 8850, `${here.toFixed(0)} m at ${z}/${t.x}/${t.y} pixel ${t.px},${t.py}`);
+    ok('real tile: the highest pixel of that tile is the one Everest was predicted in', dist <= 1 && mx < 8850, `max ${mx.toFixed(0)} m, ${dist.toFixed(1)} px from the predicted pixel`); }
+  // The Dead Sea, 35.50 E 31.50 N: its surface was about -415 m when SRTM flew (2000) and is about -440 m now.
+  { const z = 9, t = terrTile(35.5, 31.5, z), d = await terrainTile(z, t.x, t.y), here = d[t.py * 256 + t.px];
+    ok('real tile: the Dead Sea reads about -400 m', here > -445 && here < -390, `${here.toFixed(1)} m at ${z}/${t.x}/${t.y} pixel ${t.px},${t.py}`); }
+  // Open ocean: the tiles hold bathymetry (ETOPO1). The Challenger Deep, 142.2 E 11.35 N, is about -10,900 m.
+  { const z = 7, t = terrTile(142.2, 11.35, z), d = await terrainTile(z, t.x, t.y); let mn = 1e9; for (let i = 0; i < 65536; i++) mn = Math.min(mn, d[i]);
+    ok('real tile: the sea floor is in the tiles (Mariana Trench below -10,000 m)', mn < -10000 && mn > -11100, `deepest pixel ${mn.toFixed(0)} m in ${z}/${t.x}/${t.y}`); }
+
+  // Registration against the shipped elevation field (web/fields/elev.png, ETOPO 2022 on a 4096 x 2048 grid, 9.8 km).
+  // Streamed tiles are composited at a quarter of a shipped cell, averaged 4 x 4 onto the shipped cells and compared;
+  // then the same with the streamed grid slid east-west and north-south in quarter-cell steps. The misfit must be
+  // least at no shift. A half-cell (4.9 km) error in either conversion costs hundreds of metres here.
+  const elevPng = new URL('../web/fields/elev.png', import.meta.url);
+  if (!existsSync(elevPng)) console.log('  skip web/fields/elev.png is not built: registration against the shipped field not run');
+  else {
+    const p = png(readFileSync(elevPng)), ship = { w: p.w, h: p.h, d: new Uint16Array(p.w * p.h) };
+    for (let i = 0; i < ship.d.length; i++) ship.d[i] = (p.d[i * p.bpp] << 8) | p.d[i * p.bpp + 1];
+    const cell = 360 / ship.w, S = 4, B = 4;                       // S streamed texels per shipped cell, B texels of border for the slide
+    for (const [name, lon0, lat1, nx, ny, z, sea] of [['Himalaya', 80, 32, 136, 68, 6], ['Alps', 5, 48.5, 114, 46, 6], ['Grand Canyon and Rockies', -116, 40, 114, 68, 6], ['Andes (southern hemisphere)', -72, -14, 91, 114, 6],
+      ['the sea floor off Fiji, across the antimeridian', 174, -12, 136, 114, 6, true]]) {
+      const cx0 = Math.round((lon0 + 180) / cell), cy0 = Math.round((90 - lat1) / cell);             // whole shipped cells
+      const win = { west: cx0 * cell - 180 - B * cell / S, north: 90 - cy0 * cell + B * cell / S, lonSpan: (nx * S + 2 * B) * cell / S, latSpan: (ny * S + 2 * B) * cell / S };
+      const w = nx * S + 2 * B, h = ny * S + 2 * B;
+      const n = 2 ** z, need = new Set();
+      for (let j = 0; j < h; j += 8) for (let i = 0; i < w; i += 8) { const t = terrTile(win.west + (i + 0.5) * cell / S, win.north - (j + 0.5) * cell / S, z); for (const dx of [-1, 0, 1]) for (const dy of [-1, 0, 1]) need.add(`${(t.x + dx + n) % n}/${Math.max(0, Math.min(n - 1, t.y + dy))}`); }
+      const got = new Map(); for (const k of need) { const [x, y] = k.split('/').map(Number); got.set(k, await terrainTile(z, x, y)); }
+      // the tiles alone: no shipped field and no water mask go into this grid, or the match would be by construction
+      const g = compositeElevation(win, z, w, h, (x, y) => got.get(`${x}/${y}`), null, null);
+      const shipAt = (cx, cy) => (ship.d[(cy0 + cy) * ship.w + ((cx0 + cx) % ship.w + ship.w) % ship.w] / 65535) * 20000 - 11000;
+      // land cells: the shipped cell and its eight neighbours are above sea level (so no sea floor is in any slid average)
+      const use = new Uint8Array(nx * ny); let cells = 0;
+      for (let cy = 1; cy < ny - 1; cy++) for (let cx = 1; cx < nx - 1; cx++) { let land = true, wet = true; for (const dy of [-1, 0, 1]) for (const dx of [-1, 0, 1]) { const v = shipAt(cx + dx, cy + dy); if (v <= 0) land = false; if (v > -200) wet = false; } if (sea ? wet : land) { use[cy * nx + cx] = 1; cells++; } }
+      const fit = (sx, sy) => {                                    // streamed slid by (sx, sy) texels: positive = its content moved east / south
+        let se = 0, sb = 0, m = 0;
+        for (let cy = 0; cy < ny; cy++) for (let cx = 0; cx < nx; cx++) {
+          if (!use[cy * nx + cx]) continue;
+          let a = 0; for (let j = 0; j < S; j++) for (let i = 0; i < S; i++) a += g[(B + cy * S + j - sy) * w + (B + cx * S + i - sx)];
+          a /= S * S;
+          const s = shipAt(cx, cy);
+          se += (a - s) ** 2; sb += a - s; m++;
+        }
+        return { rms: Math.sqrt(se / m), bias: sb / m };
+      };
+      const at0 = fit(0, 0);
+      let best = [0, 0], br = at0.rms; const prof = { x: [], y: [] };
+      for (let s = -B; s <= B; s++) { const fx = fit(s, 0).rms, fy = fit(0, s).rms; prof.x.push(fx); prof.y.push(fy); if (fx < br) { br = fx; best = [s, 0]; } if (fy < br) { br = fy; best = [0, s]; } }
+      // the minimum of each profile to a fraction of a step, by a parabola through its three lowest points
+      const sub = (pr) => { let i = pr.indexOf(Math.min(...pr)); i = Math.max(1, Math.min(pr.length - 2, i)); const [a, b, c] = [pr[i - 1], pr[i], pr[i + 1]]; return (i - B + 0.5 * (a - c) / (a - 2 * b + c)) / S; };
+      const dx = sub(prof.x), dy = sub(prof.y), half = fit(S / 2, 0).rms;
+      const line = `rms ${at0.rms.toFixed(1)} m, bias ${at0.bias.toFixed(1)} m over ${cells} cells of ${(cell * KM_PER_DEG).toFixed(1)} km; best shift ${(dx * cell * KM_PER_DEG).toFixed(2)} km east, ${(dy * cell * KM_PER_DEG).toFixed(2)} km south (${dx.toFixed(3)}, ${dy.toFixed(3)} cell); slid half a cell: rms ${half.toFixed(0)} m; ${need.size} tiles`;
+      if (!sea) ok(`registration, ${name}: streamed land = shipped land at no shift`, best[0] === 0 && best[1] === 0 && Math.abs(dx) < 0.05 && Math.abs(dy) < 0.05 && at0.rms < 60 && Math.abs(at0.bias) < 15, line);
+      // Not a pass or fail: the reason compositeElevation keeps the shipped field under water. The tiles' sea floor (ETOPO1) is
+      // NOT in the shipped field's frame. If this line ever reads rms under 60 m at no shift, the tiles were rebuilt: reconsider.
+      else console.log(`  note ${name}: the tiles' sea floor against the shipped one, ${line}`);
+    }
+  }
+}
 
 console.log(bad ? `\napp math: ${bad} FAILURES` : '\napp math: ALL PASS');
 process.exit(bad ? 1 : 0);

@@ -30,7 +30,7 @@ export class Earth {
     return { land, sea: style === 'atlas' ? land * 0.75 : 0 };
   }
 
-  draw(state, cam, astro) {
+  draw(state, cam, astro, detail) {
     const gl = this.gl, f = this.fields, p = this.prog;
     gl.useProgram(p.p);
     f.bind();
@@ -53,12 +53,15 @@ export class Earth {
       uLens: lens.id, uLensAlpha: lens.alpha || 0, uLensRow: lens.row || 0,
       uHasRelief: f.has.relief ? 1 : 0, uHasElev: f.has.elev ? 1 : 0, uHasLive: f.has.live && L.today ? 1 : 0,
       uHasClimate: f.has.climate ? 1 : 0, uHasOcean: f.has.ocean ? 1 : 0, uHasCountries: f.has.countries ? 1 : 0,
-      uHasWater: f.has.water ? 1 : 0, uHasAurora: f.has.aurora && L.aurora && state.atNow ? 1 : 0,
+      uHasWater: f.has.water ? 1 : 0, uHasAurora: f.has.aurora && L.aurora && state.atNow ? 1 : 0, uHasCloudT: f.has.cloudT ? 1 : 0,
       uCloudsOn: L.clouds ? 1 : 0, uNightOn: L.lights ? 1 : 0, uAtmoOn: L.air ? 1 : 0, uDaylightOn: L.daylight ? 1 : 0, uIceOn: L.ice ? 1 : 0,
       uReliefLand: k.land, uReliefSea: k.sea,
       uLapse: f.meta.climate ? f.meta.climate.lapse_K_per_km : 6.5,
       uSelCountry: state.selCountry || 0,
       uE_u10: e('u10'), uE_v10: e('v10'), uE_t0: e('t0'), uE_slp: e('slp'), uE_cloud: e('cloud'), uE_precip: e('precip'), uE_sst: e('sst'), uE_ice: e('ice'),
+      uE_deck: e('deck'), uE_cu: e('cu'), uE_light: e('light'),
+      // the focus window: both weights are 0 unless the layer is on and a window has loaded
+      ...(detail ? detail.uniforms(performance.now()) : { uDetAlb: UNIT.detAlb, uDetElev: UNIT.detElev, uDetWin: [0, 0, 1, 1], uDetAlbW: 0, uDetElevW: 0, uDetAlbLod: 0, uDetElevPx: [1, 1], uDetElevM: [1000, 1000] }),
     };
     setUniforms(gl, p, u);
     gl.bindVertexArray(this.vao);

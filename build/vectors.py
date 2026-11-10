@@ -80,11 +80,143 @@ ENDONYM_LANG = {
 LANG_OF = {a3: lang for lang, lst in ENDONYM_LANG.items() for a3 in lst.split()}
 
 
+# ---------------------------------------------------------------------------- label geometry
+# What the label layer needs to choose a place for a name from the state's own shape (register F1):
+# its area, the deepest interior point, a few more good interior points, the centre of the largest
+# box of each name-like proportion that fits inside it, and how far that deepest point is from open
+# water. All of it is geometry of the Natural Earth polygons; none of it is authored.
+LABEL_ASPECTS = [1.5, 2.5, 4.0, 6.0, 9.0, 14.0]          # width : height of a name's box
+KM_DEG = F.R_EARTH_KM * math.pi / 180
+
+
+def ring_area_km2(ring):
+    """Area enclosed by a lon/lat ring on the sphere: the line integral of sin(lat) d(lon)."""
+    a = 0.0
+    for (x1, y1), (x2, y2) in zip(ring, ring[1:] + ring[:1]):
+        dx = (x2 - x1 + 540.0) % 360.0 - 180.0
+        a += math.radians(dx) * (2 + math.sin(math.radians(y1)) + math.sin(math.radians(y2)))
+    return abs(a) * F.R_EARTH_KM ** 2 / 2
+
+
+def label_geometry(polys):
+    """polys: [[exterior, hole, ...], ...] of (lon, lat). Returns area (km2) and, for the MAIN part (the
+    largest polygon), lp [lon, lat, r_km] (its pole of inaccessibility) and inner ([lon, lat, width_km]
+    per LABEL_ASPECTS: the largest box of that proportion inside it); and pts, further interior points
+    [lon, lat, r_km, main] on the main part (main = 1) and on every other part of at least 4% of its area
+    (main = 0: Alaska, Svalbard, Guiana - where the name may go only when the main part is out of view).
+    Each part is rasterised in its own sinusoidal frame, so a width is true at its own latitude."""
+    from PIL import Image, ImageDraw
+    from scipy import ndimage
+    areas = [ring_area_km2(list(p[0])) - sum(ring_area_km2(list(h)) for h in p[1:]) for p in polys]
+    order = sorted(range(len(polys)), key=lambda i: -areas[i])
+    pts, inner = [], [None] * len(LABEL_ASPECTS)
+    for n, pi in enumerate(order[:6]):
+        if n and areas[pi] < 0.04 * areas[order[0]]:
+            break
+        poly = [np.asarray(r, dtype=np.float64)[:, :2] for r in polys[pi]]
+        lon0 = (poly[0][:, 0].min() + poly[0][:, 0].max()) / 2
+
+        def xy(r):
+            return np.column_stack(((r[:, 0] - lon0) * np.cos(np.radians(r[:, 1])) * KM_DEG, r[:, 1] * KM_DEG))
+        e = xy(poly[0])
+        x0, y0 = e.min(0); x1, y1 = e.max(0)
+        s = max(x1 - x0, y1 - y0, 0.2) / 220.0                      # km per cell
+        W, H = int(math.ceil((x1 - x0) / s)) + 4, int(math.ceil((y1 - y0) / s)) + 4
+        img = Image.new("L", (W, H), 0)
+        dr = ImageDraw.Draw(img)
+
+        def pix(r):
+            v = xy(r)
+            return [((x - x0) / s + 1.5, (y1 - y) / s + 1.5) for x, y in v]
+        dr.polygon(pix(poly[0]), fill=1)
+        for hole in poly[1:]:
+            dr.polygon(pix(hole), fill=0)
+        full = np.asarray(img, dtype=bool)
+        m = ndimage.binary_erosion(full)                             # PIL fills boundary pixels: stay inside
+        if not m.any():
+            m = full
+        if not m.any():
+            continue
+
+        def back(i, j):
+            y = y1 - (i - 1.0) * s; x = x0 + (j - 1.0) * s
+            lat = y / KM_DEG
+            return lon0 + x / (KM_DEG * max(0.01, math.cos(math.radians(lat)))), lat
+        d = ndimage.distance_transform_edt(m) * s
+        taken = []
+        for _ in range(5):
+            i, j = np.unravel_index(int(np.argmax(d)), d.shape)
+            r = float(d[i, j])
+            if r <= 0 or (taken and r < 0.4 * taken[0][2]):
+                break
+            taken.append((i, j, r))
+            pts.append((r, *back(i, j), 1 if n == 0 else 0))
+            ii, jj = np.ogrid[:H, :W]
+            d[(ii - i) ** 2 + (jj - j) ** 2 < (2.0 * r / s) ** 2] = 0   # the next point is clear of this one
+        I = np.zeros((H + 1, W + 1), dtype=np.int32)
+        I[1:, 1:] = m.cumsum(0).cumsum(1)
+        for k, a in enumerate(LABEL_ASPECTS):
+            def fit(t):
+                hh, hw = t, int(round(a * t))
+                h, w = 2 * hh + 1, 2 * hw + 1
+                if h > H or w > W:
+                    return None
+                ok = (I[h:, w:] - I[:-h, w:] - I[h:, :-w] + I[:-h, :-w]) == h * w
+                if not ok.any():
+                    return None
+                ii, jj = np.nonzero(ok)
+                b = int(np.argmin((ii - ii.mean()) ** 2 + (jj - jj.mean()) ** 2))
+                return ii[b] + hh, jj[b] + hw, w * s
+            lo, hi, best = 0, max(H, W), fit(0)
+            while lo < hi:                                           # the largest half-height that still fits
+                mid = (lo + hi + 1) // 2
+                r = fit(mid)
+                if r:
+                    lo, best = mid, r
+                else:
+                    hi = mid - 1
+            if best and n == 0:
+                lon, lat = back(best[0], best[1])
+                inner[k] = (lon, lat, best[2])
+    pts.sort(key=lambda p: (-p[3], -p[0]))                           # the main part's deepest point first
+    def row(lon, lat, km):
+        return [round(((float(lon) + 180.0) % 360.0) - 180.0, 3), round(float(lat), 3), round(float(km), 1)]
+    return {"area": float(sum(areas)), "lp": row(pts[0][1], pts[0][2], pts[0][0]) if pts else None,
+            "pts": [row(p[1], p[2], p[0]) + [p[3]] for p in pts[1:6]],
+            "inner": [row(*v) if v else None for v in inner]}
+
+
+def sea_distances(all_polys, points):
+    """km from each (lon, lat) to the nearest cell that belongs to no unit, on a 0.05 degree raster of
+    every unit's exterior. Lakes that Natural Earth leaves outside the country polygons count as water."""
+    from PIL import Image, ImageDraw
+    from scipy import ndimage
+    from scipy.spatial import cKDTree
+    W, H, c = 7200, 3600, 0.05
+    img = Image.new("L", (W, H), 0)
+    dr = ImageDraw.Draw(img)
+    for polys in all_polys:
+        for poly in polys:
+            dr.polygon([((x + 180) / c, (90 - y) / c) for x, y in (pt[:2] for pt in poly[0])], fill=1)
+    land = np.asarray(img, dtype=bool)
+    shore = ~land & ndimage.binary_dilation(land)
+    jj, ii = np.nonzero(shore)
+
+    def xyz(lo, la):
+        lo, la = np.radians(lo), np.radians(la)
+        return np.stack([np.cos(la) * np.cos(lo), np.cos(la) * np.sin(lo), np.sin(la)], axis=-1)
+    tree = cKDTree(xyz(-180 + (ii + 0.5) * c, 90 - (jj + 0.5) * c))
+    chord, _ = tree.query(xyz(np.array([p[0] for p in points]), np.array([p[1] for p in points])))
+    wt = np.cos(np.radians(90 - (np.arange(H) + 0.5) * c))            # a row's share of the sphere
+    return 2 * F.R_EARTH_KM * np.arcsin(np.clip(chord / 2, 0, 1)), float((land.mean(1) * wt).sum() / wt.sum())
+
+
 def step_political():
     print("political")
     fc = ne("ne_50m_admin_0_countries")
     fc.sort(key=lambda f: f["properties"]["ADM0_A3"])
-    countries = []
+    from shapely.geometry import Point, shape
+    countries, geoms = [], []
     for i, f in enumerate(fc):
         p = f["properties"]
         g = f["geometry"]
@@ -102,7 +234,38 @@ def step_political():
             "lon": round(p["LABEL_X"], 3), "lat": round(p["LABEL_Y"], 3),
             "pop": p["POP_EST"], "pop_year": p["POP_YEAR"], "gdp_md": p["GDP_MD"], "gdp_year": p.get("GDP_YEAR"),
             "color": p["MAPCOLOR7"], "note": p.get("NOTE_BRK") or p.get("NOTE_ADM0"),
+            # for the label layer (register F1): Natural Earth's own abbreviation, whether this unit is the
+            # home part of its sovereignty, and the geometry a name is placed by
+            "abbr": p.get("ABBREV") or None, "home": p.get("HOMEPART") == 1,
             "bbox": [round(min(xs), 2), round(min(ys), 2), round(max(xs), 2), round(max(ys), 2)], "polys": rings})
+        lg = label_geometry(polys)
+        if lg["lp"] is None or not shape(g).contains(Point(lg["lp"][0], lg["lp"][1])):
+            rp = shape(g).representative_point()                     # a unit too small for the raster
+            lg["lp"] = [round(rp.x, 4), round(rp.y, 4), lg["lp"][2] if lg["lp"] else 0.0]
+        assert shape(g).contains(Point(lg["lp"][0], lg["lp"][1])), f"label point of {p['ADM0_A3']} is outside it"
+        # how far the part that holds the label point reaches from it: a name "beside" the state belongs within this
+        main = next((pl for pl in polys if shape({"type": "Polygon", "coordinates": pl}).contains(Point(lg["lp"][0], lg["lp"][1]))), polys[0])
+        ext = np.asarray(main[0], dtype=np.float64)
+        reach = float(np.max(gc_km(lg["lp"][0], lg["lp"][1], ext[:, 0], ext[:, 1])))
+        countries[-1].update(area=round(lg["area"], 1), lp=lg["lp"], reach=round(reach, 1), pts=lg["pts"], inner=lg["inner"])
+        geoms.append(polys)
+    sea, land_frac = sea_distances(geoms, [c["lp"] for c in countries])
+    for c, d in zip(countries, sea):
+        # a lower bound: the raster is good to about a cell and a half, and water is never nearer than the clear radius
+        c["sea"] = round(max(c["lp"][2], float(d) - 8.0), 1)
+    # Landmarks. Areas are the polygons' own (50 m generalisation), so the tolerances are loose.
+    by = {c["a3"]: c for c in countries}
+    assert 0.28 < land_frac < 0.30, f"the units cover {land_frac:.3f} of the sphere on the sea raster; land is 0.292"
+    assert abs(by["BRA"]["area"] / 8.51e6 - 1) < 0.03 and abs(by["RUS"]["area"] / 17.1e6 - 1) < 0.03, (by["BRA"]["area"], by["RUS"]["area"])
+    assert abs(sum(c["area"] for c in countries) / 148.9e6 - 1) < 0.03, sum(c["area"] for c in countries)
+    assert by["VAT"]["area"] < 2 and by["CHE"]["abbr"] == "Switz." and by["USA"]["home"] and not by["GRL"]["home"]
+    assert -125 < by["USA"]["lp"][0] < -67 and 25 < by["USA"]["lp"][1] < 49, by["USA"]["lp"]         # the conterminous states, not Alaska
+    assert -5 < by["FRA"]["lp"][0] < 8 and 42 < by["FRA"]["lp"][1] < 51, by["FRA"]["lp"]               # France, not Guiana
+    assert by["RUS"]["inner"][2][0] > 60, by["RUS"]["inner"]                                            # a name's box fits in Siberia
+    assert 120 < by["CHE"]["sea"] < 350 and by["MNG"]["sea"] > 500 and by["NRU"]["sea"] < 10, (by["CHE"]["sea"], by["MNG"]["sea"], by["NRU"]["sea"])
+    assert by["CHL"]["lp"][2] < 150 < by["BRA"]["lp"][2], (by["CHL"]["lp"], by["BRA"]["lp"])           # Chile is narrow, Brazil is not
+    assert all(q[1] < 72 for q in by["NOR"]["pts"] if q[3]) and any(q[1] > 76 and not q[3] for q in by["NOR"]["pts"]), by["NOR"]["pts"]   # Svalbard is a far part
+    assert 900 < by["NOR"]["reach"] < 1500 and by["FRA"]["reach"] < 800, (by["NOR"]["reach"], by["FRA"]["reach"])   # the mainland: not Svalbard, not Guiana
     borders = {"international": [], "disputed": [], "claim": []}
     for f in ne("ne_50m_admin_0_boundary_lines_land"):
         cla = f["properties"]["FEATURECLA"]
@@ -131,7 +294,7 @@ def step_political():
         disputes.append({"name": name, "note": note, "admin": p.get("ADMIN"), "lon": round(cx, 2), "lat": round(cy, 2),
                          "polys": [[q(poly[0])] for poly in polys], "confidence": "contested"})
     dump("political.json", {"source": "Natural Earth 5.1.2 (public domain), default de facto worldview", "vintage": 2022,
-                            "countries": countries, "borders": borders, "disputes": disputes})
+                            "label_aspects": LABEL_ASPECTS, "countries": countries, "borders": borders, "disputes": disputes})
     print(f"  {len(countries)} units, {len(borders['international'])} border lines, {len(borders['disputed'])} disputed lines, "
           f"{len(borders['claim'])} claim lines, {len(disputes)} dispute areas, endonyms on {sum(1 for c in countries if c['endonym'])}")
 

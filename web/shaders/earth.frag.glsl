@@ -20,13 +20,27 @@ uniform sampler2D uWaterNight;     // R: water fraction   G: sqrt(night lights)
 uniform sampler2D uElev;           // RG: 16-bit elevation
 uniform sampler2D uClouds;         // cloud texture
 uniform sampler2DArray uAtmoA;     // u10, v10, t0
-uniform sampler2DArray uAtmoB;     // slp, cloud fraction, precip
+uniform sampler2DArray uAtmoB;     // layers 0-11: slp, cloud fraction, precip. Layers 12-23 (when uHasCloudT): ISCCP sky share of
+                                   // stratocumulus sheets, of thin broken cloud, and the mean reflectance of the rest.
+                                   // One array, not two: WebGL2 guarantees only 16 texture units and this shader uses all 16.
 uniform sampler2DArray uOceanA;    // sst, ice, valid
+uniform float uHasCloudT;
+uniform vec2 uE_deck, uE_cu, uE_light;
 uniform sampler2D uCountries;      // R: id  G: disputed  B: map colour index * 32
 uniform sampler2D uLens2D;         // the selected static lens field (log-companded 0..1)
 uniform sampler2D uLut;            // palettes, 256 wide, one per row of 16
 uniform sampler2D uLive;           // observed true-colour mosaic for the clock's date (GIBS)
 uniform sampler2D uAurora;         // OVATION probability, 360 x 181
+// ---- the focus window: finer fields streamed for the part of the Earth in view (register A2) ----
+// Both textures cover the same lon/lat rectangle, given in the canonical uv of every other field:
+// uDetWin = (u at the west edge, v at the north edge, width in u, height in v). Row 0 is north.
+uniform sampler2D uDetAlb;         // RGB: Blue Marble at 500 m - 2 km a texel, in its own display values, WITH mipmaps
+uniform sampler2D uDetElev;        // R: elevation in metres (float), linear-filterable. G: 1 where streamed, 0 where filled from the shipped field
+uniform vec4 uDetWin;
+uniform float uDetAlbW, uDetElevW; // 0..1: how much of each to use (0 = not loaded; fade in when ready)
+uniform float uDetAlbLod;          // mip level of uDetAlb whose texel is the shipped albedo's (5 km): log2(5 km / texel km)
+uniform vec2 uDetElevPx;           // one texel of uDetElev in window units (1 / width, 1 / height)
+uniform vec2 uDetElevM;            // one texel of uDetElev in metres at the equator (east-west, north-south)
 
 uniform vec3 uMonth;               // layer0, fraction, layer1
 uniform vec3 uSun;                 // unit vector to the Sun, Earth-fixed
@@ -67,6 +81,10 @@ vec4 tex(sampler2D s, vec2 uv) { return textureGrad(s, uv, gDx, gDy); }
 vec3 arr(sampler2DArray s, vec2 uv) {
   return mix(texture(s, vec3(uv, uMonth.x)).rgb, texture(s, vec3(uv, uMonth.z)).rgb, uMonth.y);
 }
+// the same, for a second atlas stacked `off` layers further into the array
+vec3 arrAt(sampler2DArray s, vec2 uv, float off) {
+  return mix(texture(s, vec3(uv, uMonth.x + off)).rgb, texture(s, vec3(uv, uMonth.z + off)).rgb, uMonth.y);
+}
 float dec(float v, vec2 e) { return e.x + (e.y - e.x) * v; }
 vec3 toLinear(vec3 c) { return pow(c, vec3(2.2)); }
 float luma(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
@@ -78,43 +96,50 @@ float elevation(vec2 uv) {
   return (e.r * 255.0 * 256.0 + e.g * 255.0) / 65535.0 * 20000.0 - 11000.0;
 }
 
-float vnoise(vec2 x, float period) {
-  vec2 i = floor(x), f = fract(x);
+// Value noise in SPACE, read at points of the unit sphere. Noise laid out in longitude and latitude is
+// stretched north-south by 1 / cos(latitude): at 45 N the generated cloud came out 1.4 times taller than
+// wide and scored four times too one-directional against VIIRS. On the sphere there is no such frame.
+float vnoise3(vec3 p) {
+  vec3 i = floor(p), f = fract(p);
   f = f * f * (3.0 - 2.0 * f);
-  vec2 j = vec2(mod(i.x + 1.0, period), i.y + 1.0);               // periodic in longitude
-  return mix(mix(hash12(i), hash12(vec2(j.x, i.y)), f.x), mix(hash12(vec2(i.x, j.y)), hash12(j), f.x), f.y);
+  return mix(mix(mix(hash13(i), hash13(i + vec3(1.0, 0.0, 0.0)), f.x), mix(hash13(i + vec3(0.0, 1.0, 0.0)), hash13(i + vec3(1.0, 1.0, 0.0)), f.x), f.y),
+             mix(mix(hash13(i + vec3(0.0, 0.0, 1.0)), hash13(i + vec3(1.0, 0.0, 1.0)), f.x), mix(hash13(i + vec3(0.0, 1.0, 1.0)), hash13(i + vec3(1.0, 1.0, 1.0)), f.x), f.y), f.z);
 }
-// Three octaves of value noise whose coarsest wave is `km` long on the ground; returns about 0..1, mean 0.5.
-float clumps(vec2 uv, float km) {
-  float fx = floor(40075.0 / km);
-  vec2 x = uv * vec2(fx, fx * 0.5);
-  return 0.50 * vnoise(x, fx) + 0.30 * vnoise(x * 2.0 + 7.7, fx * 2.0) + 0.20 * vnoise(x * 4.0 + 3.1, fx * 4.0);
+// Three octaves whose coarsest cell is `km` across on the ground; P is a unit vector. About 0..1, mean 0.500, sd 0.114.
+float clumps3(vec3 P, float km) {
+  vec3 p = P * (6371.0 / km);
+  return 0.50 * vnoise3(p) + 0.30 * vnoise3(p * 2.0 + 7.7) + 0.20 * vnoise3(p * 4.0 + 3.1);
 }
 // how many octaves the pixel is finer (negative) or coarser (positive) than a wave `km` long
 float lodOf(float km) { return log2(max(length(gDx) * 40075.0, length(gDy) * 20037.0) / km + 1e-6); }
 
-// Cloud optical density at uv. A real cloud photograph, moved along the monthly-mean surface
-// wind (two-phase flow map so the distortion stays bounded) and thinned or thickened by the
-// monthly cloud-fraction climatology. Shapes are real; positions are MODELLED.
-float cloudAt(vec2 uv, vec2 flowUV, float frac) {
-  const float PERIOD = 30.0;                                   // hours per flow cycle
+const float CLOUD_MAX = 0.96;      // ceiling of the cloud photograph read as reflectance
+const float LIGHT_GAIN = 1.0;       // ISCCP mean cloud reflectance to the atlas's: 1 if the two instruments agree
+// The photographed cloud at uv: fronts, storms, high cloud. Two things come from two places. HOW MUCH
+// light cloud sends back here this month is the satellite climatology's (`light`: each kind's amount times
+// the reflectance of its own optical thickness). WHAT SHAPE it takes is the photograph's, moved along the
+// monthly-mean surface wind (a two-phase flow map so the distortion stays bounded): the photograph divided
+// by its own 1200 km mean, so that it carries pattern and no amount. Shapes are real; positions are MODELLED.
+// Without the climatology (`light` < 0) the photograph's own brightness is used, as before.
+float cloudAt(vec2 uv, vec2 flowUV, float light) {
+  // Hours per flow cycle. It was 30: across a wind shear that drew every cloud out into streaks, and at
+  // 2 km a pixel the field was three times as one-directional as real cloud (cloud_texture.py, aniso).
+  const float PERIOD = 18.0;
   float ph0 = fract(uHours / PERIOD), ph1 = fract(uHours / PERIOD + 0.5);
   float w0 = 1.0 - abs(2.0 * ph0 - 1.0);
   // slow eastward carry so cycles do not replay in place. Only its fraction is kept: the whole number of
   // turns is hundreds, and subtracting that from uv cost the longitude four digits (seen as vertical streaks)
   float drift = fract(uHours * 2.2e-4);
   vec2 base = vec2(uv.x - drift, uv.y);
-  float c0 = textureGrad(uClouds, base - flowUV * (ph0 - 0.5) * PERIOD, gDx, gDy).r;
-  float c1 = textureGrad(uClouds, base - flowUV * (ph1 - 0.5) * PERIOD + vec2(0.37, 0.0), gDx, gDy).r;
-  float c = mix(c1, c0, w0);
-  float gain = mix(0.55, 1.75, smoothstep(0.15, 0.85, frac));
-  c = clamp(c * gain - 0.10 * (1.0 - frac), 0.0, 1.0);
-  // Below the photograph's 5 km texel the field would only be a blur. Cloud edges are ragged at every
-  // scale, so the edge (not the core, not the clear air) is broken up by clumps 4-16 km across, carried
-  // with the same drift. It fades out as the pixel grows past the texel: the far view is untouched.
-  float fine = 1.0 - smoothstep(-2.0, 0.0, lodOf(16.0));
-  if (fine > 0.01) c = clamp(c + (clumps(base, 16.0) - 0.5) * 0.65 * fine * 4.0 * c * (1.0 - c), 0.0, 1.0);
-  return c;
+  vec2 p0 = base - flowUV * (ph0 - 0.5) * PERIOD, p1 = base - flowUV * (ph1 - 0.5) * PERIOD + vec2(0.37, 0.0);
+  float c = mix(textureGrad(uClouds, p1, gDx, gDy).r, textureGrad(uClouds, p0, gDx, gDy).r, w0);
+  if (light < 0.0) return clamp(c * 1.15 - 0.05, 0.0, 1.0);
+  // mip 8: about 1200 km. At mip 6 (300 km) the division flattened every front and storm cluster: a fifth
+  // of the variance was left at 64-256 km where VIIRS has half.
+  float cbar = mix(textureLod(uClouds, p1, 8.0).r, textureLod(uClouds, p0, 8.0).r, w0);
+  // The photograph's faintest third is haze and sensor floor, not cloud: it is cut off, and the rest scaled
+  // up by what was measured to keep the mean exactly (over the photograph, E[max(r - 0.35, 0)] = 0.626).
+  return clamp(light * LIGHT_GAIN * 1.60 * max(c / max(cbar, 0.06) - 0.35, 0.0), 0.0, 1.0);
 }
 
 // ---- the air ----------------------------------------------------------------------------------
@@ -165,7 +190,6 @@ vec3 display(vec3 c) {
 vec3 fromDisplay(vec3 d) { return pow(d, vec3(GAMMA)) / EXPO; }
 const float WIND_SPREAD = 4.5;     // m/s, day-to-day spread of the wind about its monthly mean vector
 const float LAND_LS = 0.30;        // share of the ground's light that follows Lommel-Seeliger (rough, self-shadowing) rather than Lambert
-const float CLOUD_MAX = 0.96;      // ceiling of the cloud photograph read as reflectance
 const float CLOUD_MU = 0.75;       // the Sun height (cosine) at which the photograph's brightness IS the reflectance
 const float NIGHT_GAIN = 3.0;      // faint light (cities, moonlight, stars, aurora) is not scored by a daylit photograph; this keeps it where it was set by eye
 
@@ -176,12 +200,57 @@ const float NIGHT_GAIN = 3.0;      // faint light (cities, moonlight, stars, aur
 // the wanted coverage: `th` is the texture's own measured quantile curve. MODELLED.
 // Why it exists: against NASA EPIC the clearest twentieth of vegetated land was 25 display levels
 // brighter than bare ground under clear air, in every latitude band, while desert and ocean matched.
-const float CUMULUS_COVER = 0.20;
-const float CUMULUS_E2 = 1.2;      // mean of the sharpened field envelope, so sharpening leaves the mean cover alone  // afternoon cover over the wettest land (it was 0.42 while the ground under it was drawn too dark)
-float cumulusAt(vec2 uv, float humid, float lst) {
-  float heat = 0.12 + 0.88 * smoothstep(8.0, 12.5, lst) * (1.0 - smoothstep(17.0, 21.0, lst));
-  float c = CUMULUS_COVER * humid * heat;                         // fraction of the ground under cloud
-  if (c < 0.004) return 0.0;
+const float CUMULUS_COVER = 0.20;  // fallback only (no cloud-kind field loaded): afternoon cover over the wettest land
+const float CUMULUS_E2 = 1.2;      // mean of the sharpened field envelope, so sharpening leaves the mean cover alone
+const float CU_FILL = 0.28;        // share of a satellite pixel called "cumulus" that cloud really fills: its 0.14 reflectance over a cell's 0.5
+const float CLOUD_SLANT = 0.5;     // how fast the gaps in broken cloud close as the view tilts (towers about half as tall as wide)
+const float CLOUD_OPP = 0.50;      // extra brightness of broken cloud seen from the Sun's side. Amplitude from EPIC (4-12 degrees
+                                   // from the Sun); it must be nearly gone by 30 degrees, where VIIRS looks and needs none: width 25
+const float CU_KM = 7.0;           // coarsest wave of a cumulus field: VIIRS puts a quarter to a third of its variance at 4-8 km
+const float DECK_KM = 30.0;        // one cell of a stratocumulus sheet
+
+// The level at which the noise must be cut for a share `p` of the ground to lie above it: the noise's own
+// quantile curve, measured, scaled by `k` (0.84 for clumps3; 0.64 for the two-sample street average).
+// A straight line through it, used before, gave 8% cover when asked for 20% and 3% when asked for 10%.
+float cutFor(float p, float k) {
+  float a = abs(p - 0.5);
+  float d = a < 0.2 ? a * 0.365 : a < 0.4 ? 0.073 + (a - 0.2) * 0.505 : 0.174 + (a - 0.4) * 1.125;
+  return 0.5 + (p < 0.5 ? d : -d) * k;
+}
+
+// The cloud photograph resolves about 10 km. A value of 0.3 there is not a thin veil over everything:
+// seen closer it is broken cloud, some of the sky covered and the rest clear. `a` is the reflectance the
+// far view sees. Closer than the photograph's grain the same amount is drawn as pieces 2-16 km across,
+// brighter than `a` by exactly as much as they cover less, so the mean does not change with zoom.
+float broken(vec3 Pd, float a) {
+  float lod = lodOf(16.0);
+  if (lod > 0.5 || a < 0.01) return a;
+  // Cloud of middling brightness is not a thin sheet over everything: it is solid cloud over part of the
+  // sky and clear air over the rest, in pieces 10-40 km across with ragged edges. (Cutting it at the
+  // pixel scale instead peppered every deck with holes; leaving it uncut put cloud over twice the sky
+  // VIIRS shows.) Inside a piece what varies is thickness.
+  float cover = clamp(pow(a / 0.75, 0.6), 0.04, 1.0);
+  float cells = 1.0;
+  if (cover < 0.99) {
+    float th = cutFor(cover, 0.866);
+    // a wide ramp, not a cut: a piece thins toward its edge and is brightest in its core
+    cells = smoothstep(th - 0.13, th + 0.13, clumps3(Pd, 20.0) + 0.25 * (clumps3(Pd + 0.19, 5.0) - 0.5));
+  }
+  float lumps = 1.0 + (1.6 * (clumps3(Pd + 0.37, 18.0) - 0.5) + 1.0 * (clumps3(Pd + 0.71, 6.0) - 0.5)) * (1.0 - smoothstep(-2.0, 0.0, lodOf(18.0)));   // thickness, +-20%, mean 1
+  // The pieces are drawn only where a pixel is finer than about 5 km. EPIC resolves 10-18 km and shows
+  // middling brightness widely there; cutting the far view into pieces made it more two-toned than the
+  // photographs (the 20th to 60th percentiles over ocean fell 6-15 levels).
+  return mix(min(cells * a / cover * lumps, CLOUD_MAX), a, smoothstep(-2.0, -0.5, lod));
+}
+
+// Thin broken low cloud: fair-weather cumulus over land, trade cumulus over the sea. `amount` is the
+// share of sky it covers. Single cells are 1-2 km, under the 2 km zoom floor; what a pixel that size
+// can show is how they clump into knots and streets, and coarser pixels see only the mean. MODELLED.
+// Streets: the noise is read twice, a little up and down the wind, and averaged, which draws its clumps
+// out along the wind without turning any frame (a frame turned by an angle that varies from place to place
+// tears the pattern apart far from the origin). Pd and Wd are the place and the wind's direction, unit vectors.
+float cumulusAt(vec2 uv, vec3 Pd, vec3 Wd, float amount) {
+  if (amount < 0.004) return 0.0;
   // cells gather into fields tens of km across: the cloud photograph at 5 and 13 times its frequency
   // sets where the fields are (its mean in this band is 0.194, so each envelope averages 1)
   vec2 q = vec2(uv.x * 5.0 + 0.13, 0.25 + 0.5 * abs(fract(uv.y * 5.0) * 2.0 - 1.0));
@@ -189,14 +258,58 @@ float cumulusAt(vec2 uv, float humid, float lst) {
   vec2 q2 = vec2(uv.x * 13.0 + 0.61, 0.25 + 0.5 * abs(fract(uv.y * 13.0 + 0.3) * 2.0 - 1.0));
   float env2 = clamp(textureGrad(uClouds, q2, gDx * 13.0, gDy * 13.0).r / 0.194, 0.0, 2.4);
   float e = 0.5 * (env + env2);                                    // fields of two sizes, 30 and 80 km
-  c = min(0.60, c * e * sqrt(e) / CUMULUS_E2);                     // sharpened: fields with clear air between them, not a veil
-  // Single cells are 1-2 km, under the 2 km zoom floor. What a pixel that size CAN show is how they
-  // clump: knots and streets 3 to 12 km across. Coarser pixels than that see only the mean cover.
-  float n = clumps(uv, 12.0);
-  float th = 0.5 + (0.5 - c) * 0.62;
-  float cells = smoothstep(th - 0.15, th + 0.15, n);
+  float c = min(0.60, amount * e * sqrt(e) / CUMULUS_E2);          // sharpened: fields with clear air between them, not a veil
+  float lod = lodOf(CU_KM);
+  float cells = c;
+  if (lod < 0.5) {
+    vec3 d = Wd * (0.45 * CU_KM / 6371.0);
+    float n = 0.5 * (clumps3(Pd + d, CU_KM) + clumps3(Pd - d, CU_KM));
+    float th = cutFor(c, 0.64);
+    cells = mix(smoothstep(th - 0.05, th + 0.05, n), c, smoothstep(-1.5, 0.5, lod));
+  }
   // a crowded field holds taller, thicker cloud: reflectance from 0.45 (scattered fair-weather cells) to 0.70
-  return mix(0.45, 0.70, smoothstep(0.15, 0.50, c)) * mix(cells, c, smoothstep(-1.5, 0.5, lodOf(12.0)));
+  return mix(0.45, 0.70, smoothstep(0.15, 0.50, c)) * cells;
+}
+
+// Distance to the nearest and second-nearest of the jittered points of a grid with cells `km` across.
+vec2 worley(vec2 uv, float km) {
+  float fx = floor(40075.0 / km);
+  vec2 x = uv * vec2(fx, fx * 0.5), i = floor(x), f = fract(x);
+  float d1 = 9.0, d2 = 9.0;
+  for (int b = -1; b <= 1; b++) for (int a = -1; a <= 1; a++) {
+    vec2 g = vec2(float(a), float(b)), c = i + g;
+    c.x = mod(c.x, fx);
+    float d = length(g + vec2(hash12(c), hash12(c + 17.31)) - f);
+    if (d < d1) { d2 = d1; d1 = d; } else if (d < d2) d2 = d;
+  }
+  return vec2(d1, d2);
+}
+
+// Stratocumulus: the sheets that roof the cold eastern sides of the subtropical oceans. Seen from above
+// a sheet is a pavement of cells some 30 km across. Where it is thick the cells are closed: cloud, with
+// thin clear lanes between. Where it thins they are open: rings of cloud round clear centres. `amount`
+// is the share of sky under sheet cloud (ISCCP). The pavement is generated: MODELLED.
+float deckAt(vec2 uv, vec3 Pd, float amount) {
+  if (amount < 0.02) return 0.0;
+  vec2 b = vec2(uv.x - fract(uHours * 2.2e-4), uv.y);
+  float c = clamp(amount * (0.55 + 0.9 * clumps3(Pd, 480.0)), 0.0, 1.0); // the sheet's own weather: pockets and clearings
+  float k = smoothstep(0.35, 0.70, c);                                    // how closed the cells are
+  float lod = lodOf(DECK_KM);
+  float cells = mix(0.42, 0.84, k);                                       // what the pavement averages to
+  if (lod < 0.5) {
+    // the grid is pushed about by a third of a cell so that no two cells are alike and no wall is straight
+    vec2 warp = (vec2(clumps3(Pd, 70.0), clumps3(Pd + 0.61, 70.0)) - 0.5) * (0.9 * DECK_KM / 40075.0) * vec2(1.0, 2.0);
+    vec2 w = worley(b + warp, DECK_KM);
+    float edge = w.y - w.x;                                               // 0 on the wall between two cells
+    // walls are soft: a cell fades into the lane beside it over a third of its width
+    // closed cells: the lanes between them are thinner cloud, not clear sky. Open cells: soft rings.
+    float pat = mix(mix(0.12, 1.0, 1.0 - smoothstep(0.02, 0.40, edge)), mix(0.62, 1.0, smoothstep(0.0, 0.34, edge)), k);
+    cells = mix(pat, cells, smoothstep(-1.0, 0.5, lod));
+  }
+  float fine = 1.0 - smoothstep(-2.0, 0.0, lodOf(8.0));
+  if (fine > 0.01) cells *= 1.0 + (clumps3(Pd, 8.0) - 0.5) * 1.6 * fine;
+  // a sheet thinner than a fifth of the sky is not a pavement at all (and drew a faint net over every ocean)
+  return clamp(cells * smoothstep(0.18, 0.42, c), 0.0, 1.0) * mix(0.42, 0.62, k);  // reflectance: thin and broken to thick sheet
 }
 
 // ---- the ground's albedo from Blue Marble --------------------------------------------------
@@ -302,6 +415,18 @@ void main() {
   float coslat = max(cos(ll.y), 0.02);
 
   vec3 bm = mix(tex(uAlbA, uv).rgb, tex(uAlbB, uv).rgb, uAlbMix);     // Blue Marble's own display values
+  // The focus window. Position in it, 0..1 each way (longitude wraps), and a weight that fades to nothing
+  // over the outer 6% so the window never shows an edge.
+  vec2 dw = vec2(fract(uv.x - uDetWin.x), uv.y - uDetWin.y) / uDetWin.zw;
+  float inWin = (uDetAlbW + uDetElevW) > 0.0 ? smoothstep(0.0, 0.06, min(min(dw.x, 1.0 - dw.x), min(dw.y, 1.0 - dw.y))) : 0.0;
+  if (inWin * uDetAlbW > 0.0) {
+    // Frequency split. The month's colour stays the shipped field's (it is the right SEASON); the fine
+    // structure is the streamed picture's, with its own coarse part taken out so nothing is counted twice.
+    vec3 fineBm = textureGrad(uDetAlb, dw, gDx / uDetWin.zw, gDy / uDetWin.zw).rgb - textureLod(uDetAlb, dw, uDetAlbLod).rgb;
+    // not under snow: the streamed picture is one month, and summer ground does not show through winter snow
+    float snowy = smoothstep(0.70, 0.90, min(bm.r, min(bm.g, bm.b)));
+    bm = clamp(bm + fineBm * inWin * uDetAlbW * (1.0 - snowy), 0.0, 1.0);
+  }
   vec3 alb = albedoOf(bm);
   vec2 wn = tex(uWaterNight, uv).rg;
   float water = uHasWater > 0.5 ? smoothstep(0.35, 0.65, wn.r) : 0.0;
@@ -312,11 +437,24 @@ void main() {
     vec2 r = clamp((tex(uRelief, uv).rg - 0.5) * 2.0, -0.985, 0.985);
     grad = 0.5 * log((1.0 + r) / (1.0 - r)) / 3.0;                 // atanh / 3 : metres per metre
   }
+  if (inWin * uDetElevW > 0.0) {   // (the texture's G channel then decides texel by texel)
+    // streamed elevation: height, and slope by central differences (east positive, north positive)
+    // G is 1 where the texel is the streamed tiles' own (land) and 0 where the window was filled from the
+    // shipped field (sea floor, beyond 85 degrees): there the shipped height and slope stay in charge.
+    float wE = inWin * uDetElevW * texture(uDetElev, dw).g;
+    float zE = texture(uDetElev, dw + vec2(uDetElevPx.x, 0.0)).r, zW = texture(uDetElev, dw - vec2(uDetElevPx.x, 0.0)).r;
+    float zN = texture(uDetElev, dw - vec2(0.0, uDetElevPx.y)).r, zS = texture(uDetElev, dw + vec2(0.0, uDetElevPx.y)).r;
+    vec2 gD = vec2((zE - zW) / (2.0 * uDetElevM.x * max(cos(ll.y), 0.02)), (zN - zS) / (2.0 * uDetElevM.y));
+    grad = mix(grad, gD, wE);
+    z = mix(z, texture(uDetElev, dw).r, wE);
+  }
   vec3 atA = vec3(0.5, 0.5, 0.6), atB = vec3(0.5, 0.5, 0.2);
   if (uHasClimate > 0.5) { atA = arr(uAtmoA, uv); atB = arr(uAtmoB, uv); }
   vec2 wind = vec2(dec(atA.r, uE_u10), dec(atA.g, uE_v10));
   float windSp = length(wind);
   float cloudFrac = dec(atB.g, uE_cloud);
+  vec3 kinds = vec3(0.0, 0.0, -1.0);                                 // sky share of sheet cloud and of thin broken cloud; mean reflectance of the rest
+  if (uHasCloudT > 0.5) { vec3 ct = arrAt(uAtmoB, uv, 12.0); kinds = vec3(dec(ct.r, uE_deck), dec(ct.g, uE_cu), dec(ct.b * ct.b, uE_light)); }
   float precip = dec(atB.b * atB.b, uE_precip);
   float slp = dec(atB.r, uE_slp);
   vec3 oc = uHasOcean > 0.5 ? arr(uOceanA, uv) : vec3(0.5, 0.0, 0.0);
@@ -335,14 +473,28 @@ void main() {
 
   // ---- clouds -------------------------------------------------------------------------------
   vec2 flowUV = vec2(wind.x / coslat / (2.0 * PI), -wind.y / PI) * (3600.0 / 6371008.8) * 2.5;   // uv per hour, x2.5 so drift reads at global scale
-  float cloud = 0.0, cloudSh = 0.0, cloudSun = 0.0, cum = 0.0;
+  float cloud = 0.0, cloudSh = 0.0, cloudSun = 0.0, cum = 0.0, deck = 0.0;
+  // the generated cloud's own frame: the sphere, turned by the same slow eastward carry as the photograph
+  float dA = 2.0 * PI * fract(uHours * 2.2e-4), cdA = cos(dA), sdA = sin(dA);
+  vec3 Pd = vec3(cdA * N.x + sdA * N.y, -sdA * N.x + cdA * N.y, N.z);
+  vec3 Wt = normalize(wind.x * E + wind.y * Nn + 1e-4 * E);
+  vec3 Wd = vec3(cdA * Wt.x + sdA * Wt.y, -sdA * Wt.x + cdA * Wt.y, Wt.z);
   vec2 sunStep = vec2(sunE / coslat / (2.0 * PI), -sunN / PI);
   if (uCloudsOn > 0.5 && uHasLive < 0.5) {
-    cloud = cloudAt(uv, flowUV, cloudFrac);
+    // Three kinds of cloud, each drawn its own way: the photograph for fronts, storms and high cloud,
+    // a generated pavement for stratocumulus sheets, generated clumps for broken low cloud.
+    cloud = cloudAt(uv, flowUV, kinds.z);
     float slant = 1.0 / max(mu0, 0.18);
-    cloudSh = cloudAt(uv + sunStep * 0.0035 * slant, flowUV, cloudFrac);     // what stands between this ground and the Sun
-    cloudSun = cloudAt(uv + sunStep * 0.0016, flowUV, cloudFrac);            // the cloud's own sunward neighbour
-    cum = cumulusAt(uv, (1.0 - water) * smoothstep(0.2, 3.0, precip), lst);
+    cloudSh = cloudAt(uv + sunStep * 0.0035 * slant, flowUV, kinds.z);       // what stands between this ground and the Sun
+    cloudSun = cloudAt(uv + sunStep * 0.0016, flowUV, kinds.z);              // the cloud's own sunward neighbour
+    // Broken low cloud. Over land it follows the day: little at dawn, most in the afternoon (the satellite's
+    // amount is a daytime mean, so the cycle is scaled to average 1). The satellite also reports thin low
+    // cloud over bright desert that is not there: none is drawn where it does not rain.
+    float heat = 0.12 + 0.88 * smoothstep(8.0, 12.5, lst) * (1.0 - smoothstep(17.0, 21.0, lst));
+    float cuAmt = uHasCloudT > 0.5 ? kinds.y * CU_FILL * mix(heat / 0.70, 1.0, water) * smoothstep(0.1, 0.6, precip)
+                                   : CUMULUS_COVER * (1.0 - water) * smoothstep(0.2, 3.0, precip) * heat;
+    cum = cumulusAt(uv, Pd, Wd, cuAmt);
+    deck = deckAt(uv, Pd, kinds.x);
   }
 
   // ---- relief normal ------------------------------------------------------------------------
@@ -360,7 +512,8 @@ void main() {
     float shade = clamp(dot(n, uSun) / max(mu0, 0.10), 0.0, 2.4);
     shade = mix(1.0, shade, smoothstep(-0.02, 0.10, mu0) * (1.0 - water));
     lensShade = shade;
-    float shadow = 1.0 - 0.62 * cloudSh;
+    float lowCloud = 1.0 - (1.0 - cum) * (1.0 - deck);              // low cloud shades what is straight under it
+    float shadow = (1.0 - 0.62 * cloudSh) * (1.0 - 0.75 * lowCloud);
 
     // Rough ground is not a Lambert surface: seen from near the Sun's direction it hides its own
     // shadows and falls off toward the limb more slowly (Lommel-Seeliger). Normalised to 1 with Sun and
@@ -411,9 +564,22 @@ void main() {
     float cRef = cloud < 0.55 ? cloud : 0.55 + (CLOUD_MAX - 0.55) * tanh((cloud - 0.55) / (CLOUD_MAX - 0.55));
     float tC = CLOUD_MU * cRef / (1.0 - cRef);
     float cloudA = mix(cRef, tC / (max(mu0, 0.30) + tC), dayF);   // below 17 degrees of Sun, broken cloud shades itself and the gain stops
-    cloudA = 1.0 - (1.0 - cloudA) * (1.0 - cum);                   // cumulus under and between the larger systems
+    cloudA = broken(Pd, cloudA);
+    cloudA = 1.0 - (1.0 - cloudA) * (1.0 - lowCloud);              // sheets and cumulus under and between the larger systems
+    // Two things the eye's position does to broken cloud, neither of which changes what the cloud is.
+    // Seen at a slant, the gaps close: towers hide the clear air behind them. And seen from the Sun's
+    // own side no cloud shows its shadowed flank or the shadow it throws, so the field reads brighter:
+    // the amount of cloud light is fixed by satellites looking straight down in the afternoon (ISCCP,
+    // VIIRS), and NASA EPIC, which looks from within 4-12 degrees of the Sun, sees about a third more.
+    // Solid cloud has no gaps and no flanks: both effects fade as the cover closes.
+    if (uView == 0) {
+      float nvC = max(dot(N, V), 0.35);
+      cloudA = 1.0 - pow(1.0 - cloudA, 1.0 + CLOUD_SLANT * (1.0 / nvC - 1.0));
+      float opp = 1.0 + CLOUD_OPP * exp(-(1.0 - dot(uSun, V)) / 0.094) * dayF;      // 0.094 = 1 - cos 25 degrees
+      cloudA = cloudA * opp / (1.0 + cloudA * (opp - 1.0));
+    }
     col = mix(col, cloudC, cloudA);
-    cloud = max(cloud, cum);                                       // what the air and the city lights below see
+    cloud = max(cloud, lowCloud);                                  // what the air and the city lights below see
 
     // the dark side: electric light
     if (uNightOn > 0.5) {

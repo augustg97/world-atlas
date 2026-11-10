@@ -32,6 +32,16 @@
     null
    ]
   },
+  "cloudT": {
+   "file": "cloudT.png",
+   "w": 360,
+   "h": 180,
+   "channels": [
+    "deck",
+    "cu",
+    "light"
+   ]
+  },
   "oceanA": {
    "file": "oceanA.png",
    "w": 1440,
@@ -55,6 +65,7 @@
  },
  "periods": {
   "atmo": "1991-2020 monthly means (NCEP/NCAR R1; GPCP v2.3)",
+  "cloud": "2007-2016 monthly means (ISCCP H-series HGM): total cloud and its amount by kind",
   "ocean": "sea-surface temperature: 1991-2020 monthly means (NOAA OISST v2.1)",
   "ice": "one typical year of 1991-2020: mean concentration inside the line that encloses the mean of the yearly extents (NSIDC Sea Ice Index, Version 4, G02135, monthly 25 km grids)",
   "currents": "2019-2023 monthly means, 5 m depth (NCEP GODAS)"
@@ -131,6 +142,24 @@
    "hi": 2,
    "curve": "ssqrt",
    "units": "m/s"
+  },
+  "deck": {
+   "lo": 0,
+   "hi": 1,
+   "curve": "linear",
+   "units": "fraction"
+  },
+  "cu": {
+   "lo": 0,
+   "hi": 1,
+   "curve": "linear",
+   "units": "fraction"
+  },
+  "light": {
+   "lo": 0,
+   "hi": 0.75,
+   "curve": "sqrt",
+   "units": "mean reflectance"
   }
  }
 }

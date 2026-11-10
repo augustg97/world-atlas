@@ -17,11 +17,11 @@ Paste this whole file as the first message of a new session.
 
 ## The current task
 
-Kickoff, the first build, a verify round and one build round are done. The contract is `SCOPE.md`; the open
-work is `Research/MODEL-GAPS.md` (35 items, 3 open at P1). Against NASA's photographs the Space register is
-now **close, with named exceptions**: colour, exposure, ocean, desert, vegetated land, the disc profile and
-the brightness of cloud sit within a few display levels. What is left is what a cloud looks like close in
-and where it is (B1), the zoom floor (A2) and labels (F1).
+Kickoff, the first build, a verify round and two build rounds are done. The contract is `SCOPE.md`; the open
+work is `Research/MODEL-GAPS.md` (36 items, 1 open at P1). Against NASA's photographs the Space register is
+**close, with named exceptions**. The zoom floor is now met by streamed fields, the sheet names 129 of 198
+states, and cloud amount and brightness come from a satellite climatology. What is left at P1 is cloud close
+in: it is statistically nearer real cloud than it was and still reads as generated (B1).
 
 ## Reference material and the measurement harness
 
@@ -36,11 +36,14 @@ The comparison is only meaningful at **matched scale**. All of this exists; reus
   `Research/modeling/epic_render.py` does the same headless.
 - `Research/modeling/epic_compare.py --tag <tag>` prints the per-frame table and writes side-by-side
   pairs to `Research/figures/epic/`. `epic_cloud_cdf.py <tag> [--land|--zonal]` compares cloud brightness
-  distributions. `_r0` is the first build, `_r7` after the verify round, `_r8` after the build round.
+  distributions. `_r0` is the first build, `_r7` after the verify round, `_r8` and `_r9` after the two build rounds.
 - `epic_clearsky.py` builds a cloud-free EPIC composite per frame (third-darkest of about 16 days) and
   scores the atlas with clouds off against it; pairs are `Research/figures/epic/clearsky_*`.
   `epic_anchors.py` fits the display transform; `land_transfer.py` fits and scores the albedo table.
   `epic_render.py <tag> air,daylight,ice` renders with clouds off.
+- `cloud_texture.py` scores cloud at 2 km a pixel against VIIRS scenes in five regimes (`cloud_scenes_render.py`
+  renders the atlas over the same ground); each number is the excess over the photographs' own day-to-day
+  spread. `audit_labels.py` places and tests names on 24 framings.
 - **Use the time in EPIC's image name, not its `date` field.** They differ by about five minutes and the
   centroid longitude belongs to the image name: with `date`, the Sun sat 1.1 degrees off in every frame.
 - `?frozen=1` gives a deterministic frame (`window.__FRAME_READY`). Six of them are baselines in
@@ -52,10 +55,28 @@ The comparison is only meaningful at **matched scale**. All of this exists; reus
 
 - Last live deploy: **never deployed**
 - Committed locally on branch `verify-round` and not pushed: everything
-- `data/` holds about 3 GB of sources and caches (gitignored); `python build/fetch_sources.py` rebuilds it,
-  including 438 MB of NSIDC grids. `reference/epic/clearsky/` holds about 300 MB of EPIC frames for the
-  clear-sky composite (`epic_clearsky.py --fetch`); the `clear-sky` audit cannot run without it.
-- `./venv/bin/python Research/modeling/audit_all.py` passes: ten checks, about 2 min 30 s.
+- `data/` holds about 3.6 GB of sources and caches (gitignored); `python build/fetch_sources.py` rebuilds it,
+  including 438 MB of NSIDC grids and 581 MB of ISCCP. Three reference sets live under `reference/`
+  (gitignored): `epic/` and `epic/clearsky/` (300 MB) and `gibs_clouds/` (5 MB); each has a `--fetch`.
+- `./venv/bin/python Research/modeling/audit_all.py` passes: eleven checks, about 3 min 50 s.
+- **The app now talks to two outside hosts when zoomed in** (NASA GIBS, AWS Terrain Tiles), by default, and
+  says so in About. Read register A2 before publishing: one line of the tile documentation needs the owner's eye.
+- **The earth shader uses 16 of 16 texture units.** See G7.
+
+## What the second build round found (2026-11-10)
+
+1. **Cloud amount is not cloud light.** ISCCP puts 74% cloud over the Congo in April and VIIRS shows a mean
+   reflectance of 0.22 there: most of it is thin. The picture is now driven by amount times the reflectance
+   of each kind's optical thickness, and with no tuning lands within 0.08 of VIIRS at five scenes.
+2. **The reanalysis cloud field had no stratocumulus decks** (16% bright cloud off Peru; VIIRS 45%).
+3. **VIIRS and ISCCP (looking down) and EPIC (looking from the Sun) differ by a third in cloud light.**
+   Modelled as shadow hiding in broken cloud, pinned at those two angles only.
+4. **Noise in longitude-latitude space is stretched at high latitude**; generated cloud now lives on the sphere.
+5. **A straight-line threshold on noise gave 8% cover when asked for 20%.** Measured quantile curve now.
+6. **Seventeen samplers linked in the audits and failed on the real GPU.** Guarded now; no real-GPU audit yet.
+7. **The tiles' sea floor is a different product from the shipped one** (1-4 km apart). Land agrees to 25 m.
+8. **The label audit's own state list was wrong** (no Kazakhstan, no Cuba). 198 now.
+9. **Three cloud versions scored better than their predecessors and looked worse.** Read the pairs.
 
 ## What the build round found (2026-11-10)
 
@@ -116,11 +137,11 @@ Plus the standing ones:
 
 ## The work queue
 
-1. **B1** - cloud shape and place: cumulus with streets along the wind and shadows, edge detail from
-   something better than noise, and positions from more than one 2002 photograph.
-2. **A2** - streamed elevation and imagery to reach the 2 km floor.
-3. **F1** - label placement: 21 of 204 states today.
-4. **A5** - the water mask from bathymetry, then lake ice.
+1. **B1** - cloud close in. The instruments exist (`cloud_texture.py`, fifteen VIIRS scenes); the pairs in
+   `Research/figures/clouds/` show what is wrong better than the numbers do.
+2. **F1** - insets or a key for Europe and the Lesser Antilles; continent names; panels.
+3. **A5** - the water mask from bathymetry, then lake ice.
+4. **G7** - one audit on a real GPU.
 5. **F2** - population by polygon, not by the country raster.
 
 **If you touch the light model** (`earth.frag.glsl`, Space branch): the order is `epic_anchors.py` (refit

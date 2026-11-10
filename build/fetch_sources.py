@@ -5,6 +5,7 @@
     ./venv/bin/python build/fetch_sources.py small      # only the small files (< 50 MB)
     ./venv/bin/python build/fetch_sources.py etopo ne   # by group
     ./venv/bin/python build/fetch_sources.py nsidc      # 720 monthly sea-ice grids + 24 extent tables
+    ./venv/bin/python build/fetch_sources.py isccp      # 120 monthly cloud-type grids, 530 MB
 
 This table IS the project's source record: name, URL, licence. Research/SOURCE-SURVEY.md
 is written from it. Every source here is public domain or plain CC-BY, except NSIDC's Sea Ice
@@ -82,6 +83,16 @@ add("psl", "psl/icec.mon.ltm.nc", f"{PSL}/noaa.oisst.v2.highres/icec.mon.ltm.199
 # NSIDC_SOUTH), one GeoTIFF per month and hemisphere for 1991-2020: 720 files, 457 MB. The
 # per-year extent tables (one CSV per calendar month, all years) are the witness the build
 # and Research/modeling/audit_ice.py check against.
+# --- cloud amount by type: ISCCP H-series monthly means, ten years ---------------------------
+# 1 degree, 4.4 MB a month. The files state: "No constraints on data access or use", and ask for a
+# citation of Rossow & Schiffer (1999) with the dataset (Young et al. 2018, doi:10.7289/V5QZ281S).
+ISCCP = "https://www.ncei.noaa.gov/data/international-satellite-cloud-climate-project-isccp-h-series-data/access/isccp-basic/hgm"
+ISCCP_YEARS = range(2007, 2017)
+for yr in ISCCP_YEARS:
+    for i in range(1, 13):
+        f = f"ISCCP-Basic.HGM.v01r00.GLOBAL.{yr}.{i:02d}.99.9999.GPC.10KM.CS00.EA1.00.nc"
+        add("isccp", f"isccp/{f}", f"{ISCCP}/{f}", "no constraints on access or use (ISCCP H-series HGM, NOAA NCEI CDR)")
+
 NSIDC = "https://noaadata.apps.nsidc.org/NOAA/G02135"
 # NSIDC names no licence for this product. Its landing page states one condition: "As a condition of
 # using these data, you must cite the use of this data set"; its data policy says most of its
@@ -168,7 +179,7 @@ def fetch(rel: str, url: str, tries: int = 6) -> bool:
 
 def main() -> int:
     want = set(sys.argv[1:])
-    big = {"etopo", "bmng", "pop", "ships", "nsidc"}
+    big = {"etopo", "bmng", "pop", "ships", "nsidc", "isccp"}
     failed = []
     many = []            # groups of many small files: fetched a few at a time, after the rest
     for group, rel, url, _lic in SOURCES:
@@ -176,7 +187,7 @@ def main() -> int:
             continue
         if want and "small" not in want and group not in want:
             continue
-        if group == "nsidc":
+        if group in ("nsidc", "isccp"):
             many.append((rel, url))
             continue
         if not fetch(rel, url):
@@ -186,7 +197,7 @@ def main() -> int:
     todo = [(rel, url) for rel, url in many
             if not (os.path.exists(os.path.join(DATA, rel)) and os.path.getsize(os.path.join(DATA, rel)) > 0)]
     if many:
-        print(f"  nsidc: {len(many) - len(todo)} of {len(many)} already here", flush=True)
+        print(f"  many-file groups: {len(many) - len(todo)} of {len(many)} already here", flush=True)
     if todo:
         from concurrent.futures import ThreadPoolExecutor
         with ThreadPoolExecutor(max_workers=NSIDC_WORKERS) as pool:   # polite: three connections, backoff in fetch()

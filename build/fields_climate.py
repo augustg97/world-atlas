@@ -75,6 +75,74 @@ def at(a, lon, lat):
     return a[..., j, i]
 
 
+def isccp_monthly(W, H):
+    """Cloud amount by kind for each month, from ISCCP H-series monthly means of 2007-2016 (1 degree).
+
+    Returns, each (12, H, W) on the canonical frame, 0..1: total cloud amount; `deck`, the share of sky under
+    stratocumulus and stratus sheets; `cu`, the share under thin broken low and middle cloud (cumulus,
+    altocumulus); and `light`, the mean reflectance of ALL THE REST (fronts, storms, high cloud): each kind's
+    amount times the reflectance its own mean optical thickness gives, summed. Amount alone is the wrong
+    driver for a picture: over the Congo in April ISCCP finds 74% cloud, most of it thin cirrus and anvil
+    with an optical thickness under 3.6, and three VIIRS scenes there average a reflectance of 0.22.
+
+    ISCCP sorts cloud by retrieved top pressure and optical thickness, and two of its habits matter here.
+    Under a strong inversion it puts the top of a stratocumulus deck too high: off Peru in September it
+    reports 19% stratocumulus and 28% "liquid altostratus" where the sky is one deck. So liquid altostratus
+    counts as deck wherever there is little high cloud above it, and as frontal cloud otherwise. And over
+    bright desert it reports thin low cloud that is not there; the shader ignores `cu` where it never rains.
+    """
+    import glob
+    cache = os.path.join(CACHE, "isccp_2007_2016.npz")
+    if os.path.exists(cache):
+        return dict(np.load(cache))
+    files = sorted(glob.glob(os.path.join(DATA, "isccp", "ISCCP-Basic.HGM.*.nc")))
+    if len(files) < 120:
+        raise SystemExit(f"ISCCP: {len(files)} of 120 monthly files in data/isccp; run build/fetch_sources.py isccp")
+    acc = {k: np.zeros((12, 180, 360)) for k in ("total", "deck", "cu", "light", "deck_light", "cu_light")}
+    cnt = {k: np.zeros((12, 180, 360)) for k in acc}
+    lon = lat = None
+    for f in files:
+        d = netCDF4.Dataset(f)
+        m = int(os.path.basename(f).split(".")[5]) - 1
+        lon, lat = np.asarray(d["lon"][:]), np.asarray(d["lat"][:])
+        t = np.ma.filled(d["cldamt_types"][0].astype(np.float64), np.nan) / 100.0        # (18, lat, lon)
+        tot = np.ma.filled(d["cldamt"][0].astype(np.float64), np.nan) / 100.0
+        high = t[[12, 13, 14, 15, 16, 17]].sum(0)
+        under_clear_sky = np.clip(1.0 - high / 0.20, 0.0, 1.0)                           # little cloud above 440 hPa
+        tau = np.ma.filled(d["tau_types"][0].astype(np.float64), np.nan)
+        # two-stream reflectance of a layer of optical thickness tau with the Sun 40 degrees from overhead
+        # (the shader's CLOUD_MU); where a kind is absent its tau is missing and its amount is zero
+        refl = np.nan_to_num(0.075 * tau / (0.75 + 0.075 * tau)) * np.nan_to_num(t)
+        w7 = t[7] * under_clear_sky
+        r7 = refl[7] * under_clear_sky
+        rest = [6 + 2, 9 + 1, 9 + 2, 12, 13, 14, 15, 16, 17]          # nimbostratus, altostratus (ice), all high cloud
+        v = {"total": tot,
+             "deck": t[[1, 2, 4, 5]].sum(0) + w7,
+             "cu": t[[0, 3, 6, 9]].sum(0),
+             "light": refl[rest].sum(0) + (refl[7] - r7),
+             "deck_light": refl[[1, 2, 4, 5]].sum(0) + r7,
+             "cu_light": refl[[0, 3, 6, 9]].sum(0)}
+        for k in acc:
+            ok = np.isfinite(v[k])
+            acc[k][m][ok] += v[k][ok]; cnt[k][m][ok] += 1
+        d.close()
+    out = {}
+    for k in acc:
+        a = np.where(cnt[k] > 0, acc[k] / np.maximum(cnt[k], 1), np.nan)
+        a = F.resample_grid(a, lon, lat, W, H)
+        out[k] = np.clip(fill_nearest(a), 0.0, 1.0)
+    # Poleward of 70 degrees ISCCP cannot tell cloud from ice by kind (blocky equal-area cells, polar night):
+    # the kinds fade out there and only the total is used.
+    lat_c = np.abs(F.canon_lat(H))[None, :, None]
+    keep = np.clip((80.0 - lat_c) / 10.0, 0.0, 1.0)
+    for k in ("deck", "cu"):
+        out[k] = out[k] * keep
+    # poleward of 80 the light of deck and cumulus goes to `light`, so no cloud is lost when the kinds fade
+    out["light"] = out["light"] + (out["deck_light"] + out["cu_light"]) * (1 - keep)
+    np.savez_compressed(cache, **out)
+    return out
+
+
 def step_atmo():
     print("atmosphere")
     W, H = 360, 180
@@ -89,7 +157,11 @@ def step_atmo():
     v = grid("vwnd.sig995.mon.ltm.nc", "vwnd")
     slp = grid("slp.mon.ltm.nc", "slp")
     t2 = grid("air.2m.mon.ltm.nc", "air") - 273.15
-    cld = grid("tcdc.eatm.mon.ltm.nc", "tcdc") / 100.0
+    cld_r1 = grid("tcdc.eatm.mon.ltm.nc", "tcdc") / 100.0
+    # Cloud is the satellite's, not the reanalysis's: NCEP R1 has almost none of the stratocumulus decks
+    # (measured against VIIRS scenes off Peru: 16% bright cloud in the atlas, 45% in the photographs).
+    ic = isccp_monthly(W, H)
+    cld, deck, cu, light = ic["total"], ic["deck"], ic["cu"], ic["light"]
     pr = grid("precip.mon.ltm.nc", "precip")
     lev = list(local("uwnd.mon.ltm.nc")["level"][:])
     k = lev.index(250.0)
@@ -110,6 +182,21 @@ def step_atmo():
     assert at(pr[0], -60, -5) > 5 and at(pr[6], 25, 23) < 0.3, "Amazon wet season; Sahara dry"
     assert at(slp[0], -20, 63) < 1002 and at(slp[6], -35, 35) > 1020, "Icelandic low; Azores high"
     assert at(u250[0], 140, 33) > 50, "the winter jet over Japan"
+    wts = np.cos(np.radians(F.canon_lat(H)))[:, None] * np.ones((1, W))
+    print(f"  global mean cloud: ISCCP {np.average(cld.mean(0), weights=wts):.2f} (observed about 0.67), reanalysis {np.average(np.nan_to_num(cld_r1).mean(0), weights=wts):.2f}")
+    dl, cl = ic["deck_light"], ic["cu_light"]
+    print(f"  shares of the sky: deck {np.average(deck.mean(0), weights=wts):.3f}, cu {np.average(cu.mean(0), weights=wts):.3f};  "
+          f"mean reflectance of the rest {np.average(light.mean(0), weights=wts):.3f}")
+    print(f"  reflectance of a deck where there is one: {np.nansum(dl * wts) / np.nansum(deck * wts):.2f};  of broken low cloud: {np.nansum(cl * wts) / np.nansum(cu * wts):.2f}")
+    print(f"  all cloud, mean reflectance: {np.average((light + dl + cl).mean(0), weights=wts):.3f}  (the Earth's clouds return about 0.2 of sunlight)")
+    for nm, (lo, la, mo) in {"Namibia Sep": (5, -15, 8), "Peru Sep": (-85, -20, 8), "California Jul": (-125, 30, 6), "Barbados Feb": (-52, 14, 1),
+                             "Amazon Aug": (-60, -5, 7), "Congo Apr": (22, 1, 3), "warm pool Jan": (150, 5, 0), "N Atlantic Sep": (-40, 45, 8), "Sahara Jul": (10, 23, 6)}.items():
+        print(f"    {nm:15s} total {at(cld[mo], lo, la):.2f} (R1 {at(cld_r1[mo], lo, la):.2f})  deck {at(deck[mo], lo, la):.2f}  cu {at(cu[mo], lo, la):.2f}  light {at(light[mo], lo, la):.3f}  all light {at((light + dl + cl)[mo], lo, la):.3f}")
+    assert at(deck[8], 5, -15) > 0.5 and at(deck[8], -85, -20) > 0.35, "the Namibian and Peruvian stratocumulus decks in September"
+    assert at(deck[6], -125, 30) > 0.3 and at(deck[6], 10, 23) < 0.05, "the Californian deck in July; no deck over the Sahara"
+    assert at(light[0], 150, 5) > 0.10 and at(light[6], 10, 23) < 0.03, "bright cloud over the warm pool, almost none over the Sahara"
+    assert at(cld[6], 10, 23) < 0.30 and at(cld[0], -40, 55) > 0.75, "clear Sahara, overcast North Atlantic winter"
+    assert (deck + cu <= cld + 0.25).mean() > 0.98, "sheets and broken cloud do not add up to more than the total"
     print(f"  global mean T2m: Jan {np.average(t2[0], weights=np.cos(np.radians(F.canon_lat(H)))[:, None] * np.ones((1, W))):.2f} C, "
           f"Jul {np.average(t2[6], weights=np.cos(np.radians(F.canon_lat(H)))[:, None] * np.ones((1, W))):.2f} C  (observed ~12.5 / ~16)")
 
@@ -119,6 +206,8 @@ def step_atmo():
           enc("precip", pr, 0, 40, "sqrt", units="mm/day"))
     atlas("atmoC.png", enc("u250", u250, -90, 90, units="m/s"), enc("v250", v250, -90, 90, units="m/s"),
           np.zeros_like(enc("u10", u, -32, 32, units="m/s")))
+    atlas("cloudT.png", enc("deck", deck, 0, 1, units="fraction"), enc("cu", cu, 0, 1, units="fraction"),
+          enc("light", light, 0, 0.75, "sqrt", units="mean reflectance"))
     np.save(os.path.join(CACHE, "cloud_frac.npy"), cld.astype(np.float32))
 
 
@@ -510,6 +599,7 @@ def main():
     meta_path = os.path.join(OUT, "climate.json")
     if os.path.exists(meta_path):
         ENC.update(json.load(open(meta_path)).get("encodings", {}))
+        ENC.pop("deep", None)            # a channel that existed for an hour; `light` replaced it
     def save_meta():
         json.dump({
             "note": "Twelve canonical months stacked vertically, January first. value = lo + (hi-lo)*decode(byte/255); "
@@ -519,10 +609,12 @@ def main():
                 "atmoA": {"file": "atmoA.png", "w": 360, "h": 180, "channels": ["u10", "v10", "t0"]},
                 "atmoB": {"file": "atmoB.png", "w": 360, "h": 180, "channels": ["slp", "cloud", "precip"]},
                 "atmoC": {"file": "atmoC.png", "w": 360, "h": 180, "channels": ["u250", "v250", None]},
+                "cloudT": {"file": "cloudT.png", "w": 360, "h": 180, "channels": ["deck", "cu", "light"]},
                 "oceanA": {"file": "oceanA.png", "w": 1440, "h": 720, "channels": ["sst", "ice", "valid"]},
                 "oceanB": {"file": "oceanB.png", "w": 720, "h": 360, "channels": ["ucur", "vcur", "valid"]},
             },
             "periods": {"atmo": "1991-2020 monthly means (NCEP/NCAR R1; GPCP v2.3)",
+                        "cloud": "2007-2016 monthly means (ISCCP H-series HGM): total cloud and its amount by kind",
                         "ocean": "sea-surface temperature: 1991-2020 monthly means (NOAA OISST v2.1)",
                         "ice": "one typical year of 1991-2020: mean concentration inside the line that encloses the mean "
                                "of the yearly extents (NSIDC Sea Ice Index, Version 4, G02135, monthly 25 km grids)",
@@ -533,7 +625,7 @@ def main():
     for a in args:
         {"atmo": step_atmo, "ocean": step_ocean, "currents": step_currents}[a]()
         save_meta()          # after EVERY step: a later step that fails must not lose an earlier step's encodings
-    need = {"u10", "v10", "t0", "slp", "cloud", "precip", "u250", "v250", "sst", "ice", "ucur", "vcur"}
+    need = {"u10", "v10", "t0", "slp", "cloud", "deck", "cu", "light", "precip", "u250", "v250", "sst", "ice", "ucur", "vcur"}
     missing = need - set(ENC)
     if missing:
         raise SystemExit(f"climate.json is missing encodings for {sorted(missing)}: rebuild those steps")

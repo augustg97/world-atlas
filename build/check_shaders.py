@@ -25,4 +25,13 @@ for p in sorted(glob.glob(os.path.join(D, "*.vert.glsl")) + glob.glob(os.path.jo
     if r.returncode:
         bad += 1
         print(r.stdout)
+    # WebGL2 guarantees 16 texture units to a fragment shader and real GPUs (ANGLE Metal on Apple silicon)
+    # give exactly 16; the software GL the headless audits run on gives 32. A seventeenth sampler therefore
+    # passes every headless check and is a black page on a real machine. It happened once (2026-11-10).
+    n = len(re.findall(r"^\s*uniform\s+(?:lowp|mediump|highp)?\s*sampler\w+\s+\w+", load(p), re.M))
+    if n > 16:
+        bad += 1
+        print(f"  FAIL {os.path.basename(p)} declares {n} samplers; the limit is 16 (MAX_TEXTURE_IMAGE_UNITS)")
+    elif n:
+        print(f"       {os.path.basename(p)} uses {n} of 16 texture units")
 sys.exit(1 if bad else 0)

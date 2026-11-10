@@ -88,7 +88,7 @@ web/          the app: no build step, ES modules
   js/         main (loop, state)  fields (the field store)  earth  camera  astro  overlays  particles
               catalog (every layer, tier, source, limit)  cards  data  dash  live  ui
   fields/     69 MB of rasters      data/  4 MB of features      version.json
-data/         about 3 GB of sources and caches - gitignored
+data/         about 3.6 GB of sources and caches - gitignored
 Research/     SOURCE-SURVEY.md  MODEL-GAPS.md  modeling/ (audits, the EPIC harness)  baselines/ (six frozen frames)  figures/epic/ - never imported by build/
 docs/         empty until the owner decides to publish
 ```
@@ -133,7 +133,7 @@ node build/test_app_math.mjs                     # ephemeris vs almanac, project
 ./venv/bin/python build/check_shaders.py        # compile every shader
 
 # rebuild data (each step asserts landmarks and stamps web/version.json)
-./venv/bin/python build/fetch_sources.py        # ~3 GB into data/ (gitignored); idempotent
+./venv/bin/python build/fetch_sources.py        # ~3.6 GB into data/ (gitignored); idempotent
 ./venv/bin/python build/fields_surface.py       # water albedo elev night clouds   (albedo:7 = one month)
 ./venv/bin/python build/fields_climate.py       # atmo ocean currents
 ./venv/bin/python build/fields_human.py         # pop ships lanes co2 countries
@@ -146,7 +146,7 @@ node build/test_app_math.mjs                     # ephemeris vs almanac, project
 The build **runs the validators first and refuses to publish if one moved backwards**:
 
 ```bash
-./venv/bin/python Research/modeling/audit_all.py           # ten checks, 2-3 min
+./venv/bin/python Research/modeling/audit_all.py           # eleven checks, 3-4 min
 ./venv/bin/python Research/modeling/audit_all.py --quick   # skip the three that need a browser
 ```
 
@@ -225,14 +225,14 @@ The section that makes the rest credible. State plainly what is reconstructed, w
 and what the model cannot know.
 
 - **This is a typical year, not this year.** No weather history, no forecast.
-- **Clouds are illustrative**: real shapes, modelled positions. Their brightness is scored against NASA EPIC and close; cumulus over land and the detail on cloud edges close in are noise, not cloud physics (register B1).
+- **Clouds are illustrative.** How much cloud there is and how much light it returns come from a satellite climatology (ISCCP) and are checked against VIIRS and EPIC; where each cloud is, is modelled; and close in the cloud is generated and reads as generated (register B1).
 - **Sea-ice extent matches NSIDC because the edge is placed to make it match**; ice area inside the edge runs up to 15% low. Lakes outside the Great Lakes and Ladoga never freeze, and neither does a 150 km band of south-west Hudson Bay that the water mask calls land (C1, A5).
 - **The ground's albedo is Blue Marble re-read against EPIC's view from the Sun's side**, not measured reflectance; dense forest is probably drawn too bright in the red (A7).
-- **Below 5 km per pixel the picture is magnified fields, not finer fields** (A2).
+- **Below 5 km per pixel the finer ground is streamed** from NASA and AWS while you look (the page says so in About); without a network it falls back to magnified fields. The sea floor is not refined (A2).
 - **Air traffic and ship motion are modelled flows.** No vehicle on screen is a real vehicle.
 - **Vintages differ**: land surface 2004, night lights 2016, borders 2022, emissions 2022, population 2025.
-- **At whole-Earth framing only about 25 states are named**, far fewer than the baseline sheet (F1).
-- **Against NASA EPIC the Space style is close, with named exceptions**: cloud over land above the median, the outermost 2% of the disc, snow at a low Sun (A1, A8, A9). The full list is `Research/MODEL-GAPS.md`: 35 items, 3 at P1
+- **At whole-Earth framing 129 of 198 states are named**; Central Europe, the Balkans and other crowded regions need an inset or a key (F1).
+- **Against NASA EPIC the Space style is close, with named exceptions**: cloud over land above the median, the outermost 2% of the disc, snow at a low Sun (A1, A8, A9). The full list is `Research/MODEL-GAPS.md`: 36 items, 1 at P1
 
 ---
 

@@ -98,13 +98,13 @@ node build/test_app_math.mjs                     # ephemeris vs almanac, project
 ./venv/bin/python build/check_shaders.py        # compile every shader
 
 # rebuild data (each step asserts landmarks and stamps web/version.json)
-./venv/bin/python build/fetch_sources.py        # ~3 GB into data/ (gitignored); idempotent
+./venv/bin/python build/fetch_sources.py        # ~3.6 GB into data/ (gitignored); idempotent
 ./venv/bin/python build/fields_surface.py       # water albedo elev night clouds   (albedo:7 = one month)
 ./venv/bin/python build/fields_climate.py       # atmo ocean currents
 ./venv/bin/python build/fields_human.py         # pop ships lanes co2 countries
 ./venv/bin/python build/vectors.py              # political places physical plates quakes volcanoes power stats air
 
-# the whole audit suite against its baselines (ten checks, 2-3 min; --quick skips the browser checks)
+# the whole audit suite against its baselines (eleven checks, 3-4 min; --quick skips the browser checks)
 ./venv/bin/python Research/modeling/audit_all.py
 # score against NASA EPIC by hand: render (headless), then compare
 "$HOME/Modeling Studio/.venv/bin/python" Research/modeling/epic_render.py cur
@@ -114,6 +114,9 @@ node build/test_app_math.mjs                     # ephemeris vs almanac, project
 "$HOME/Modeling Studio/.venv/bin/python" Research/modeling/epic_render.py clr air,daylight,ice
 ./venv/bin/python Research/modeling/land_transfer.py --fit      # prints the ALB_LUT line for the shader
 ./venv/bin/python Research/modeling/epic_clearsky.py --tag clr  # needs --fetch once (300 MB)
+# cloud close in, against VIIRS scenes at 2 km a pixel (needs --fetch once, 5 MB)
+"$HOME/Modeling Studio/.venv/bin/python" Research/modeling/cloud_scenes_render.py cur
+./venv/bin/python Research/modeling/cloud_texture.py --tag cur    # pairs land in Research/figures/clouds/
 # the visual ratchet alone; accept a moved frame only with a reason
 "$HOME/Modeling Studio/.venv/bin/python" "$HOME/Modeling Studio/tools/frame_baseline.py" check --project .
 
@@ -168,6 +171,21 @@ node build/test_app_math.mjs                     # ephemeris vs almanac, project
   showed vertical streaks. Keep the fraction of anything periodic before adding it to a texture coordinate.
 - **`shader_model.py` is a second copy of the shader.** Its users check it against the shader's own render first.
   Change both together or the clear-sky audit's `instrument_bias` will say so.
+- **The headless audits run on software GL, which is more generous than a real GPU.** A seventeenth texture
+  sampler linked there (limit 32) and gave a black page on the Mac's own GPU (limit 16, the WebGL2 minimum).
+  `check_shaders.py` now counts samplers; the earth shader uses all 16. Open the app in a real browser before
+  calling anything done.
+- **Cloud amount is not cloud brightness.** Driving the picture by cloud fraction made the Congo twice too bright
+  (74% cloud, most of it optically thin). Drive it by reflectance: amount times the reflectance of its thickness.
+- **Two references that disagree are telling you about geometry.** VIIRS and ISCCP (nadir, afternoon) and EPIC
+  (from the Sun's side) differed by a third in cloud light. Neither was wrong. Check each instrument's absolute
+  scale on a known target first (storm tops read 0.95-1.0 in the VIIRS conversion), then look for the physics.
+- **Noise in longitude-latitude space is stretched by 1 / cos(latitude).** Generated cloud at 45 N came out four
+  times too one-directional. Generate on the sphere (`clumps3`).
+- **A threshold on noise gives the cover its quantile curve gives, not the one you asked for.** A straight-line
+  rule gave 8% when asked for 20%. Measure the noise's distribution (`cutFor`).
+- **Statistics improving is not the picture improving.** Three cloud versions scored better and looked like pepper,
+  cracked mud and paint chips. Read the pairs in `Research/figures/clouds/` every time.
 - **`water4.npy` and `water.webp` say south-west Hudson Bay is land.** They agree with each other and are both
   wrong (register A5). Two instruments from one source are one instrument.
 

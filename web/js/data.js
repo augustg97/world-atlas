@@ -19,24 +19,90 @@ export class Data {
     return this['_' + name];
   }
 
+  /** Exact test: is the point inside this unit? */
+  inCountry(c, lon, lat) {
+    const b = c.bbox;
+    if (lon < b[0] || lon > b[2] || lat < b[1] || lat > b[3]) return false;
+    const x = lon * 100, y = lat * 100;
+    // each part's own box first: an archipelago is hundreds of parts and a point is in the box of very few
+    const pb = c._pb || (c._pb = c.polys.map((poly) => { const r = poly[0]; let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity; for (let i = 0; i < r.length; i += 2) { if (r[i] < x0) x0 = r[i]; if (r[i] > x1) x1 = r[i]; if (r[i + 1] < y0) y0 = r[i + 1]; if (r[i + 1] > y1) y1 = r[i + 1]; } return [x0, y0, x1, y1]; }));
+    for (let n = 0; n < c.polys.length; n++) {
+      const q = pb[n];
+      if (x < q[0] || x > q[2] || y < q[1] || y > q[3]) continue;
+      const poly = c.polys[n];
+      let inside = false;
+      for (const ring of poly) {
+        for (let i = 0, j = ring.length - 2; i < ring.length; j = i, i += 2) {
+          const xi = ring[i], yi = ring[i + 1], xj = ring[j], yj = ring[j + 1];
+          if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+        }
+      }
+      if (inside) return true;
+    }
+    return false;
+  }
+
   /** The unit that administers a point, by exact polygon test (the raster is only for tinting). */
   countryAt(lon, lat) {
-    const x = lon * 100, y = lat * 100;
-    for (const c of this.political.countries) {
-      const b = c.bbox;
-      if (lon < b[0] || lon > b[2] || lat < b[1] || lat > b[3]) continue;
+    for (const c of this.political.countries) if (this.inCountry(c, lon, lat)) return c;
+    return null;
+  }
+
+  /**
+   * Which unit holds each 0.1 degree cell (its id; 0 = none: sea, or a lake Natural Earth leaves outside
+   * the country polygons). The label layer asks it thousands of times a frame what lies under a name, which
+   * the exact test above is too slow for. Scanline fill at cell centres, largest unit first so that an
+   * enclave drawn without a hole still shows.
+   */
+  ownerGrid() {
+    if (this._owner) return this._owner;
+    const cols = 3600, rows = 1800, id = new Uint8Array(cols * rows);
+    // The same at 0.4 degrees, for the whole-Earth scales where a 0.1 degree cell is under half a pixel and looking at
+    // every cell under a name would cost too much: 0 no land, a unit's id if it alone has land in the block, 255 if several do.
+    const pc = cols / 4, pr = rows / 4, pool = new Uint8Array(pc * pr);
+    const mark = (r, ca, cb, v) => { const o = (r >> 2) * pc; for (let q = ca >> 2; q <= cb >> 2; q++) { const w = pool[o + q]; if (!w) pool[o + q] = v; else if (w !== v) pool[o + q] = 255; } };
+    const units = this.political.countries.slice().sort((a, b) => (b.area || 0) - (a.area || 0));
+    for (const c of units) {
       for (const poly of c.polys) {
-        let inside = false;
+        let ymin = Infinity, ymax = -Infinity;
+        const ext = poly[0];
+        for (let i = 1; i < ext.length; i += 2) { if (ext[i] < ymin) ymin = ext[i]; if (ext[i] > ymax) ymax = ext[i]; }
+        // row r has its centre at y = 8995 - 10 r (hundredths of a degree); a crossing counts when ya <= y < yb
+        const r0 = Math.max(0, Math.floor((8995 - ymax) / 10) + 1), r1 = Math.min(rows - 1, Math.floor((8995 - ymin) / 10));
+        if (r1 < r0) continue;
+        const xs = [];
+        for (let r = r0; r <= r1; r++) xs.push([]);
         for (const ring of poly) {
           for (let i = 0, j = ring.length - 2; i < ring.length; j = i, i += 2) {
             const xi = ring[i], yi = ring[i + 1], xj = ring[j], yj = ring[j + 1];
-            if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+            if (yi === yj) continue;
+            const ya = Math.min(yi, yj), yb = Math.max(yi, yj);
+            const ra = Math.max(r0, Math.floor((8995 - yb) / 10) + 1), rb = Math.min(r1, Math.floor((8995 - ya) / 10));
+            for (let r = ra; r <= rb; r++) xs[r - r0].push(xi + ((8995 - 10 * r - yi) * (xj - xi)) / (yj - yi));
           }
         }
-        if (inside) return c;
+        for (let r = r0; r <= r1; r++) {
+          const row = xs[r - r0];
+          if (row.length < 2) continue;
+          row.sort((a, b) => a - b);
+          for (let q = 0; q + 1 < row.length; q += 2) {
+            const ca = Math.max(0, Math.ceil((row[q] + 17995) / 10)), cb = Math.min(cols, Math.ceil((row[q + 1] + 17995) / 10));
+            if (cb > ca) { id.fill(c.id, r * cols + ca, r * cols + cb); mark(r, ca, cb - 1, c.id); }
+          }
+        }
       }
     }
-    return null;
+    // Every vertex of every outline also claims its cell if the cell is still sea: an island smaller than a cell
+    // is then on the raster, and every coast is drawn half a cell generous. A name set "in open water" by this
+    // raster is therefore clear of all land, however small.
+    for (const c of units) {
+      for (const poly of c.polys) for (const ring of poly) for (let i = 0; i < ring.length; i += 2) {
+        const n = Math.min(rows - 1, Math.max(0, Math.floor((9000 - ring[i + 1]) / 10))) * cols + Math.min(cols - 1, Math.max(0, Math.floor((ring[i] + 18000) / 10)));
+        if (!id[n]) { id[n] = c.id; mark((n / cols) | 0, n % cols, n % cols, c.id); }
+      }
+    }
+    this._owner = { cell: 0.1, cols, rows, id, pool, poolCols: pc, poolRows: pr, aspects: this.political.label_aspects || [], inside: (c, lon, lat) => this.inCountry(c, lon, lat) };
+    return this._owner;
   }
 
   /** The named sea a point most plausibly lies in: nearest marine label relative to that sea's size. Generic tier. */
@@ -61,7 +127,8 @@ export class Data {
   labelItems() {
     const items = [];
     for (const f of this.physical.features) {
-      if (f.kind === 'Continent') { items.push({ text: f.name, lon: f.lon, lat: f.lat, cls: 'continent', prio: 0, maxKm: 60, minKm: 7, ref: ['feature', f] }); continue; }
+      // a continent's name gives way to the states on it (prio 9.5: after every state, before everything else)
+      if (f.kind === 'Continent') { items.push({ text: f.name, lon: f.lon, lat: f.lat, cls: 'continent', prio: 9.5, maxKm: 60, minKm: 7, ref: ['feature', f] }); continue; }
       if (f.realm === 'sea') {
         const maxKm = [60, 26, 15, 9, 6, 4, 3][Math.min(6, f.rank)];
         items.push({ text: f.name, lon: f.lon, lat: f.lat, cls: 'ocean', rank: f.rank, prio: f.rank <= 0 ? 1 : 24 + f.rank, maxKm, ref: ['feature', f] });
@@ -72,8 +139,17 @@ export class Data {
     }
     for (const c of this.political.countries) {
       const maxKm = { 1: 40, 2: 26, 3: 16, 4: 11, 5: 7.5, 6: 5.5 }[c.rank] || 3.5;
-      // within a rank, the more populous state wins a collision (alphabetical order put Belgium over France)
-      items.push({ text: c.short, lon: c.lon, lat: c.lat, cls: 'country', rank: c.rank, prio: 8 + c.rank + 0.9 * (1 - Math.min(1, Math.log10((c.pop || 1) + 1) / 9.2)), maxKm, minKm: 0.7, ref: ['country', c] });
+      const small = 0.9 * (1 - Math.min(1, Math.log10((c.pop || 1) + 1) / 9.2));       // 0 for the most populous
+      // A STATE is a unit that is the home part of its sovereignty (Natural Earth HOMEPART) and that Natural
+      // Earth types as a country, a sovereignty or a self-administering disputed state: the 193 UN members,
+      // the Vatican, Taiwan, Kosovo, N. Cyprus and Somaliland. Its name is placed by its own geometry at
+      // every zoom (overlays.js, Labels), ahead of every other unit, and where two states want the same
+      // room the more populous one has it. Every other unit (dependencies, non-home parts, indeterminate
+      // areas) keeps the old treatment: one position at its label point, shown from its rank's zoom on.
+      const state = !!c.home && ['Sovereign country', 'Country', 'Sovereignty', 'Disputed'].includes(c.type) && !!c.lp;
+      items.push({ text: c.short, abbr: state && c.abbr && c.abbr.length < c.short.length ? c.abbr : null, lon: c.lon, lat: c.lat, cls: 'country', rank: c.rank, state,
+        roomy: !state && !!c.lp && (c.type === 'Dependency' || c.type === 'Country'),    // may also show earlier, once its full name fits inside it
+        prio: state ? 8 + small : 8 + c.rank + small, maxKm: state ? 1e9 : maxKm, minKm: 0.7, ref: ['country', c] });
     }
     for (const r of this.places.rows) {
       const sr = r[4];
@@ -83,6 +159,7 @@ export class Data {
       items.push({ text: r[0], lon: r[1], lat: r[2], cls: 'city', pop: r[3], capital: !!r[5], prio: 16 + sr + (r[5] ? -1.5 : 0) + (r[9] ? -1 : 0), maxKm, ref: ['city', r] });
     }
     for (const p of this.physical.peaks) items.push({ text: `${p.name} ${p.elev} m`, lon: p.lon, lat: p.lat, cls: 'peak', prio: 60, maxKm: 2.6, ref: ['feature', { ...p, realm: 'land' }] });
+    items.geo = this.ownerGrid();
     return items;
   }
 

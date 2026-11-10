@@ -6,6 +6,7 @@
 import { Camera, R_KM } from './camera.js';
 import { Fields, UNIT } from './fields.js';
 import { Earth, LENSES } from './earth.js';
+import { Detail } from './detail.js';
 import { sun, moon, monthState, seasonName, D2R } from './astro.js';
 import { program, setUniforms, texFromImage, loadVersion } from './gl.js';
 import { LineBatch, PointBatch, Labels, segmentsFromLines, deq, graticule, parallels } from './overlays.js';
@@ -41,6 +42,8 @@ const fields = new Fields(gl, () => { earthDirty = true; });
 const earth = new Earth(gl, fields);
 const data = new Data();
 const live = new Live(gl, fields, (k, s) => { earthDirty = true; feedStatus(); });
+// finer imagery and elevation for the part of the Earth in view, streamed when close in (register A2)
+const detail = new Detail(gl, fields, () => { earthDirty = true; window.__DETAIL_ERROR = detail.error || undefined; feedStatus(); }, { frozen: FROZEN });
 const labels = new Labels(document.getElementById('labels'));
 const astro = { sun: sun(state.t), moon: moon(state.t), month: monthState(state.t) };
 let progs = {}, batches = {}, tracers = {}, flights = null, samplers = null, cache = null, dashCache = {}, ui = null;
@@ -50,7 +53,7 @@ const isNow = () => !FROZEN && (state.clock === 'live' || Math.abs(state.t - Dat
 
 // ------------------------------------------------------------------------------------ app API
 const app = {
-  state, cam, fields, earth, data, live,
+  state, cam, fields, earth, data, live, detail,
   setLayer(id, on) {
     state.layers[id] = on; earthDirty = labelsDirty = true;
     if (on) ensureLayer(id);
@@ -133,6 +136,7 @@ function feedStatus() {
     ui.layerStatus(id, st === 'loading' ? 'Fetching…' : live.note[feed] || '', st === 'ready' ? 'ok' : st === 'unavailable' || st === 'none' ? 'warn' : '');
   };
   s('quakesLive', 'quakes'); s('aurora', 'aurora'); s('today', 'today'); s('sats', 'sats');
+  ui.layerStatus('detail', state.layers.detail ? detail.note : '', detail.state === 'ready' ? 'ok' : detail.state === 'partial' || detail.state === 'failed' ? 'warn' : '');
   if (state.layers.sats && live.sats && Math.abs(state.t - live.satEpoch) > 14 * DAY) ui.layerStatus('sats', 'Clock is more than two weeks from the elements’ date: positions would be invented, so none are drawn.', 'warn');
 }
 
@@ -242,11 +246,13 @@ function tick(now) {
   // 3. the substrate, into the cache
   const settled = now - settledAt > 350;
   const det = fields.setMonths(astro.month, settled);
+  detail.update(cam, settled && !fly, !!state.layers.detail);
+  if (detail.fading(performance.now())) earthDirty = true;           // a window that has just arrived fades in
   if (earthDirty) {
     earthDirty = false; lastEarthDraw = now; state.atNow = isNow();
     gl.bindFramebuffer(gl.FRAMEBUFFER, cache.fb);
     gl.viewport(0, 0, cache.w, cache.h);
-    earth.draw(state, cam, astro);
+    earth.draw(state, cam, astro, detail);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   }
   gl.bindFramebuffer(gl.READ_FRAMEBUFFER, cache.fb);
@@ -308,7 +314,7 @@ function tick(now) {
   }
   // 6. panels
   fs.detail = det.detail;
-  if (now - (fs.uiAt || 0) > 250) { fs.uiAt = now; ui.clock(); ui.hud(k, hover, det.detail === 'full' ? '' : det.detail === 'preview' ? 'refining detail…' : 'loading terrain…'); }
+  if (now - (fs.uiAt || 0) > 250) { fs.uiAt = now; ui.clock(); ui.hud(k, hover, det.detail === 'full' ? (detail.busy ? 'fetching finer tiles…' : '') : det.detail === 'preview' ? 'refining detail…' : 'loading terrain…'); }
   if (now - (fs.dashAt || 0) > 1000) { fs.dashAt = now; updateDash(false); if (state.clock !== 'paused' && card) refreshCard(); }
 }
 
@@ -408,10 +414,12 @@ async function shot(name = 'frame.jpg', crop) {
   return `${await r.text()} ${w}x${h} dpr ${cam.dpr}`;
 }
 
-/** Every field and every lazy table the current layers need has arrived. */
+/** Every field and every lazy table the current layers need has arrived, the focus window included when its layer is on. */
 function allLoaded() {
   const h = fields.has;
-  return h.water && h.climate && h.ocean && h.relief && h.elev && h.countries && !!fields.cpu.lanes && !!fields.cpu.pop1 && !!fields.cpu.co21 && pending.size === 0;
+  if (state.layers.detail) detail.update(cam, !fly, true);            // the view may have moved since the last frame
+  return h.water && h.climate && h.ocean && h.relief && h.elev && h.countries && !!fields.cpu.lanes && !!fields.cpu.pop1 && !!fields.cpu.co21 && pending.size === 0
+    && !(state.layers.detail && detail.busy);
 }
 
 /** The frozen frame: wait for the data, then run a fixed number of seeded steps and stop. */
