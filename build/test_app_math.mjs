@@ -4,7 +4,7 @@
 import { sun, moon, dayLength, monthState, gmstDeg } from '../web/js/astro.js';
 import { wtForward, wtInverse, Camera } from '../web/js/camera.js';
 import { GIBS, gibsTileDeg, gibsTexelDeg, gibsMatrix, gibsPixel, gibsLonLat, gibsTile, gibsTileBounds, TERRAIN, mercY, mercLat, terrPixel, terrLonLat, terrTile,
-  terrTileBounds, terrDecode, terrTexelDeg, terrTexelKm, tentTaps, compositeElevation, shippedElevation, planDetail, viewBox, windowHolds, windowUniforms, PLAN, KM_PER_DEG } from '../web/js/detail.js';
+  terrTileBounds, terrDecode, terrTexelDeg, terrTexelKm, tentTaps, compositeElevation, shippedElevation, planDetail, viewBox, windowHolds, windowUniforms, PLAN, KM_PER_DEG, nightLight, NIGHT_SHIPPED } from '../web/js/detail.js';
 import { INSETS, Inset, freeRect, fitInset, insetAlpha, INSET_FULL, INSET_GONE, INSET_PAD, MIN_GAIN } from '../web/js/insets.js';
 import { inflateSync } from 'node:zlib';
 import { readFileSync, existsSync } from 'node:fs';
@@ -360,6 +360,23 @@ if (online) {
     ok('inset europe: no room once its sea is under the panel', fitInset(INSETS[0], c3, P1440) === null);
   }
   ok('insets fade with the main map: whole at the whole-Earth scale, gone close in', insetAlpha(25.9) === 1 && insetAlpha(INSET_FULL) === 1 && insetAlpha(INSET_GONE) === 0 && insetAlpha(6) === 0 && insetAlpha((INSET_FULL + INSET_GONE) / 2) === 0.5);
+}
+
+// The streamed night lights (detail.js nightLight) against the rule the shipped field was built with
+// (build/fields_surface.py step_night): Black Marble's own run of colours, from its moonlit base to a white core.
+{
+  const shipped = (r, g, b) => Math.max(0, Math.min(1, ((r + g) * 0.5 - 0.62 * b - 2) / 95));
+  const run = [[82, 69, 72], [128, 103, 91], [174, 138, 111], [232, 199, 160], [248, 202, 146], [255, 240, 215], [255, 255, 255]];
+  const v = run.map((c) => nightLight(...c));
+  ok('lights: brightness rises all the way from a dim street to a white core', v.every((x, i) => i === 0 || x > v[i - 1]) && v[v.length - 1] === 1, v.map((x) => x.toFixed(2)).join(' '));
+  ok('lights: moonlit desert, sea and snow are not light', [[37, 34, 62], [5, 5, 15], [25, 23, 46], [60, 62, 95]].every((c) => nightLight(...c) < 0.005));
+  const worst = Math.max(...run.slice(0, 3).map((c) => Math.abs(Math.min(1, nightLight(...c) / NIGHT_SHIPPED) - shipped(...c))));
+  ok('lights: below full scale the streamed value is the shipped field\'s, within 0.06', worst < 0.06, `worst ${worst.toFixed(3)}`);
+  ok('lights: where the shipped field is at full scale, so is the streamed one read back', run.slice(3).every((c) => Math.min(1, nightLight(...c) / NIGHT_SHIPPED) > 0.97));
+  const cam = new Camera(); cam.resize(1280, 800, 2); cam.lookAt(-117.6, 33.9); cam.setKmPerPx(0.4);
+  const p = planDetail(viewBox(cam), 0.4, { night: true }), q = planDetail(viewBox(cam), 0.4);
+  ok('plan: at the zoom floor the imagery is the finest level there is, 0.49 km, with the lights on the same tiles', p && p.alb.L === GIBS.maxLevel && Math.abs(p.alb.texelKm - 0.489) < 0.01 && p.night && !q.night && p.key !== q.key, p ? `${p.alb.count} tiles` : 'no plan');
+  ok('plan: the lights\' tiles are the imagery\'s own rows and columns', GIBS.nightUrl(7, 24, 27).endsWith('/500m/7/24/27.png') && GIBS.url(7, 24, 27).endsWith('/500m/7/24/27.jpeg'));
 }
 
 console.log(bad ? `\napp math: ${bad} FAILURES` : '\napp math: ALL PASS');

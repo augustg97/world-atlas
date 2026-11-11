@@ -1,8 +1,8 @@
 // Draws the substrate: one full-screen triangle through shaders/earth.frag.glsl.
 
-import { program, setUniforms } from './gl.js?v=20261111T002557Z';
-import { UNIT } from './fields.js?v=20261111T002557Z';
-import { gmstDeg, D2R } from './astro.js?v=20261111T002557Z';
+import { program, setUniforms } from './gl.js?v=20261111T032852Z';
+import { UNIT } from './fields.js?v=20261111T032852Z';
+import { gmstDeg, D2R } from './astro.js?v=20261111T032852Z';
 
 export const LENSES = {
   none: { id: 0 },
@@ -62,7 +62,7 @@ export class Earth {
       uE_u10: e('u10'), uE_v10: e('v10'), uE_t0: e('t0'), uE_slp: e('slp'), uE_cloud: e('cloud'), uE_precip: e('precip'), uE_sst: e('sst'), uE_ice: e('ice'),
       uE_deck: e('deck'), uE_cu: e('cu'), uE_light: e('light'),
       // the focus window: both weights are 0 unless the layer is on and a window has loaded
-      ...(detail ? detail.uniforms(performance.now()) : { uDetAlb: UNIT.detAlb, uDetElev: UNIT.detElev, uDetWin: [0, 0, 1, 1], uDetAlbW: 0, uDetElevW: 0, uDetAlbLod: 0, uDetElevPx: [1, 1], uDetElevM: [1000, 1000] }),
+      ...(detail ? detail.uniforms(performance.now()) : { uDetAlb: UNIT.detAlb, uDetElev: UNIT.detElev, uDetWin: [0, 0, 1, 1], uDetAlbW: 0, uDetElevW: 0, uDetNightW: 0, uDetAlbLod: 0, uDetElevPx: [1, 1], uDetElevM: [1000, 1000] }),
     };
     setUniforms(gl, p, u);
     gl.bindVertexArray(this.vao);

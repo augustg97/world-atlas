@@ -24,6 +24,95 @@ IDs are referenced from code comments and commit messages. **Never recycle one.*
 | stale-data guard | `web/version.json` stamp on every fetch | a cached two-key `climate.json` had crashed the tracers once |
 | ephemeris check | `build/test_app_math.mjs` | Sun declination within 0.004° at the four 2026 seasonal instants |
 
+## APPLIED (sixth round, 2026-11-10)
+
+Scope, the owner's: the real-GPU audit (G7), wide rivers (A10), finer ground and readable cities close in, the
+box of tracers left behind by a quick zoom out, and quieter aircraft.
+
+**Rivers (A10).** `fields_surface.rivers8`: NASA's MODIS land-water mask (MOD44W through GIBS, 610 m), taken only
+where Natural Earth has land and only the connected bodies a Natural Earth 1:10m river centreline runs through.
+`audit_water.py` gained a river check: nine reaches several kilometres wide, found by name on the centrelines,
+walked every 2 km.
+
+| reach | drawn as water, before | after |
+|---|---|---|
+| Amazon, Manaus to Almeirim | 4% | 99% |
+| Negro, lower | 0% | 93% |
+| Tapajos, lower | 0% | 99% |
+| Congo, Mbandaka to Kinshasa | 0% | 71% |
+| Ob, lower | 0% | 99% |
+| Yenisei, lower | 0% | 95% |
+| Lena, lower | 0% | 99% |
+| Parana, lower | 0% | 50% |
+| Brahmaputra, Assam | 0% | 75% |
+| mean share NOT drawn (`rivers_undrawn`) | 0.996 | 0.131 |
+
+Narrow rivers stay lines, as they should at 5 km: Mississippi 3%, Danube 2%, Yangtze above the estuary 14%.
+The check shows the rivers arrived on screen; it is not independent of MODIS (no river-width dataset is in hand).
+*Found on the way:* the lakes strung along river lines came with the rivers, 0.87 million km2 of inland water in
+all, and that moved every region toward HydroLAKES's lake areas, which nothing had compared before:
+
+| inland water, M km2 | before | after | HydroLAKES, lakes alone |
+|---|---|---|---|
+| Canada | 0.404 | 0.759 | 0.656 |
+| Siberia | 0.117 | 0.249 | 0.192 |
+| Scandinavia and Finland | 0.115 | 0.128 | 0.124 |
+| United States | 0.301 | 0.342 | 0.347 |
+| Amazon basin | 0.012 | 0.080 | 0.021 |
+| Tibet | 0.022 | 0.024 | 0.032 |
+
+Canada is now ABOVE the lake inventory by more than its rivers account for: the mask is the larger of three
+sources cell by cell, which over-counts part-water cells. Open under A10.
+Lake ice at the recorded lakes that are themselves water: 25 lakes (23), 11.6 days a year out (12.7). The Ob,
+Yenisei and Lena freeze, by the lake model at 7 m (C5).
+*Instrument fault found:* "water connected to the ocean" ran up the Amazon once it was water, and the audit scored
+the whole river as land drawn as sea (0.568 -> 0.614). The audit's sea is now what connects without the rivers.
+
+**Close in.** The window planner asked for nothing finer than 1 km; it now asks for 0.45 km, which is GIBS level
+7 of Blue Marble (0.49 km) and terrain zoom 9 (0.25 to 0.3 km), from the zoom floor to 1.2 km a pixel.
+Night lights are streamed on the same tiles (layer VIIRS_Black_Marble, the shipped field's own source at 500 m)
+while part of the view is dark, and ride in the imagery texture's alpha: there is no seventeenth sampler.
+*Measured:* the streamed value read back at `NIGHT_SHIPPED` agrees with the shipped rule to 0.6% in the mean and
+0.02 on lit pixels over Los Angeles and its desert.
+*Negative result:* the inside of a large city has no structure in any 500 m night product GIBS serves. Black
+Marble 2016, VIIRS_Night_Lights and the gap-filled daily radiance are all at full scale across the Los Angeles
+basin (median 255). The curve close in therefore tops out at pale gold, not white, so edges and names read (F11).
+*Declared exaggeration:* nearer than about 5 km a pixel the night ground is lifted to about ten times moonlight
+and shaded from the north-west. Stated in the Night lights card. Seen whole the night is unchanged
+(the two night frames of the baseline did not move).
+
+**Tracers.** A tracer is spread evenly over the screen at the scale it was spawned at. After a zoom out by r the
+old view held r x r too many and they stayed, a dense box, until each died of age (up to 300 frames). Each now
+remembers its scale: on a camera move, one off screen is respawned at once and all but one in r x r fade in
+eight frames (`particles.FlowTracers._recast`). A still camera changes nothing, so frozen frames are the same.
+
+**Aircraft.** Each plane was a 9 px cream streak at 70% opacity, strongest close in. Now a thread in four pieces
+fading behind the head (62% to 5%, 0.5 px to hairline), shorter from far off, fainter close in. By eye; the
+count aloft is the model's and unchanged.
+
+**The real-GPU audit (G7).** `audit_gpu.py`, fourteenth check: headless Chromium reaches the Mac's GPU with
+`--use-angle=metal` (16 texture units, against SwiftShader's 32). The six canonical frames drawn there against
+the accepted software frames:
+
+| frame | mean difference, levels of 255 | pixels more than 24 levels apart |
+|---|---|---|
+| globe-default | 0.18 | 0.03% |
+| globe-night-asia | 0.14 | 0.04% |
+| globe-motion-atlantic | 0.48 | 0.14% |
+| region-himalaya | 0.28 | 0.20% |
+| sheet-atlas | 0.73 | 0.59% |
+| sheet-lens-temp | 0.33 | 0.05% |
+
+and the lights-into-alpha write, which no frame reaches: worst error 0.4 of 255, colour untouched, GL state put
+back. It cannot run without a GPU and exits 3 saying so.
+
+**Regression gate.** Fourteen checks pass. Three frames re-accepted with reasons (tracers reshuffled by the
+rebuilt lane field; rivers in two). Baselines tightened: water sea-as-land 0.309 -> 0.287, lake ice drawn
+12.7 -> 11.6 days, cloud-texture sizes 0.152 -> 0.122 (rivers in the forest scenes; within that audit's known
+layout noise). **One baseline re-set backwards, 0.7 -> 0.8: the clear-sky land bias. Class: the instrument's
+population, not the picture.** That audit sorts pixels into land and water by the mask this round changed;
+825 part-water pixels of 168,716 left its land set. The same renders scored with the old mask give 0.7.
+
 ## APPLIED (fifth round, 2026-11-10)
 
 Scope agreed for the round: lake depth in the lake-ice model (C4), and the Amazon's cloud (B1).
@@ -482,7 +571,8 @@ texture is a magnified photograph, and vegetated land still reads darker than EP
 | A7 | — | **RESOLVED 2026-11-10.** Cause established with a clear-sky composite of about a hundred EPIC frames (`epic_clearsky.py`): Blue Marble read as sRGB understated dark land threefold, and the display transform had been fitted around it. Now a nine-knot table per channel (`ALB_LUT`), fitted by `land_transfer.py`; held-out error 11.6 to 6.2; table above. **What the table is not:** surface reflectance. It is the albedo that reproduces EPIC's view, straight back along the sunlight, where rough ground hides its shadows. Dense forest sits at 0.07-0.09 in the red where field measurements say 0.03: the stable-pixel test passes few rainforest pixels (424 in the darkest bin), so the darkest end of the red curve rests on little | `earth.frag.glsl` `albedoOf()`, `shader_model.py` | EPIC |
 | A8 | P3 | Snow and ice at a low Sun read grey. Partly better 2026-11-10: white Blue Marble pixels are now given snow's albedo (0.90) by rule, since the picture clips there, and Antarctica in December reads white. Sea ice and winter snow at high latitude are still grey: the surface model is Lambert (plus a Lommel-Seeliger share for land) and snow scatters forward. Seen, not measured: the composite excludes latitudes above 60 | shader | EPIC |
 | A9 | P3 | **The outermost ring of the disc is 5-10 levels too bright and too green** (cos 0.1-0.2: atlas 85, 94, 100; EPIC 80, 84, 95). Rayleigh scattering saturates there in the model as in a plane atmosphere; the real loss is probably ozone, which EPIC's product does not show elsewhere on the disc, so it was not added. Would need a spherical-shell treatment of the last 2% of the radius | shader air block | EPIC |
-| A10 | P3 | **Wide rivers are not water.** The Amazon, Congo, Ob and Yangtze main stems are several kilometres wide and are drawn as vector lines over land colour: brown in Blue Marble (so the dark-water rule misses them) and lines in Natural Earth 1:10m. Their estuaries are sea now. A river-width dataset, or Natural Earth's own river polygons where it has them, would answer it | `fields_surface.step_water` | fourth round |
+| A10 | P3 | **Mostly DELIVERED 2026-11-10 (sixth round): wide rivers are water.** MODIS water (MOD44W) along Natural Earth's 1:10m river lines; nine wide reaches are drawn for 87% of their length on average (under 1% before). **Open:** the Parana (50%) and the Congo (71%), whose channels between islands are narrower than half a cell; Canada's inland water is now above the lake inventory (0.76 against 0.66 M km2 in lakes), because the mask takes the larger of three sources cell by cell; the river check is not independent of MODIS, and a width dataset (GRWL, Allen & Pavelsky 2018, CC BY 4.0, a new host) would make it so | `fields_surface.rivers8`, `audit_water.reaches` | fourth round |
+| A11 | P3 | **The ground close in stops at 0.49 km a texel**, which is where Blue Marble stops, and the zoom floor (0.35 km a pixel at 2x) already shows its texels. A finer cloud-free picture exists (Sentinel-2 cloudless 2016, 10 m, CC BY 4.0, EOX) but on a host this project does not use: the owner's call (rule 16) | `detail.js` GIBS, `camera.zoom` | sixth round |
 
 ## B. Atmosphere
 
@@ -502,6 +592,7 @@ texture is a magnified photograph, and vegetated land still reads darker than EP
 | C2 | P2 | Currents come from a 1° ocean model: no eddies, a weak Gulf Stream (0.12 m/s where drifters give ~1), nothing poleward of 65°N / 74°S. A drifter-derived climatology would be the better source | `fields_climate.step_currents` | landmark check |
 | C3 | P3 | Ocean colour is one hue plus a shelf tint; no chlorophyll field | shader water block | source survey (NEO gone) |
 | C4 | P3 | **Mostly DELIVERED 2026-11-10 (fifth round): lake ice knows depth.** Freeze-up lag 10 x depth^0.7 days to 160; depth from HydroLAKES (measured volumes as they stand, predicted ones through their regression) and from ETOPO's lake floors for the Caspian, Baikal, the Great Lakes and the Black Sea. 9.8 days a year on 83 unseen lakes; 12.7 at the 23 recorded lakes the mask itself draws (17.2 before). Open: lakes under 500 km2 mostly have only a predicted depth (Mjøsa: 135 days against 50); Issyk-Kul is iced 53 days and should not be (salt, and the reanalysis's air is too cold there); a great lake freezes whole or not, cell by cell (the Great Lakes stay on OISST for that, itself weak); the north-west Black Sea shelf is unchecked; the audit can score only 23 lakes as drawn, because the phenology database is mostly small lakes; solar melt on high lakes is not modelled (Nam Co, Qinghai unchecked) | `build/lakeice.py`, `fields_climate.lake_depth`, `audit_lakeice.py` | fourth round |
+| C5 | P3 | **River ice is the lake model at 7 m.** Moving water freezes later than a lake under the same air and an ice run breaks it up sooner. NSIDC G01377 holds river records too; none has been scored | `fields_climate.lake_depth`, `audit_lakeice.py` | sixth round |
 
 ## D. Solid Earth
 
@@ -530,6 +621,9 @@ texture is a magnified photograph, and vegetated land still reads darker than EP
 | F8 | P3 | Feature, volcano and power-station cards are generic tier; no curated text exists for any physical feature | `cards.js` | card contract |
 | F9 | P3 | Country tints are a 4 km raster sampled nearest: stair-stepped along borders when zoomed in (hidden under the vector line at most scales) | `fields_human.step_countries` | build notes |
 | F10 | P4 | Time zones (Natural Earth, public domain) are downloaded and unused | — | fetch list |
+| F11 | P3 | **A large city at night is one even field.** Every 500 m night product on GIBS is at full scale across a metropolis (Los Angeles basin: median 255 in Black Marble 2016, VIIRS_Night_Lights and the gap-filled daily radiance), so there are no streets to draw. Radiance with range exists (VNP46A4 annual composites) behind an Earthdata login | `detail.js` nightLight, `earth.frag.glsl` ramp | sixth round |
+| F12 | P3 | Ship tracers run on lanes that are under ice in that month (the Kara Sea in February): the shipping field is one average year. Gate lane tracers on the month's ice | `particles.laneAccept`, `fields.climate` | sixth round |
+| F13 | P4 | Aircraft and tracer styling is by eye; nothing measures clutter. The ocean-current streaks are long white arcs at 3 to 5 km a pixel (seen off the Amazon's mouth) and may want the same treatment the aircraft got | `main.buildTracers` | sixth round |
 
 ## G. Engine, delivery and verification
 
@@ -541,14 +635,16 @@ texture is a magnified photograph, and vegetated land still reads darker than EP
 | G4 | P3 | Performance is unmeasured: full-screen shader at 2× device pixels, re-run on every camera move | `main.js` cache | build notes |
 | G5 | P3 | **Mostly RESOLVED 2026-11-09.** Driven with real pointer and key events at 1440 x 900: drag turns the globe, wheel zooms both ways, G, A, space, N, / and Esc do what About says, a typed search flies to the place and opens its card (globe and sheet), both time sliders move the clock. One fault found and fixed (the fly-to clamp). **Still not done:** panel scrolling at small window sizes; satellites picked out by eye | `ui.js`, `main.js` | this session |
 | G6 | P3 | Headless Chromium under software GL loses its first WebGL context at boot nearly every time. The app now reloads itself (three tries) and the second boot renders; cause not investigated. A frozen frame takes about 18 s there **Seen again 2026-11-10 (fourth round):** one of about eight runs of the visual check timed out on `sheet-atlas` (the frame never reported ready in 240 s) inside `build_site.py`, and passed when run again at once with no change. The build refused, as it should; the cost is a five-minute re-run | `main.js` | this session |
-| G7 | P2 | **The earth shader uses all 16 texture units WebGL2 guarantees.** A seventeenth linked under the audits' software GL (limit 32) and gave a black page on the Mac's own GPU; caught by the streaming work, fixed by folding the cloud-kind atlas into the atmoB array, guarded now by `check_shaders.py`. The next field that needs a sampler must share one. And the audit suite still never runs on a real GPU: a check through the browser pane or ANGLE Metal headless would close that | `fields.js` UNIT, `check_shaders.py` | this session |
+| G7 | — | **DELIVERED 2026-11-10 (sixth round).** `audit_gpu.py`: the six canonical frames on the machine's GPU (ANGLE Metal, 16 texture units) against the accepted software frames, worst 0.73 levels; and the lights-into-alpha write. The earth shader still uses 16 of 16 units: the next field that needs a sampler must share one (the streamed lights went into the imagery texture's alpha for that reason). The audit runs only where there is a GPU | `audit_gpu.py`, `fields.js` UNIT, `check_shaders.py` | fifth round |
+| G8 | P3 | The GPU audit covers the frozen frames and one GL path. The streamed window itself (tiles, fades, a failed fetch) is checked by hand on the live page, not by any audit: it needs the network | `audit_gpu.py`, `detail.js` | sixth round |
 
 ---
 
-**Count: 38 items; none open at P1** (C4 mostly delivered in the fifth round, 2026-11-10). In order:
+**Count: 43 items; none open at P1** (A10 mostly and G7 delivered in the sixth round, 2026-11-10; A11, C5, F11 to F13 and G8 added). In order:
 
-1. **G7** - run one audit on a real GPU.
-2. **B1** - bright cloud over the summer Southern Ocean; cumulus that lines up along the wind; a daily cycle for convective cloud over land; average the texture audit over several tile layouts.
+1. **B1** - bright cloud over the summer Southern Ocean; cumulus that lines up along the wind; a daily cycle for convective cloud over land; average the texture audit over several tile layouts.
+2. **A11 and F11** - finer ground and city lights with range: both need a source this project does not yet use, so both start with the owner.
 3. **F2** - population by polygon.
-4. **A10** - wide rivers as water.
-5. **F1** - the sixteen European states the sheet still cannot name; an inset for the Levant and Caucasus.
+4. **A10** - what is left: the Parana and the Congo, Canada's part-water cells, an independent width dataset.
+5. **F12** - no ships on ice-bound lanes.
+6. **F1** - the sixteen European states the sheet still cannot name; an inset for the Levant and Caucasus.

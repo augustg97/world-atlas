@@ -17,6 +17,16 @@ The witness is wrong in its own ways and the register lists where: land below se
 coast (the Dutch polders, the Po and Nile deltas' edges) reads as sea, and ETOPO's shoreline is the
 zero contour of a 1.85 km grid. A patch is a FINDING only after it has been looked at.
 
+Rivers (register A10). The widest rivers fill a 5 km cell and should be water, not a line on land. There is no
+river-width dataset in hand to score against, so the check is a list: nine reaches that are several kilometres
+wide by any account (the Amazon below Manaus, the lower Negro and Tapajos, the Congo above Kinshasa, the lower
+Ob, Yenisei and Lena, the Parana, the Brahmaputra in Assam). Each is found by NAME on Natural Earth's 1:10m
+centrelines inside a box, walked every 2 km, and the share of its length that the atlas draws as water (within
+one cell) is reported. `rivers_undrawn` is the mean share NOT drawn over the nine. The mask's rivers are MODIS
+water found along these same centrelines, so this checks that they arrived on screen, not that MODIS is right;
+four narrow rivers are listed beside them as the expected other case. Inland water by region is set against
+HydroLAKES's lake areas (lakes only: where the atlas has more, rivers are part of the reason).
+
 Lakes have a second, weaker witness, reported and not gated: open fresh water as Blue Marble shows it
 (dark, not red pixels of the July picture), which is what the mask was built from until 2026-11-10.
 
@@ -56,10 +66,20 @@ def shipped():
     return np.asarray(Image.open(os.path.join(ROOT, "web", "fields", "water.webp")).convert("L"), dtype=np.float32) / 255.0
 
 
-def compare(water, sea_w):
-    """water: the atlas's water fraction (H, W). sea_w: the witness's sea fraction. Areas in million km2."""
+def river_added():
+    """What the river step added to the mask (build/fields_surface.py writes it beside the mask), or None."""
+    p = os.path.join(CACHE, "river8.npy")
+    return np.load(p).astype(np.float32) if os.path.exists(p) else None
+
+
+def compare(water, sea_w, river=None):
+    """water: the atlas's water fraction (H, W). sea_w: the witness's sea fraction. Areas in million km2.
+    river: the part of `water` that is river. A river is joined to the sea at its mouth, so "water connected to the
+    ocean" runs up the Amazon to Peru, and all of it would be scored as land drawn as sea (the witness's sea stops
+    at sea level). The atlas's SEA is what is connected to the ocean without the rivers."""
     area = F.cell_area_km2(W, H) * np.ones((1, W), dtype=np.float32) / 1e6
-    atlas_sea = np.where(ocean_connected(water > 0.5), water, 0.0)          # lakes are not this audit's subject
+    still = water if river is None else np.clip(water - river, 0, 1)
+    atlas_sea = np.where(ocean_connected(still > 0.5), still, 0.0)          # lakes and rivers are not this part's subject
     # each kind is the part of the disagreement in its direction; a coast cell at 0.4 against 0.5 counts 0.1
     sea_as_land = np.clip(sea_w - np.where(ocean_connected(water > 0.5) | (water <= 0.5), water, 1.0), 0, 1)   # water of any kind satisfies "sea"
     land_as_sea = np.clip(atlas_sea - sea_w, 0, 1)
@@ -101,11 +121,77 @@ def lakes_vs_picture(water):
                 picture_only_Mkm2=float((np.clip(bm - water, 0, 1) * area).sum()), atlas_only_Mkm2=float((np.clip(inland - bm, 0, 1) * area).sum()))
 
 
+# (label, the name on Natural Earth's centreline, lon0, lat0, lon1, lat1, gated)
+REACHES = [("Amazon, Manaus to Almeirim", "Amazonas", -60.0, -4.0, -52.5, -1.0, True), ("Negro, lower", "Negro", -63.0, -3.4, -60.0, 0.0, True),
+           ("Tapajos, lower", "Tapaj\u00f3s", -56.5, -4.3, -54.5, -2.3, True), ("Congo, Mbandaka to Kinshasa", "Congo", 15.0, -4.5, 19.0, 0.5, True),
+           ("Ob, lower", "Ob", 64.0, 62.0, 72.0, 66.6, True), ("Yenisei, lower", "Yenisey", 80.0, 62.0, 92.0, 70.0, True),
+           ("Lena, lower", "Lena", 120.0, 62.0, 131.0, 70.5, True), ("Parana, lower", "Paran\u00e1", -61.5, -34.0, -57.0, -27.0, True),
+           ("Brahmaputra, Assam", "Brahmaputra", 89.5, 24.0, 95.5, 28.0, True),
+           ("Mississippi (about 1 km wide)", "Mississippi", -92.5, 30.0, -89.0, 37.0, False), ("Yangtze above the estuary (1 to 2 km)", "Chang Jiang", 111.0, 29.0, 119.0, 32.5, False),
+           ("Danube (under 1 km)", "Danube", 16.0, 43.5, 28.0, 48.5, False), ("Nile (under 1 km)", "Nile", 30.0, 18.0, 34.0, 30.0, False)]
+
+
+def reaches(water):
+    """The share of each reach's centreline that lies on drawn water (water > 0.5 within one cell). None: not found."""
+    path = os.path.join(ROOT, "data", "ne", "ne_10m_rivers_lake_centerlines.geojson")
+    if not os.path.exists(path):
+        return None
+    wet = ndimage.maximum_filter(water, size=3, mode=("nearest", "wrap")) > 0.5
+    feats = json.load(open(path))["features"]
+    out = []
+    for label, name, x0, y0, x1, y1, gated in REACHES:
+        on = tot = 0.0
+        for f in feats:
+            p, g = f["properties"], f["geometry"]
+            if not g or name not in (p.get("name"), p.get("name_en")):
+                continue
+            for line in (g["coordinates"] if g["type"] == "MultiLineString" else [g["coordinates"]]):
+                for a, b in zip(line, line[1:]):
+                    km = float(np.hypot((b[0] - a[0]) * np.cos(np.radians(a[1])), b[1] - a[1]) * 111.2)
+                    for t in (np.arange(max(1, int(km / 2.0))) + 0.5) / max(1, int(km / 2.0)):
+                        lo, la = a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t
+                        if not (x0 <= lo <= x1 and y0 <= la <= y1):
+                            continue
+                        step = km / max(1, int(km / 2.0))
+                        tot += step
+                        on += step * bool(wet[min(H - 1, int((90 - la) / 180 * H)), int((lo + 180) / 360 * W) % W])
+        out.append(dict(reach=label, gated=gated, km=round(tot), drawn=(on / tot if tot else None)))
+    return out
+
+
+# inland water by region against HydroLAKES's lake areas (million km2; reported, not gated)
+REGIONS = [("Canada", -140, 48, -55, 72), ("Siberia", 60, 50, 180, 75), ("Scandinavia and Finland", 5, 55, 35, 71), ("Amazon basin", -75, -12, -48, 4),
+           ("United States", -125, 25, -67, 48), ("Tibet", 78, 28, 100, 37)]
+
+
+def regions(water):
+    p = os.path.join(CACHE, "hydrolakes_all.npz")
+    if not os.path.exists(p):
+        return None
+    z = np.load(p)
+    area = F.cell_area_km2(W, H) * np.ones((1, W), dtype=np.float32) / 1e6
+    inland = np.where(ocean_connected(water > 0.5), 0.0, water)
+    lon = -180 + (np.arange(W) + 0.5) * 360 / W; lat = 90 - (np.arange(H) + 0.5) * 180 / H
+    out = []
+    for name, x0, y0, x1, y1 in REGIONS:
+        m = np.outer((lat >= y0) & (lat <= y1), (lon >= x0) & (lon <= x1))
+        hm = (z["lon"] >= x0) & (z["lon"] <= x1) & (z["lat"] >= y0) & (z["lat"] <= y1)
+        out.append(dict(region=name, atlas=float((inland * area * m).sum()), hydrolakes=float(z["area"][hm].sum() / 1e6)))
+    return out
+
+
 def run(as_json=False, register=False):
     water, sea_w = shipped(), etopo_sea()
-    out, patches, boxes = compare(water, sea_w)
+    out, patches, boxes = compare(water, sea_w, river_added())
     lk = lakes_vs_picture(water)
+    rv, rg = reaches(water), regions(water)
     summary = dict(sea_as_land_Mkm2=round(out["sea_as_land"], 3), land_as_sea_Mkm2=round(out["land_as_sea"], 3), worst_patch_kkm2=round(out["worst_patch"], 1))
+    if rv:
+        gated = [r for r in rv if r["gated"]]
+        missing = [r["reach"] for r in gated if r["drawn"] is None]
+        if missing:
+            raise SystemExit(f"audit_water: no centreline found for {missing}; the reach list is out of step with Natural Earth")
+        summary["rivers_undrawn"] = round(float(np.mean([1.0 - r["drawn"] for r in gated])), 3)
     if not as_json:
         print("the shipped water mask against ETOPO 2022's ocean-connected sea, 5 km cells")
         print(f"  north of 60 S:  sea the atlas draws as land  {out['sea_as_land']:.3f} M km2      land the atlas draws as sea  {out['land_as_sea']:.3f} M km2")
@@ -118,12 +204,28 @@ def run(as_json=False, register=False):
             print(f"    {p['area_kkm2']:7.1f}  {p['kind']:18} {p['lat']:7.2f}, {p['lon']:8.2f}")
         if lk:
             print(f"  inland water: atlas {lk['atlas_inland_Mkm2']:.3f} M km2, Blue Marble's dark water {lk['picture_inland_Mkm2']:.3f}; in the picture only {lk['picture_only_Mkm2']:.3f}, in the atlas only {lk['atlas_only_Mkm2']:.3f}")
+    if not as_json and rv:
+        print("  wide rivers: share of the centreline drawn as water")
+        for r in rv:
+            print(f"    {r['reach']:40} {r['km']:5d} km   " + ("not found" if r["drawn"] is None else f"{100 * r['drawn']:5.1f}%") + ("" if r["gated"] else "   (narrow: not gated)"))
+    if not as_json and rg:
+        print("  inland water by region, M km2: atlas, and HydroLAKES's lakes alone")
+        for r in rg:
+            print(f"    {r['region']:26} {r['atlas']:.3f}  {r['hydrolakes']:.3f}")
     if register:
         with open(os.path.join(HERE, "REGISTER-water.md"), "w") as fh:
             fh.write("# Water mask against ETOPO 2022 (audit_water.py)\n\n")
             fh.write(f"Sea drawn as land {out['sea_as_land']:.3f} M km2; land drawn as sea {out['land_as_sea']:.3f} M km2.\n\n| thousand km2 | kind | lat | lon |\n|---|---|---|---|\n")
             for p in patches[:40]:
                 fh.write(f"| {p['area_kkm2']:.1f} | {p['kind']} | {p['lat']:.2f} | {p['lon']:.2f} |\n")
+            if rv:
+                fh.write("\n| reach | km | drawn as water |\n|---|---|---|\n")
+                for r in rv:
+                    fh.write(f"| {r['reach']}{'' if r['gated'] else ' (not gated)'} | {r['km']} | {'not found' if r['drawn'] is None else str(round(100 * r['drawn'], 1)) + '%'} |\n")
+            if rg:
+                fh.write("\n| region | atlas inland water, M km2 | HydroLAKES lakes, M km2 |\n|---|---|---|\n")
+                for r in rg:
+                    fh.write(f"| {r['region']} | {r['atlas']:.3f} | {r['hydrolakes']:.3f} |\n")
             fh.write("\n| box | sea as land | land as sea |\n|---|---|---|\n")
             for name, b in boxes.items():
                 fh.write(f"| {name} | {b['sea_as_land_kkm2']:.1f} | {b['land_as_sea_kkm2']:.1f} |\n")
@@ -151,6 +253,14 @@ def selftest():
     water2 = sea.copy(); water2[1000:1100, 6000:6100] = 1.0
     out2, _, _ = compare(water2, sea)
     assert out2["land_as_sea"] < 1e-6 and out2["sea_as_land"] < 1e-6, out2
+    # 3b. a river that reaches the sea is "land drawn as sea" if nobody says it is a river, and is not when told
+    water3 = sea.copy(); riv = np.zeros_like(sea); riv[2000:2004, W // 2: W // 2 + 600] = 1.0; water3 += riv
+    assert compare(water3, sea)[0]["land_as_sea"] > 0.02 and compare(water3, sea, riv)[0]["land_as_sea"] < 1e-6
+    # 4. reaches(): a mask that is all land draws no river; one that is all water draws every one
+    r0, r1 = reaches(np.zeros((H, W), np.float32)), reaches(np.ones((H, W), np.float32))
+    if r0 is not None:
+        assert all(r["drawn"] in (0.0, None) for r in r0) and all(r["drawn"] in (1.0, None) for r in r1), (r0, r1)
+        assert sum(r["drawn"] is not None and r["km"] > 150 for r in r1 if r["gated"]) == sum(r["gated"] for r in r1), [(r["reach"], r["km"]) for r in r1]
     print("audit_water selftest: ok")
 
 

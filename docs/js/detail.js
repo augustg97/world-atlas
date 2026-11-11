@@ -4,6 +4,9 @@
 //
 //   imagery    NASA GIBS WMTS, EPSG:4326, layer BlueMarble_NextGeneration (August 2004), tile matrix
 //              set "500m". Equirectangular 512 px tiles: compositing is a copy.
+//   lights     the same service and the same tiling, layer VIIRS_Black_Marble (2016): the picture the shipped
+//              night lights were made from, at 500 m. Fetched only while part of the view is in the dark, and
+//              carried in the imagery texture's fourth channel (there is no seventeenth sampler: fields.js UNIT).
 //   elevation  Terrain Tiles on AWS (Mapzen/Tilezen "terrarium" PNG), Web Mercator 256 px tiles,
 //              resampled here to the atlas's equirectangular frame.
 //
@@ -13,9 +16,9 @@
 // class of bug in this project (CLAUDE.md, "The canonical frame"); change nothing here without
 // running that test.
 
-import { UNIT } from './fields.js?v=20261111T002557Z';
-import { stamped } from './gl.js?v=20261111T002557Z';
-import { R_KM } from './camera.js?v=20261111T002557Z';
+import { UNIT } from './fields.js?v=20261111T032852Z';
+import { stamped } from './gl.js?v=20261111T032852Z';
+import { R_KM } from './camera.js?v=20261111T032852Z';
 
 const D2R = Math.PI / 180, R2D = 180 / Math.PI;
 export const KM_PER_DEG = R_KM * D2R;                       // 111.195 km on the atlas's sphere
@@ -28,7 +31,20 @@ export const SHIPPED_ALB_DEG = 360 / 8192;                  // the shipped albed
 export const GIBS = {
   layer: 'BlueMarble_NextGeneration', tms: '500m', tilePx: 512, level0Deg: 288, maxLevel: 7,
   url: (L, row, col) => `https://gibs.earthdata.nasa.gov/wmts/epsg4326/best/BlueMarble_NextGeneration/default/500m/${L}/${row}/${col}.jpeg`,
+  nightUrl: (L, row, col) => `https://gibs.earthdata.nasa.gov/wmts/epsg4326/best/VIIRS_Black_Marble/default/2016-01-01/500m/${L}/${row}/${col}.png`,
 };
+/**
+ * Black Marble's display values (0..255) to the brightness of its lights, 0..1.
+ * The shipped field (build/fields_surface.py::step_night) is the picture's WARM EXCESS over its moonlit blue base,
+ * (R + G) / 2 - 0.62 B: that tells light from moonlit desert and snow, but it stops rising where a city starts (the
+ * picture runs amber, then pale, then white, and white is not warm), so a whole basin is one value. Close in the
+ * structure inside a city is the point. Here the warm excess only GATES (is this light at all?) and the brightness
+ * is the green channel's, which rises all the way to the white cores. NIGHT_SHIPPED of it is the shipped field's
+ * full scale: min(1, value / NIGHT_SHIPPED) is the shipped value (measured on Los Angeles and its desert: the
+ * means agree to 0.6%, lit pixels to 0.02), which is what the shader uses for everything but the close-in picture.
+ */
+export const NIGHT_SHIPPED = 0.53;
+export const nightLight = (r, g, b) => Math.max(0, Math.min(1, ((r + g) * 0.5 - 0.62 * b - 2) / (95 * 0.25))) * Math.max(0, Math.min(1, (g - 30) / 225));
 export const gibsTileDeg = (L) => GIBS.level0Deg / 2 ** L;
 export const gibsTexelDeg = (L) => gibsTileDeg(L) / GIBS.tilePx;
 export const gibsMatrix = (L) => ({ w: Math.ceil(360 / gibsTileDeg(L) - 1e-9), h: Math.ceil(180 / gibsTileDeg(L) - 1e-9) });
@@ -198,6 +214,7 @@ export const PLAN = {
   maxElevTiles: 96,     // elevation requests per window (256 px tiles: a quarter of the pixels each)
   maxTex: 8192,         // texels on a side
   gainKm: 3,            // a streamed texel coarser than this adds nothing to the shipped fields
+  minKm: 0.45,          // no source here is finer than this: Blue Marble and Black Marble stop at 0.49 km a texel
   // The window is the view's lon/lat box grown by this share of its size on every side. Negative: the
   // box does not fit the request budget, and the window covers the middle of the view only.
   margins: [0.25, 0.15, 0.05, -0.05, -0.12, -0.19, -0.26, -0.32, -0.38],
@@ -248,7 +265,7 @@ function elevPlan(win, z) {
  * Choose the window and the tile levels for a view.
  *   view  {lon, lat: the centre; west, east: unwrapped degrees with west < east; south, north; full: the view goes all the way round}
  *   kmPerPx  the camera's km per CSS pixel at the centre of the view
- * Wanted: a texel no coarser than max(1 km, 0.8 x kmPerPx), over the whole view and a margin, within
+ * Wanted: a texel no coarser than max(0.45 km, 0.8 x kmPerPx), over the whole view and a margin, within
  * the request budget of each layer. A perspective view of a globe sees far more ground than its
  * centre scale suggests (at 3 km a pixel a 1440 x 900 view spans 60 by 29 degrees), so all three
  * cannot always hold. The order of giving way: the margin; then one level coarser, while that is
@@ -258,16 +275,16 @@ function elevPlan(win, z) {
 export function planDetail(view, kmPerPx, opts = {}) {
   const P = { ...PLAN, ...opts };
   if (!(kmPerPx < P.activeKm)) return null;
-  const want = Math.max(1, 0.8 * kmPerPx);
+  const want = Math.max(P.minKm, 0.8 * kmPerPx);
   const refLat = Math.min(80, Math.abs(view.lat));
   const albKm = (L) => gibsTexelDeg(L) * KM_PER_DEG, elevKm = (z) => terrTexelKm(refLat, z);
   const fits = (p) => !p || (p.count <= (p.z === undefined ? P.maxTiles : P.maxElevTiles) && p.w <= P.maxTex && p.h <= P.maxTex);
   const make = (m, L, z) => {
     const win = snap(grow(view, m), L !== null ? gibsTexelDeg(L) : 1 / 64);
-    return { win, margin: m, alb: L !== null ? albPlan(win, L) : null, elev: z !== null ? elevPlan(win, z) : null };
+    return { win, margin: m, alb: L !== null ? albPlan(win, L) : null, elev: z !== null ? elevPlan(win, z) : null, night: !!P.night && L !== null };
   };
   // the wanted level of each layer: the coarsest that meets the texel rule
-  let L = 6; while (L > 5 && albKm(L - 1) <= want) L--;                               // 6 (0.98 km) or 5 (1.95 km)
+  let L = GIBS.maxLevel; while (L > 5 && albKm(L - 1) <= want) L--;                   // 7 (0.49 km), 6 (0.98 km) or 5 (1.95 km)
   let z = 9; while (z > 0 && elevKm(z - 1) <= Math.min(want, P.gainKm)) z--;
   // one level coarser at a time while the whole view does not fit and the coarser level still gains
   while (!fits(make(P.fullView, L, null).alb) && albKm(L - 1) <= P.gainKm) L--;
@@ -277,7 +294,7 @@ export function planDetail(view, kmPerPx, opts = {}) {
 }
 function finish(p, want) {
   p.wantKm = want;
-  p.key = `${p.win.west.toFixed(5)},${p.win.north.toFixed(5)},${p.win.lonSpan.toFixed(5)},${p.win.latSpan.toFixed(5)},${p.alb ? p.alb.L : '-'},${p.elev ? p.elev.z : '-'}`;
+  p.key = `${p.win.west.toFixed(5)},${p.win.north.toFixed(5)},${p.win.lonSpan.toFixed(5)},${p.win.latSpan.toFixed(5)},${p.alb ? p.alb.L : '-'},${p.elev ? p.elev.z : '-'},${p.night ? 'n' : '-'}`;
   return p;
 }
 
@@ -343,6 +360,7 @@ export class Detail {
     this.stats = null;        // the last finished window: requests, bytes, ms
     this.keep = false;        // development: keep the composited imagery canvas and elevation grid of the current window
     this.albCache = new LRU(CACHE_TILES, (b) => b.close && b.close());
+    this.nightCache = new LRU(CACHE_TILES, (b) => b.close && b.close());
     this.elevCache = new LRU(CACHE_TILES);
     this.floatLinear = !!gl.getExtension('OES_texture_float_linear');
     this.maxTex = Math.min(PLAN.maxTex, gl.getParameter(gl.MAX_TEXTURE_SIZE));
@@ -356,12 +374,13 @@ export class Detail {
 
   _set(state, note) { this.state = state; this.note = note; this.onChange(); }
 
-  /** Call every frame. Plans a window when the camera has settled on a view the current one does not serve. */
-  update(cam, settled, on) {
+  /** Call every frame. Plans a window when the camera has settled on a view the current one does not serve.
+   *  `sun`: the sub-solar point {lon, lat} while the night lights are shown, else null. */
+  update(cam, settled, on, sun = null) {
     if (!on) { if (this.enabled) { this.enabled = false; this._cancel(); this._drop(); this.failedKey = ''; this.error = null; this._lastView = ''; this._set('off', ''); } return; }
     this.enabled = true;
     const k = cam.kmPerPx();
-    const sig = `${cam.view},${cam.w},${cam.h},${k.toFixed(4)},${cam.center().map((v) => v.toFixed(4))}`;
+    const sig = `${cam.view},${cam.w},${cam.h},${k.toFixed(4)},${cam.center().map((v) => v.toFixed(4))},${sun ? Math.round(sun.lon / 2) : 'x'}`;
     if (sig === this._lastView) return;
     if (!(k < PLAN.activeKm)) { this._lastView = sig; this._cancel(); if (this.state !== 'idle') this._set('idle', ''); return; }
     const view = viewBox(cam);
@@ -369,10 +388,13 @@ export class Detail {
     if (this.job && !windowHolds(this.job.plan.win, { ...view, west: view.lon, east: view.lon, south: view.lat, north: view.lat, full: false })) this._cancel();
     if (!settled) return;                                                 // look again next frame
     this._lastView = sig;
-    const plan = planDetail(view, k, { maxTex: this.maxTex });
+    // the lights are wanted where the Sun is not well up somewhere in the view (they fade out by 6 degrees of Sun)
+    const sunAlt = (lon, lat) => Math.asin(Math.sin(lat * D2R) * Math.sin(sun.lat * D2R) + Math.cos(lat * D2R) * Math.cos(sun.lat * D2R) * Math.cos((lon - sun.lon) * D2R)) * R2D;
+    const dark = !!sun && [[view.lon, view.lat], [view.west, view.north], [view.east, view.north], [view.west, view.south], [view.east, view.south]].some(([lo, la]) => sunAlt(lo, la) < 8);
+    const plan = planDetail(view, k, { maxTex: this.maxTex, night: dark });
     if (!plan) { this._cancel(); if (this.state !== 'idle') this._set('idle', ''); return; }
     // a window serves if it is at least as fine as the one wanted now and holds what that one was to cover, less the slack
-    const serves = (p) => p && windowHolds(p.win, view, plan.margin - PLAN.slack) && (!plan.alb || (p.alb && p.alb.L >= plan.alb.L)) && (!plan.elev || (p.elev && p.elev.z >= plan.elev.z));
+    const serves = (p) => p && windowHolds(p.win, view, plan.margin - PLAN.slack) && (!plan.alb || (p.alb && p.alb.L >= plan.alb.L)) && (!plan.elev || (p.elev && p.elev.z >= plan.elev.z)) && (!plan.night || p.night);
     if (this.cur && serves(this.cur.plan)) { this._cancel(); return; }
     if (this.job && serves(this.job.plan)) return;
     if (plan.key === this.failedKey) return;
@@ -404,7 +426,8 @@ export class Detail {
     // a layer whose tiles did not all arrive is left out whole (weight 0): the shipped field shows there, and says so
     const now = performance.now(), keepFade = this.cur && windowHolds(this.cur.plan.win, view, -0.45);     // the old window was on screen: no second fade
     const at = (had) => (this.frozen || (keepFade && had) ? -1e9 : now);
-    const next = { plan, alb: alb ? { tex: alb.tex, at: at(this.cur && this.cur.alb) } : null, elev: elev ? { tex: elev.tex, at: at(this.cur && this.cur.elev) } : null };
+    const next = { plan, alb: alb ? { tex: alb.tex, at: at(this.cur && this.cur.alb), night: alb.night } : null, elev: elev ? { tex: elev.tex, at: at(this.cur && this.cur.elev) } : null };
+    if (alb && plan.night && !alb.night) errs.push(`lights: ${job.nightError || 'not fetched'}`);
     this._drop();
     this.cur = next;
     if (alb) this.fields.tex.detAlb = alb.tex; if (elev) this.fields.tex.detElev = elev.tex;
@@ -412,7 +435,7 @@ export class Detail {
     this.stats = { requests: job.requests, cached: job.hits, bytes: job.bytes, ms: Math.round(now - job.t0), compositeMs: job.compositeMs || 0, albTiles: plan.alb ? plan.alb.tiles.length : 0, elevTiles: plan.elev ? plan.elev.tiles.length : 0 };
     this.error = errs.length ? errs.join('; ') : null;
     this.failedKey = errs.length ? plan.key : '';
-    const parts = [alb ? `imagery ${plan.alb.texelKm.toFixed(1)} km` : null, elev ? `elevation ${terrTexelKm(view.lat, plan.elev.z).toFixed(1)} km` : null].filter(Boolean);
+    const parts = [alb ? `imagery ${alb.night ? 'and night lights ' : ''}${plan.alb.texelKm.toFixed(1)} km` : null, elev ? `elevation ${terrTexelKm(view.lat, plan.elev.z).toFixed(1)} km` : null].filter(Boolean);
     next.note = errs.length ? `Some tiles could not be fetched (${errs.join('; ')}). ${parts.length ? `Showing ${parts.join(', ')}; the rest is the shipped field.` : 'Showing the shipped fields.'}`
       : `Streamed for this view: ${parts.join(', ')} a texel.`;
     this._set(errs.length ? (parts.length ? 'partial' : 'failed') : 'ready', next.note);
@@ -460,20 +483,87 @@ export class Detail {
       }
       bmp.set(key, b);
     });
+    // The lights, the same tiles of another layer. A failure here costs the lights only: the imagery still shows.
+    let nbmp = null;
+    if (job.plan.night) {
+      nbmp = new Map();
+      await this._each(p.tiles, job, async (t) => {
+        const key = `${p.L}/${t.row}/${t.col}`;
+        let b = this.nightCache.get(key);
+        if (b) job.hits++;
+        else {
+          b = await createImageBitmap(await this._fetch(GIBS.nightUrl(p.L, t.row, t.col), job), { colorSpaceConversion: 'none', premultiplyAlpha: 'none' });
+          if (b.width !== GIBS.tilePx || b.height !== GIBS.tilePx) throw new Error(`lights tile ${key} is ${b.width} x ${b.height}`);
+          this.nightCache.set(key, b);
+        }
+        nbmp.set(key, b);
+      }).catch((e) => { if (e.name === 'AbortError') throw e; job.nightError = e.message || String(e); nbmp = null; });
+    }
     // Equirectangular onto equirectangular at the same pixel size: every tile lands on whole pixels.
-    const c = new OffscreenCanvas(p.w, p.h), g = c.getContext('2d', { alpha: false, colorSpace: 'srgb' });
-    g.imageSmoothingEnabled = false;
-    for (const t of p.tiles) g.drawImage(bmp.get(`${p.L}/${t.row}/${t.col}`), t.dx, t.dy);
+    const mosaic = (tiles) => {
+      const c = new OffscreenCanvas(p.w, p.h), g = c.getContext('2d', { alpha: false, colorSpace: 'srgb' });
+      g.imageSmoothingEnabled = false;
+      for (const t of p.tiles) g.drawImage(tiles.get(`${p.L}/${t.row}/${t.col}`), t.dx, t.dy);
+      return c;
+    };
+    const c = mosaic(bmp);
     const tex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, tex);
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1); gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false); gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.NONE);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB8, gl.RGB, gl.UNSIGNED_BYTE, c);
+    gl.texImage2D(gl.TEXTURE_2D, 0, nbmp ? gl.RGBA8 : gl.RGB8, nbmp ? gl.RGBA : gl.RGB, gl.UNSIGNED_BYTE, c);
+    if (nbmp) this._writeLights(tex, mosaic(nbmp), p.w, p.h);
+    gl.bindTexture(gl.TEXTURE_2D, tex);
     gl.generateMipmap(gl.TEXTURE_2D);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     const ext = gl.getExtension('EXT_texture_filter_anisotropic');
     if (ext) gl.texParameterf(gl.TEXTURE_2D, ext.TEXTURE_MAX_ANISOTROPY_EXT, Math.min(8, gl.getParameter(ext.MAX_TEXTURE_MAX_ANISOTROPY_EXT)));
-    return { tex, canvas: this.keep ? c : null };
+    return { tex, canvas: this.keep ? c : null, night: !!nbmp };
+  }
+
+  /**
+   * Write the lights into the alpha channel of the imagery texture, on the GPU: the lights mosaic goes up as a
+   * texture of its own, one triangle is drawn into the imagery texture with only alpha unmasked, and the
+   * mosaic is thrown away. (A 2D canvas cannot hold the four channels: it premultiplies colour by alpha.)
+   * Every piece of GL state touched is put back; this runs between frames.
+   */
+  _writeLights(tex, canvas, w, h) {
+    const gl = this.gl;
+    if (!this._lightProg) {
+      const sh = (type, src) => { const o = gl.createShader(type); gl.shaderSource(o, src); gl.compileShader(o); if (!gl.getShaderParameter(o, gl.COMPILE_STATUS)) throw new Error(`lights shader: ${gl.getShaderInfoLog(o)}`); return o; };
+      const pr = gl.createProgram();
+      gl.attachShader(pr, sh(gl.VERTEX_SHADER, '#version 300 es\nvoid main() { gl_Position = vec4(float((gl_VertexID << 1) & 2) * 2.0 - 1.0, float(gl_VertexID & 2) * 2.0 - 1.0, 0.0, 1.0); }'));
+      // nightLight() above, in the shader's units
+      gl.attachShader(pr, sh(gl.FRAGMENT_SHADER, '#version 300 es\nprecision highp float;\nuniform sampler2D uN;\nout vec4 o;\nvoid main() { vec3 c = texelFetch(uN, ivec2(gl_FragCoord.xy), 0).rgb * 255.0; o = vec4(0.0, 0.0, 0.0, clamp(((c.r + c.g) * 0.5 - 0.62 * c.b - 2.0) / 23.75, 0.0, 1.0) * clamp((c.g - 30.0) / 225.0, 0.0, 1.0)); }'));
+      gl.linkProgram(pr);
+      if (!gl.getProgramParameter(pr, gl.LINK_STATUS)) throw new Error(`lights program: ${gl.getProgramInfoLog(pr)}`);
+      this._lightProg = pr; this._lightU = gl.getUniformLocation(pr, 'uN');
+    }
+    const was = { fb: gl.getParameter(gl.FRAMEBUFFER_BINDING), vp: gl.getParameter(gl.VIEWPORT), blend: gl.isEnabled(gl.BLEND), scissor: gl.isEnabled(gl.SCISSOR_TEST), depth: gl.isEnabled(gl.DEPTH_TEST), cull: gl.isEnabled(gl.CULL_FACE), prog: gl.getParameter(gl.CURRENT_PROGRAM), vao: gl.getParameter(gl.VERTEX_ARRAY_BINDING), unit: gl.getParameter(gl.ACTIVE_TEXTURE) };
+    const ntex = gl.createTexture(), fb = gl.createFramebuffer();
+    gl.activeTexture(gl.TEXTURE0 + UNIT.detAlb);
+    gl.bindTexture(gl.TEXTURE_2D, ntex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB8, gl.RGB, gl.UNSIGNED_BYTE, canvas);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    try {
+      if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) throw new Error('lights: the imagery texture cannot be drawn into');
+      gl.viewport(0, 0, w, h);
+      gl.disable(gl.BLEND); gl.disable(gl.SCISSOR_TEST); gl.disable(gl.DEPTH_TEST); gl.disable(gl.CULL_FACE);
+      gl.colorMask(false, false, false, true);
+      gl.useProgram(this._lightProg); gl.uniform1i(this._lightU, UNIT.detAlb);
+      gl.bindVertexArray(null);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+    } finally {
+      gl.colorMask(true, true, true, true);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, was.fb); gl.viewport(was.vp[0], was.vp[1], was.vp[2], was.vp[3]);
+      for (const [cap, on] of [[gl.BLEND, was.blend], [gl.SCISSOR_TEST, was.scissor], [gl.DEPTH_TEST, was.depth], [gl.CULL_FACE, was.cull]]) if (on) gl.enable(cap);
+      gl.useProgram(was.prog); gl.bindVertexArray(was.vao);
+      gl.deleteFramebuffer(fb); gl.deleteTexture(ntex);
+      gl.bindTexture(gl.TEXTURE_2D, this.fields.tex.detAlb || null);
+      gl.activeTexture(was.unit);
+    }
   }
 
   async _elevation(job) {
@@ -543,10 +633,10 @@ export class Detail {
 
   /** The shader's uniforms for this instant. With the layer off, or nothing loaded, both weights are 0. */
   uniforms(now) {
-    const u = { uDetAlb: UNIT.detAlb, uDetElev: UNIT.detElev, uDetWin: [0, 0, 1, 1], uDetAlbW: 0, uDetElevW: 0, uDetAlbLod: 0, uDetElevPx: [1, 1], uDetElevM: [1000, 1000] };
+    const u = { uDetAlb: UNIT.detAlb, uDetElev: UNIT.detElev, uDetWin: [0, 0, 1, 1], uDetAlbW: 0, uDetElevW: 0, uDetNightW: 0, uDetAlbLod: 0, uDetElevPx: [1, 1], uDetElevM: [1000, 1000] };
     const c = this.cur;
     if (!this.enabled || !c) return u;
     const wgt = (l) => { if (!l) return 0; const x = Math.max(0, Math.min(1, (now - l.at) / FADE_MS)); return x * x * (3 - 2 * x); };
-    return { ...u, ...windowUniforms(c.plan), uDetAlbW: wgt(c.alb), uDetElevW: wgt(c.elev) };
+    return { ...u, ...windowUniforms(c.plan), uDetAlbW: wgt(c.alb), uDetElevW: wgt(c.elev), uDetNightW: c.alb && c.alb.night ? wgt(c.alb) : 0 };
   }
 }

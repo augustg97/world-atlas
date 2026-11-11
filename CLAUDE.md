@@ -104,13 +104,13 @@ node build/test_app_math.mjs                     # ephemeris vs almanac, project
 
 # rebuild data (each step asserts landmarks and stamps web/version.json)
 ./venv/bin/python build/fetch_sources.py        # ~3.6 GB into data/ (gitignored); idempotent
-./venv/bin/python build/fields_surface.py       # water albedo elev night clouds   (albedo:7 = one month). After `water`: fields_climate.py ocean, fields_human.py ships
+./venv/bin/python build/fields_surface.py       # water albedo elev night clouds   (albedo:7 = one month). After `water` (needs fetch_sources.py modiswater ne): fields_climate.py ocean, fields_human.py ships lanes
 ./venv/bin/python build/cloud_grain.py          # cloudgrain.jpg, cloudgrain2.jpg: four VIIRS scenes as rank fields (fetch_sources.py cloudtex first; --preview to look)
 ./venv/bin/python build/fields_climate.py       # atmo ocean currents
 ./venv/bin/python build/fields_human.py         # pop ships lanes co2 countries
 ./venv/bin/python build/vectors.py              # political places physical plates quakes volcanoes power stats air
 
-# the whole audit suite against its baselines (thirteen checks, about 5 min; --quick skips the browser checks)
+# the whole audit suite against its baselines (fourteen checks, about 5 min; --quick skips the browser checks)
 ./venv/bin/python Research/modeling/audit_all.py
 # score against NASA EPIC by hand: render (headless), then compare
 "$HOME/Modeling Studio/.venv/bin/python" Research/modeling/epic_render.py cur
@@ -123,6 +123,8 @@ node build/test_app_math.mjs                     # ephemeris vs almanac, project
 # cloud close in, against VIIRS scenes at 2 km a pixel (needs --fetch once, 5 MB)
 "$HOME/Modeling Studio/.venv/bin/python" Research/modeling/cloud_scenes_render.py cur
 ./venv/bin/python Research/modeling/cloud_texture.py --tag cur    # pairs land in Research/figures/clouds/
+# the page on this machine's own GPU against the accepted software frames (needs the dev server; exit 3 = no GPU)
+"$HOME/Modeling Studio/.venv/bin/python" Research/modeling/audit_gpu.py
 # build the published site (audits first; stamps code and data; never pushes)
 ./venv/bin/python build/build_site.py
 # the visual ratchet alone; accept a moved frame only with a reason
@@ -239,6 +241,22 @@ node build/test_app_math.mjs                     # ephemeris vs almanac, project
   light had been filed under another kind of cloud and drawn as a few bright clusters. Partition first, then grain.
 - **A change to the water mask is a change to everything downstream of it**: sea ice (rebuild `fields_climate.py
   ocean`), ships and lanes (`fields_human.py ships`), and the EPIC audits' own sorting of pixels.
+- **A river joins a lake to the sea.** Once the Amazon was water, "water connected to the ocean" ran up it to Peru
+  and the water audit scored the whole river as land drawn as sea. Anything that floods from the ocean must be told
+  what is river (`data/_cache/river8.npy`, written beside the mask).
+- **A product that looks finer may hold nothing more where you are looking.** Three 500 m night products were
+  fetched for the inside of Los Angeles; all three are at full scale across the basin. Sample the place the user
+  pointed at before designing the rendering around detail the data does not have.
+- **A measure that gates is not a measure that ranks.** The shipped lights are Black Marble's warm excess, which
+  tells light from moonlit desert but FALLS again where a city turns white. Used as brightness it drew city cores
+  darker than suburbs. Close in the warm excess only gates and the green channel ranks (`detail.js nightLight`).
+- **One random source for everything means any change reshuffles everything.** Rebuilding the lane field moved 7%
+  of the tracer frame's pixels and nothing was wrong. Read the diff image before believing the number.
+- **Driving the page by hand does not settle it.** `ATLAS.step()` in a tight loop never satisfies "the camera has
+  been still for 350 ms", so the focus window never starts and looks broken. Call `detail.update(cam, true, true,
+  sun)` directly and wait on `detail.busy`.
+- **Coordinates from memory are not landmarks.** Four river asserts and two audit sample points were placed by
+  recollection and missed rivers that were there. Find a named feature by its NAME in the vector data.
 
 Plus the standing ones: a process backgrounded with `&` inside a tool call dies when that call
 ends; a waiter on a `pgrep` pattern can match itself — wait on a **PID**; a static host can serve

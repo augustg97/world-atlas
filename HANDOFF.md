@@ -17,14 +17,16 @@ Paste this whole file as the first message of a new session.
 
 ## The current task
 
-Kickoff, the first build, a verify round and five build rounds are done, and the atlas is published. The
-contract is `SCOPE.md`; the open work is `Research/MODEL-GAPS.md` (38 items, none at P1). Against NASA's
+Kickoff, the first build, a verify round and six build rounds are done, and the atlas is published. The
+contract is `SCOPE.md`; the open work is `Research/MODEL-GAPS.md` (43 items, none at P1). Against NASA's
 photographs the Space register is **close, with named exceptions**. Cloud close in now takes its fine
 structure from real cloud and reads as a satellite photograph; it is not the cloud of the place, and it is
 wrong in measured ways over the Amazon, the trades and the Congo (B1). The whole-Earth sheet carries a Europe
 inset and a Lesser Antilles inset and its continent names (F1). The water mask is a real coastline and lakes
 freeze, by a model that knows the air and, since the fifth round, the lake's depth (A5 delivered; C4 mostly;
-A10 open). Over warm wet land a fifth of the cloud's light is drawn as small cumulus (B1).
+A10 mostly, since the sixth round: the wide rivers are water). Over warm wet land a fifth of the cloud's light
+is drawn as small cumulus (B1). Close in, ground and night lights are streamed at 0.5 km and the night
+landscape is lifted so it can be read (declared in the lights card). The suite has a real-GPU check (G7 delivered).
 
 ## Reference material and the measurement harness
 
@@ -60,18 +62,39 @@ The comparison is only meaningful at **matched scale**. All of this exists; reus
 
 ## State right now
 
-- Last live deploy: **2026-11-10**, release 1.3 (lake depth, cumulus over land); the stamps are in `docs/version.json` and must match the live `version.json`
+- Last live deploy: **2026-11-10**, release 1.4 (rivers, 500 m ground and lights close in, quieter aircraft, the GPU audit); the stamps are in `docs/version.json` and must match the live `version.json`
 - Branch `main` is what is published; `verify-round` was merged into it at release 1.0
 - `data/` holds about 3.6 GB of sources and caches (gitignored); `python build/fetch_sources.py` rebuilds it,
   including 438 MB of NSIDC grids and 581 MB of ISCCP. Three reference sets live under `reference/`
   (gitignored): `epic/` and `epic/clearsky/` (300 MB) and `gibs_clouds/` (5 MB); each has a `--fetch`.
   `data/cloudtex/` holds the three grain scenes (`fetch_sources.py cloudtex`); `data/lakeice/` the lake-ice
   records (`fetch_sources.py lakeice`); `data/hydrolakes/` lake depths (`fetch_sources.py hydrolakes`, then
-  unzip it there); `data/ne/` now also Natural Earth's 1:10m land and lakes.
-- `./venv/bin/python Research/modeling/audit_all.py` passes: thirteen checks, about 5 min.
+  unzip it there); `data/ne/` now also Natural Earth's 1:10m land, lakes and river centrelines;
+  `data/modiswater/` NASA's MODIS water mask in 128 pieces (`fetch_sources.py modiswater`, 20 MB).
+- `./venv/bin/python Research/modeling/audit_all.py` passes: fourteen checks, about 5 min. The fourteenth
+  (`gpu`) needs this machine's GPU and exits 3 without one.
 - **The app now talks to two outside hosts when zoomed in** (NASA GIBS, AWS Terrain Tiles), by default, and
   says so in About. Read register A2 before publishing: one line of the tile documentation needs the owner's eye.
-- **The earth shader uses 16 of 16 texture units.** See G7.
+- **The earth shader uses 16 of 16 texture units.** See G7. The streamed lights share the imagery texture.
+- **The app streams a third layer when zoomed in on the night side** (NASA GIBS, VIIRS_Black_Marble): same host
+  as the imagery, said in the Night lights and Finer ground cards.
+
+## What the sixth round found (2026-11-10)
+
+1. **Wide rivers are water**: MODIS water along Natural Earth's river lines. Nine wide reaches drawn for 87% of
+   their length on average, from under 1%. The Parana (50%) and the Congo (71%) are the rest.
+2. **The lakes strung along rivers came too**, 0.87 M km2 of inland water, and every region moved toward
+   HydroLAKES's lake areas. Canada is now above it (0.76 against 0.66 in lakes): the larger-of-three-sources rule
+   over-counts part-water cells.
+3. **The water audit flooded up the rivers** and called them land drawn as sea. Its sea now excludes rivers.
+4. **The planner capped itself at 1 km.** At 0.45 km it reaches Blue Marble's last level (0.49 km) and terrain
+   zoom 9. That is the end of the free pictures: finer needs a new source and the owner (A11).
+5. **City lights at 500 m have no inside.** Three GIBS products, all at full scale across Los Angeles (F11).
+   The curve close in tops out at gold so edges and names read.
+6. **Warm excess gates light, it does not rank it**: it falls where a city turns white. Green ranks.
+7. **Tracers remember their spawn scale** and are recast on a camera move; a still camera changes nothing.
+8. **Headless Chromium reaches the GPU with `--use-angle=metal`.** The six frames agree with the software frames
+   to under one level in 255. The lights-into-alpha write is tested there too.
 
 ## What the fifth round found (2026-11-10)
 
@@ -207,13 +230,14 @@ Plus the standing ones:
 
 ## The work queue
 
-1. **G7** - one audit on a real GPU.
-2. **B1** - bright cloud over the summer Southern Ocean; cumulus along the wind; a daily cycle for convective
+1. **B1** - bright cloud over the summer Southern Ocean; cumulus along the wind; a daily cycle for convective
    cloud over land; the land-cumulus share from data, not one fitted number.
-3. **C4** - what is left: small lakes' depths, part-frozen great lakes, Issyk-Kul.
+2. **A11, F11** - ground finer than 0.5 km and city lights with range. Both need a source the project does not
+   use yet (Sentinel-2 cloudless on EOX; VNP46A4 behind an Earthdata login): ask the owner first.
+3. **C4, C5** - small lakes' depths, part-frozen great lakes, Issyk-Kul; river ice scored against river records.
 4. **F2** - population by polygon, not by the country raster.
-5. **F1** - what the label round left open (see its row).
-6. **A10** - wide rivers as water.
+5. **A10** - the Parana and the Congo; Canada's part-water cells; a width dataset as an independent witness.
+6. **F12** - no ships on ice-bound lanes. **F1** - what the label round left open.
 
 **If you touch the light model** (`earth.frag.glsl`, Space branch): the order is `epic_anchors.py` (refit
 exposure and gamma), then `land_transfer.py --fit` (refit the albedo table, paste the printed line), then

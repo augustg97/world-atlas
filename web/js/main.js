@@ -257,7 +257,7 @@ function tick(now) {
   // 3. the substrate, into the cache
   const settled = now - settledAt > 350;
   const det = fields.setMonths(astro.month, settled);
-  detail.update(cam, settled && !fly, !!state.layers.detail);
+  detail.update(cam, settled && !fly, !!state.layers.detail, state.layers.lights && state.layers.daylight ? astro.sun : null);
   if (detail.fading(performance.now())) earthDirty = true;           // a window that has just arrived fades in
   if (earthDirty) {
     earthDirty = false; lastEarthDraw = now; state.atNow = isNow();
@@ -287,7 +287,7 @@ function tick(now) {
     if (L.jet && fields.has.climate) { if (f) tracers.jet.step(cam, samplers.jet, f); tracers.jet.draw(camU, 0.9); }
     if (L.ships && fields.cpu.lanes) { if (f) tracers.ships.step(cam, samplers.lanes, f); tracers.ships.draw(camU, atlas ? 0.9 : 0.62); }
   }
-  if (L.flights && flights) dashCache.aloft = flights.draw(camU, state.t, astro.sun, Math.max(0.4, Math.min(1, 7 / k)), k);
+  if (L.flights && flights) dashCache.aloft = flights.draw(camU, state.t, astro.sun, Math.max(0.62, Math.min(1, k / 8)), k);
   drawPoints(camU, k, 1);
 
   // dynamic points: live quakes, satellites, the Sun and Moon marks, the selection
@@ -559,7 +559,7 @@ function insetItems(def) {
 /** Every field and every lazy table the current layers need has arrived, the focus window included when its layer is on. */
 function allLoaded() {
   const h = fields.has;
-  if (state.layers.detail) detail.update(cam, !fly, true);            // the view may have moved since the last frame
+  if (state.layers.detail) detail.update(cam, !fly, true, state.layers.lights && state.layers.daylight ? astro.sun : null);            // the view may have moved since the last frame
   return h.water && h.climate && h.ocean && h.relief && h.elev && h.countries && !!fields.cpu.lanes && !!fields.cpu.pop1 && !!fields.cpu.co21 && pending.size === 0
     && !(state.layers.detail && detail.busy);
 }

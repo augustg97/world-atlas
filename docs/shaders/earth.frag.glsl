@@ -36,10 +36,11 @@ uniform sampler2D uAurora;         // OVATION probability, 360 x 181
 // ---- the focus window: finer fields streamed for the part of the Earth in view (register A2) ----
 // Both textures cover the same lon/lat rectangle, given in the canonical uv of every other field:
 // uDetWin = (u at the west edge, v at the north edge, width in u, height in v). Row 0 is north.
-uniform sampler2D uDetAlb;         // RGB: Blue Marble at 500 m - 2 km a texel, in its own display values, WITH mipmaps
+uniform sampler2D uDetAlb;         // RGB: Blue Marble at 500 m - 2 km a texel, in its own display values, WITH mipmaps. A: night lights, 0..1, when uDetNightW > 0
 uniform sampler2D uDetElev;        // R: elevation in metres (float), linear-filterable. G: 1 where streamed, 0 where filled from the shipped field
 uniform vec4 uDetWin;
 uniform float uDetAlbW, uDetElevW; // 0..1: how much of each to use (0 = not loaded; fade in when ready)
+uniform float uDetNightW;          // 0..1: the same for the lights in uDetAlb's alpha (0 when the window was fetched without them)
 uniform float uDetAlbLod;          // mip level of uDetAlb whose texel is the shipped albedo's (5 km): log2(5 km / texel km)
 uniform vec2 uDetElevPx;           // one texel of uDetElev in window units (1 / width, 1 / height)
 uniform vec2 uDetElevM;            // one texel of uDetElev in metres at the equator (east-west, north-south)
@@ -196,6 +197,8 @@ vec3 fromDisplay(vec3 d) { return pow(d, vec3(GAMMA)) / EXPO; }
 const float WIND_SPREAD = 4.5;     // m/s, day-to-day spread of the wind about its monthly mean vector
 const float LAND_LS = 0.30;        // share of the ground's light that follows Lommel-Seeliger (rough, self-shadowing) rather than Lambert
 const float CLOUD_MU = 0.75;       // the Sun height (cosine) at which the photograph's brightness IS the reflectance
+const float NIGHT_SHIPPED = 0.53;  // the streamed lights' value at which the shipped field is at full scale (js/detail.js, nightLight)
+const vec3 NIGHT_NEAR = vec3(0.085, 0.10, 0.14);   // the lifted night ground, close in (see nearT). BY EYE: the land reads, the lights still lead
 const float NIGHT_GAIN = 3.0;      // faint light (cities, moonlight, stars, aurora) is not scored by a daylit photograph; this keeps it where it was set by eye
 
 // Cumulus over humid land. Through the morning the ground heats, the air above it overturns and
@@ -437,10 +440,13 @@ void main() {
   // over the outer 6% so the window never shows an edge.
   vec2 dw = vec2(fract(uv.x - uDetWin.x), uv.y - uDetWin.y) / uDetWin.zw;
   float inWin = (uDetAlbW + uDetElevW) > 0.0 ? smoothstep(0.0, 0.06, min(min(dw.x, 1.0 - dw.x), min(dw.y, 1.0 - dw.y))) : 0.0;
+  float nightFine = 0.0;
   if (inWin * uDetAlbW > 0.0) {
     // Frequency split. The month's colour stays the shipped field's (it is the right SEASON); the fine
     // structure is the streamed picture's, with its own coarse part taken out so nothing is counted twice.
-    vec3 fineBm = textureGrad(uDetAlb, dw, gDx / uDetWin.zw, gDy / uDetWin.zw).rgb - textureLod(uDetAlb, dw, uDetAlbLod).rgb;
+    vec4 fineT = textureGrad(uDetAlb, dw, gDx / uDetWin.zw, gDy / uDetWin.zw);
+    vec3 fineBm = fineT.rgb - textureLod(uDetAlb, dw, uDetAlbLod).rgb;
+    nightFine = fineT.a;
     // not under snow: the streamed picture is one month, and summer ground does not show through winter snow
     float snowy = smoothstep(0.70, 0.90, min(bm.r, min(bm.g, bm.b)));
     bm = clamp(bm + fineBm * inWin * uDetAlbW * (1.0 - snowy), 0.0, 1.0);
@@ -449,6 +455,10 @@ void main() {
   vec3 wn = tex(uWaterNight, uv).rgb;
   float water = uHasWater > 0.5 ? smoothstep(0.35, 0.65, wn.r) : 0.0;
   float night = wn.g * wn.g;
+  // In the focus window the lights are the streamed picture's outright: it is the picture the shipped field was
+  // made from, at 500 m, so there is no season to keep and nothing to count twice.
+  // The streamed value runs on into the white cores; NIGHT_SHIPPED of it is the shipped field's full scale (detail.js).
+  night = mix(night, min(1.0, nightFine / NIGHT_SHIPPED), inWin * uDetNightW);
   float z = uHasElev > 0.5 ? elevation(uv) : 0.0;
   vec2 grad = vec2(0.0);
   if (uHasRelief > 0.5) {
@@ -568,7 +578,15 @@ void main() {
     float nvL = max(dot(N, V), 0.0);
     float rough = (1.0 - LAND_LS) + LAND_LS * 2.0 / (max(mu0, 0.0) + nvL + 1e-3);
     rough = uView == 0 ? min(rough, 1.8) : 1.0;
-    vec3 land = alb * (sunL * shade * shadow * rough + skyL + moonL);
+    // CLOSE IN, THE NIGHT GROUND IS LIFTED, and this is not the night as it is: under a new Moon the land is
+    // black and only the lights show, which from this near leaves nothing to place them on. Nearer than about
+    // 5 km a pixel the land is lit as by a bright Moon in the north-west (a map's convention for relief), about
+    // ten times moonlight. Stated in the lights card (catalog.js). From further out the night is the real one.
+    float nearT = 1.0 - smoothstep(-0.4, 1.8, lodOf(2.0));
+    vec3 Lnw = normalize(1.1 * N + Nn - E);
+    float reliefN = clamp(dot(n, Lnw) / max(dot(N, Lnw), 0.2), 0.0, 2.2);
+    vec3 nearL = NIGHT_GAIN * NIGHT_NEAR * nearT * (1.0 - dayF);
+    vec3 land = alb * (sunL * shade * shadow * rough + skyL + moonL + nearL * reliefN * (1.0 - 0.5 * cloud));
 
     // water: one colour, shaded; a shelf tint; sky reflection; Sun glint whose width is the wind's
     float depth = max(-z, 0.0);
@@ -579,7 +597,7 @@ void main() {
     // are. Not where this month's picture is near white there: that is ice, and the ice field draws ice.
     float picWater = wn.b * (1.0 - smoothstep(0.38, 0.55, min(bm.r, min(bm.g, bm.b))));
     seaC = mix(seaC, alb, picWater);
-    vec3 sea = seaC * (sunL * shadow * 0.9 + skyL * 1.6 + moonL * 2.0);
+    vec3 sea = seaC * (sunL * shadow * 0.9 + skyL * 1.6 + moonL * 2.0 + nearL * 0.6);
     float nv = max(dot(N, V), 0.0);
     float fres = 0.02 + 0.98 * pow(1.0 - nv, 5.0);
     sea += fres * SKY_REF * smoothstep(-0.15, 0.3, mu0) * 0.55;
@@ -642,7 +660,18 @@ void main() {
     // the dark side: electric light
     if (uNightOn > 0.5) {
       float glow = night * (1.0 - dayF) * (1.0 - 0.72 * cloud);
-      col += NIGHT_GAIN * (vec3(1.0, 0.72, 0.38) * glow * 2.6 + vec3(1.0, 0.90, 0.75) * glow * glow * 3.0);
+      // From far off a town is a point and must carry: the gain is high and a city is white. Close in the same
+      // gain makes one white sheet of a whole basin, so the curve is the picture's own: amber streets, pale cores.
+      vec3 farG = vec3(1.0, 0.72, 0.38) * glow * 2.6 + vec3(1.0, 0.90, 0.75) * glow * glow * 3.0;
+      // (display values: dim amber roads and suburbs, bright amber districts, pale gold at the top. NOT white: the
+      // picture is at full scale over the whole of a large city, and a white sheet hides the names set on it.)
+      vec3 ramp = mix(vec3(0.0), vec3(0.34, 0.21, 0.10), smoothstep(0.0, 0.18, nightFine));
+      ramp = mix(ramp, vec3(0.68, 0.45, 0.21), smoothstep(0.18, 0.48, nightFine));
+      ramp = mix(ramp, vec3(0.88, 0.65, 0.34), smoothstep(0.48, 0.76, nightFine));
+      ramp = mix(ramp, vec3(0.97, 0.82, 0.54), smoothstep(0.76, 1.0, nightFine));
+      vec3 nearG = fromDisplay(ramp) * (1.0 - dayF) * (1.0 - 0.72 * cloud);
+      // the change of curve is spread over the zoom from where the window opens (5 km a pixel) to 2 km
+      col += mix(NIGHT_GAIN * farG, nearG, (1.0 - smoothstep(-1.2, 0.5, lodOf(2.0))) * uDetNightW * inWin);
     }
     // aurora (LIVE only): OVATION probability on the dark side
     if (uHasAurora > 0.5) {

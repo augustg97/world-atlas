@@ -9,6 +9,7 @@
     ./venv/bin/python build/fetch_sources.py hydrolakes # mean depth of 1.4 million lakes, 79 MB
     ./venv/bin/python build/fetch_sources.py lakeice    # freeze and thaw dates of 865 lakes (witness only), 3 MB
     ./venv/bin/python build/fetch_sources.py cloudtex   # three VIIRS cloud scenes for the cloud grain, 8 MB
+    ./venv/bin/python build/fetch_sources.py modiswater # NASA's MODIS water mask in 128 pieces, for the wide rivers, 20 MB
 
 This table IS the project's source record: name, URL, licence. Research/SOURCE-SURVEY.md
 is written from it. Every source here is public domain or plain CC-BY, except NSIDC's Sea Ice
@@ -112,6 +113,17 @@ for name, (lon, lat, day) in CLOUDTEX.items():
         f"&BBOX={lat - half:.4f},{lon - hx:.4f},{lat + half:.4f},{lon + hx:.4f}&WIDTH=1248&HEIGHT=1248&FORMAT=image/png&TIME={day}",
         "public domain (NASA EOSDIS GIBS, VIIRS NOAA-20 corrected reflectance; NASA asks for acknowledgement)")
 
+# --- wide rivers: NASA's MODIS water mask (MOD44W, Carroll et al. 2009), at 610 m a pixel ---------------
+# GIBS again, layer MODIS_Water_Mask: water opaque, land transparent. 16 x 8 pieces of 22.5 degrees and 4096 px.
+# Used at build time by fields_surface.step_water for the rivers that are wider than a cell of the atlas (the
+# Amazon, the Congo, the Ob); the coast and the lakes stay Natural Earth's.
+for j in range(8):
+    for i in range(16):
+        add("modiswater", f"modiswater/w_{j}_{i:02d}.png",
+            f"{GIBS_WMS}?SERVICE=WMS&REQUEST=GetMap&VERSION=1.3.0&LAYERS=MODIS_Water_Mask&CRS=EPSG:4326"
+            f"&BBOX={90 - 22.5 * (j + 1)},{-180 + 22.5 * i},{90 - 22.5 * j},{-180 + 22.5 * (i + 1)}&WIDTH=4096&HEIGHT=4096&FORMAT=image/png&TRANSPARENT=TRUE",
+            "public domain (NASA EOSDIS GIBS, MODIS Land Water Mask MOD44W; NASA asks for acknowledgement)")
+
 # --- lake ice, the witness: freeze and thaw dates for 865 lakes and rivers -------------------
 # Measured against only (Research/modeling/audit_lakeice.py); nothing from it is shipped. NSIDC asks for citation:
 # Benson, B., Magnuson, J. and Sharma, S. (2000, updated 2020), Global Lake and River Ice Phenology Database,
@@ -149,7 +161,7 @@ for hemi, H in (("north", "N"), ("south", "S")):
 # --- vectors (Natural Earth 5.1.2, public domain) -------------------------------------
 for f in ["ne_50m_admin_0_countries", "ne_50m_admin_0_boundary_lines_land",
           "ne_50m_admin_0_boundary_lines_disputed_areas", "ne_50m_admin_0_breakaway_disputed_areas",
-          "ne_10m_populated_places_simple", "ne_50m_rivers_lake_centerlines", "ne_50m_lakes",
+          "ne_10m_populated_places_simple", "ne_50m_rivers_lake_centerlines", "ne_10m_rivers_lake_centerlines", "ne_50m_lakes",
           "ne_50m_geography_regions_polys", "ne_50m_geography_marine_polys",
           "ne_50m_geography_regions_points", "ne_50m_geography_regions_elevation_points",
           "ne_50m_coastline", "ne_10m_time_zones",
@@ -224,7 +236,7 @@ def main() -> int:
             continue
         if want and "small" not in want and group not in want:
             continue
-        if group in ("nsidc", "isccp"):
+        if group in ("nsidc", "isccp", "modiswater"):
             many.append((rel, url))
             continue
         if not fetch(rel, url):

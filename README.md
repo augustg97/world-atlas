@@ -119,7 +119,12 @@ docs/         empty until the owner decides to publish
   and the dashboard.
 - **The clock** - one scalar, `state.t` (UTC ms). LIVE follows the wall clock; scrubbing or playing makes it a typical year.
 - **Things that move** (`js/particles.js`) - tracers advected through the wind, jet and current fields; tracers along
-  measured shipping-lane ridges; aircraft as a pure function of the clock on a gravity model.
+  measured shipping-lane ridges; aircraft as a pure function of the clock on a gravity model, drawn as fine fading
+  threads. Tracers are spread evenly over the screen, so each remembers the scale it was spawned at and is recast
+  when the camera moves.
+- **The focus window** (`js/detail.js`) - closer than 5 km a pixel, finer ground (to 0.49 km), relief (to 0.3 km) and,
+  on the night side, city lights (to 0.49 km) are streamed for the view and composed by the same shader. The lights
+  ride in the imagery texture's alpha: the shader has no spare sampler.
 - **The probe and cards** (`js/cards.js`) - click any pixel for every field's value there and then, each with its tier.
 - **Planet now** (`js/dash.js`) - integrals of the shown fields: people in daylight, sea-ice extent, global mean temperature.
 
@@ -201,7 +206,8 @@ Failures that have each cost real time here. *(The general catalogue is in
 | see below | full table follows |
 | land surface, 12 months | NASA Blue Marble Next Generation 2004 (Stockli et al. 2005) - public domain |
 | elevation and bathymetry | NOAA NCEI ETOPO 2022 60 arc-second ice surface, doi:10.25921/fd45-gt74 - public domain |
-| night lights | NASA Black Marble 2016 (Roman et al. 2018) - public domain |
+| night lights | NASA Black Marble 2016 (Roman et al. 2018) - public domain; close in, the same picture at 500 m through NASA GIBS |
+| wide rivers | NASA MODIS Land Water Mask MOD44W (Carroll et al. 2009) through NASA GIBS, along Natural Earth 1:10m river lines - public domain |
 | clouds (texture) | NASA Blue Marble: Clouds (Stockli 2002) - public domain |
 | clouds (fine structure) | NASA VIIRS (NOAA-20) corrected reflectance via GIBS, four scenes of 2023 - public domain |
 | wind, temperature, pressure, cloud fraction | NCEP/NCAR Reanalysis 1 (Kalnay et al. 1996), 1991-2020 means, NOAA PSL - public domain |
@@ -241,6 +247,10 @@ and what the model cannot know.
 - **The ground's albedo is Blue Marble re-read against EPIC's view from the Sun's side**, not measured reflectance; dense forest is probably drawn too bright in the red (A7).
 - **Below 5 km per pixel the finer ground is streamed** from NASA and AWS while you look (the page says so in About); without a network it falls back to magnified fields. The sea floor is not refined (A2).
 - **Air traffic and ship motion are modelled flows.** No vehicle on screen is a real vehicle.
+- **Rivers are water only where they fill a 5 km cell**: about 2.5 km wide and up. Nine wide reaches are drawn for 87% of their length on average; the Parana for half, the Congo for 71%; the Mississippi, Danube, Nile and upper Yangtze stay lines. The check that says so is not independent of the mask's own source.
+- **Close in, the night ground is brighter than it is**, about ten times moonlight and shaded from the north-west, so that the lights have a landscape under them. The Night lights card says so. Seen whole, the night is the real one.
+- **A large city at night is one even field of gold.** Every public 500 m night picture is at full brightness there.
+- **Half a kilometre a texel is the finest ground**: that is where the free pictures in use stop.
 - **Vintages differ**: land surface 2004, night lights 2016, borders 2022, emissions 2022, population 2025.
 - **At whole-Earth framing 125 of the 177 states in view are named**, 18 of them only in the Europe and Lesser Antilles insets. Sixteen European states, the Levant and the Caucasus still are not; the insets need open sea between the panels and are left out in a small window (F1).
 - **Against NASA EPIC the Space style is close, with named exceptions**: cloud over land above the median, the outermost 2% of the disc, snow at a low Sun (A1, A8, A9). The full list is `Research/MODEL-GAPS.md`: 38 items, none at P1

@@ -27,6 +27,33 @@ export class FlowTracers {
     this.data = new Float32Array(n * (trail - 1) * S);
     this.v = [0, 0];
     this.spawned = false;
+    // Tracers are spread evenly over the SCREEN, so one spawned under an earlier camera is in the wrong place for
+    // this one: after a quick zoom out, the old view's tracers were left as a crowded box in the middle of the new
+    // one until they died of age. Each remembers the scale it was spawned at; see _recast().
+    this.k0 = new Float32Array(n); this.ep = new Int32Array(n); this.epoch = 0; this.camK = 0; this.camC = null;
+  }
+
+  /** The camera has moved since some tracers were spawned. One that has left the screen is spawned again at once;
+   *  after a zoom out by r, the old view holds r x r too many, so all but one in r x r fade out (eight frames) and
+   *  are spawned again over the new view. A still camera changes nothing here, so a frozen frame is the same frame. */
+  _recast(cam) {
+    const k = cam.kmPerPx(), c = cam.center();
+    if (this.camC) {
+      let dl = c[0] - this.camC[0]; dl -= Math.round(dl / 360) * 360;
+      const moved = Math.hypot(dl * Math.cos(c[1] * D2R), c[1] - this.camC[1]) * 111.2 / (k * Math.max(cam.w, cam.h));   // in screens
+      if (Math.abs(Math.log(k / this.camK)) < 0.02 && moved < 0.03) return;
+      this.epoch++;
+    }
+    this.camK = k; this.camC = c;
+    const T = this.trail, h = this.head, pad = 24;
+    for (let i = 0; i < this.n; i++) {
+      if (this.ep[i] === this.epoch || this.age[i] >= this.life[i]) continue;
+      this.ep[i] = this.epoch;
+      const p = cam.project(this.lon[i * T + h], this.lat[i * T + h]);
+      if (!p || p[0] < -pad || p[1] < -pad || p[0] > cam.w + pad || p[1] > cam.h + pad) { this.age[i] = 1e9; continue; }
+      const r = k / this.k0[i];
+      if (r > 1.12 && ((i * 0.6180339887) % 1) > 1 / (r * r)) this.life[i] = Math.min(this.life[i], this.age[i] + 8);
+    }
   }
 
   _spawn(i, cam) {
@@ -41,12 +68,14 @@ export class FlowTracers {
     for (let t = 0; t < this.trail; t++) { this.lon[i * this.trail + t] = ll[0]; this.lat[i * this.trail + t] = ll[1]; }
     this.age[i] = 0; this.life[i] = this.o.life * (0.5 + rnd());
     this.fresh[i] = 1; this.dir[i * 2] = 0; this.dir[i * 2 + 1] = 0;
+    this.k0[i] = cam.kmPerPx(); this.ep[i] = this.epoch;
   }
 
   /** Advance one visual step. `kmPerPx` sets the stride so motion reads the same at any zoom. */
   step(cam, sample, dtFrames = 1) {
     const T = this.trail, h = this.head, nh = (h + 1) % T, v = this.v;
     const stepDeg = this.o.pxPerUnit * cam.kmPerPx() / 111.2 * dtFrames;     // degrees of arc per (unit of speed) per frame
+    this._recast(cam);
     for (let i = 0; i < this.n; i++) {
       if (this.age[i] >= this.life[i]) { this._spawn(i, cam); continue; }
       const lon = this.lon[i * T + h], lat = this.lat[i * T + h];
@@ -107,7 +136,7 @@ export class Flights {
         this.planes.push({ A, B, km, a: ua, b: ub, om, so: Math.sin(om) || 1e-9, dur: km / 840 + 0.6, phase: rnd(), gate: rnd() });   // hours in the air, incl. climb and descent
       }
     }
-    this.data = new Float32Array(this.planes.length * S * 2);
+    this.data = new Float32Array(this.planes.length * S * TAIL.length);
     this.aloft = 0;
   }
   /** Fraction of a day's departures happening at this local hour (peaks morning and evening, near zero at night). */
@@ -118,7 +147,7 @@ export class Flights {
   draw(camU, tMs, sunNow, alpha, kmPerPx) {
     const d = this.data, hours = tMs / 3600000;
     let c = 0, aloft = 0;
-    const streakKm = kmPerPx * 9;                                   // a streak is about nine pixels long at any zoom
+    const pxKm = kmPerPx * Math.max(0.45, Math.min(1, 8 / kmPerPx));   // shorter from far off, where seventeen pixels is 250 km of sky
     for (const p of this.planes) {
       const cyc = hours / (p.dur * 2.4) + p.phase;                 // each airframe: fly, turn round, fly back
       const s = (cyc - Math.floor(cyc)) * 2.4;
@@ -127,14 +156,17 @@ export class Flights {
       const depLst = (((12 + (p.A.lon - sunNow.lon) / 15 - (hours - dep)) % 24) + 24) % 24;
       if (p.gate > Flights.load(depLst)) continue;                  // this rotation did not operate: it would have left at night
       aloft++;
-      const s0 = Math.max(0, s - Math.min(0.4, streakKm / p.km));
-      const h1 = gcAt(p, s), h0 = gcAt(p, s0);
-      if (Math.abs(h1[0] - h0[0]) > 90) continue;
-      const k = c * S;
-      d[k] = h0[0] * D2R; d[k + 1] = h0[1] * D2R; d[k + 2] = h1[0] * D2R; d[k + 3] = h1[1] * D2R;
-      d[k + 4] = 1.0; d[k + 5] = 0.93; d[k + 6] = 0.72; d[k + 7] = 0.7;
-      d[k + 8] = 1.0; d[k + 9] = 0; d[k + 10] = 0;
-      c++;
+      // a fine thread that fades behind the aircraft, as a contrail does: bright only at the head
+      let h1 = gcAt(p, s);
+      for (const [px, a, w] of TAIL) {
+        const h0 = gcAt(p, Math.max(0, s - Math.min(0.4, (px * pxKm) / p.km)));
+        if (Math.abs(h1[0] - h0[0]) > 90) break;
+        const k = c * S;
+        d[k] = h0[0] * D2R; d[k + 1] = h0[1] * D2R; d[k + 2] = h1[0] * D2R; d[k + 3] = h1[1] * D2R;
+        d[k + 4] = 1.0; d[k + 5] = 0.97; d[k + 6] = 0.90; d[k + 7] = a;
+        d[k + 8] = w; d[k + 9] = 0; d[k + 10] = 0;
+        c++; h1 = h0;
+      }
     }
     this.aloft = aloft;
     this.batch.set(d, c);
@@ -142,6 +174,8 @@ export class Flights {
     return aloft;
   }
 }
+// The thread behind each aircraft: [pixels behind the head where the piece ends, opacity, width in pixels].
+const TAIL = [[2.5, 0.62, 0.55], [6, 0.30, 0.3], [11, 0.14, 0.1], [17, 0.05, 0]];
 const unit = (P) => [Math.cos(P.lat * D2R) * Math.cos(P.lon * D2R), Math.cos(P.lat * D2R) * Math.sin(P.lon * D2R), Math.sin(P.lat * D2R)];
 /** A point a fraction t along a plane's great circle. */
 function gcAt(p, t) {

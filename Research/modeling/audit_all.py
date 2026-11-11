@@ -1,6 +1,6 @@
 """Run every validator against its recorded baseline and refuse to regress.
 
-    ./venv/bin/python Research/modeling/audit_all.py            # all eleven (about three and a half minutes)
+    ./venv/bin/python Research/modeling/audit_all.py            # all fourteen (about four minutes)
     ./venv/bin/python Research/modeling/audit_all.py --quick    # skip the ones that need a browser
 
 A build or a publish calls this and stops if a check moved backwards.
@@ -44,13 +44,17 @@ CHECKS = [
      "a shader that does not compile (the black canvas with working panels)"),
     ("selftests", [[PY, "-W", "ignore", M("epic_compare.py"), "--selftest"], [PY, "-W", "ignore", M("epic_clearsky.py"), "--selftest"], [PY, "-W", "ignore", M("cloud_texture.py"), "--selftest"],
                    [PY, M("audit_ice.py"), "--selftest"], [PY, M("audit_population.py"), "--selftest"], [PY, "-W", "ignore", B("cloud_grain.py"), "--selftest"],
-                   [PY, M("audit_water.py"), "--selftest"], [PY, M("audit_lakeice.py"), "--selftest"]],
+                   [PY, M("audit_water.py"), "--selftest"], [PY, M("audit_lakeice.py"), "--selftest"], [SPY, M("audit_gpu.py"), "--selftest"]],
      {"failures": 0}, False, "an audit that has stopped measuring what it says it measures"),
     # The water mask against ETOPO 2022's ocean-connected sea, north of 60 S (register A5). Before the mask was
     # rebuilt from a coastline (2026-11-10) these were 5.27, 0.11 and 460: Blue Marble paints every shelf sea in a
     # colour of its own, and "sea is wherever the picture is fill" classed the bright ones as land. What is left
     # is the coast itself at 5 km (fjords, lagoons, polders); the register file lists the patches.
-    ("water", [[PY, M("audit_water.py"), "--json"]], {"sea_as_land_Mkm2": 0.309, "land_as_sea_Mkm2": 0.568, "worst_patch_kkm2": 12.1}, False,
+    # Sixth round (2026-11-10): rivers. rivers_undrawn is new: the mean share of nine wide reaches' centrelines
+    # that the mask does not draw as water (0.996 before MODIS's river water was added, 0.131 after; the Parana
+    # at 50% and the Congo at 71% are the rest: channels narrower than half a cell between their islands).
+    # sea_as_land tightened 0.309 -> 0.287: river mouths that were land.
+    ("water", [[PY, M("audit_water.py"), "--json"]], {"sea_as_land_Mkm2": 0.287, "land_as_sea_Mkm2": 0.568, "worst_patch_kkm2": 12.1, "rivers_undrawn": 0.131}, False,
      "sea drawn as land or land as sea: the water mask drifting from the coast"),
     # Lake ice against 174 lakes' own freeze and thaw records (NSIDC G01377). test_*: the model on the half of
     # the lakes it was not fitted to (given each lake's recorded depth where there is one). shipped_*: what the
@@ -61,7 +65,9 @@ CHECKS = [
     # that scores the wrong lake. On the 23 lakes that are themselves drawn: release 1.1 (no lake model) 120 days
     # a year out, release 1.2 (no depth) 17.2 and 0.065, now 12.7 and 0.048. undrawn = the other 151.
     ("lake-ice", [[PY, "-W", "ignore", M("audit_lakeice.py"), "--json"]],
-     {"lakeice_test_mae": 0.0385, "lakeice_test_days": 9.8, "lakeice_shipped_mae": 0.0476, "lakeice_shipped_days": 12.7, "lakeice_undrawn": 151}, False,
+     # Sixth round: the rivers brought the lakes strung along them into the mask, so 25 recorded lakes are now
+     # themselves water (23 before) and what is drawn is 11.6 days out (12.7). Tightened.
+     {"lakeice_test_mae": 0.0385, "lakeice_test_days": 9.8, "lakeice_shipped_mae": 0.0443, "lakeice_shipped_days": 11.6, "lakeice_undrawn": 149}, False,
      "lake ice drifting from the lakes' own records"),
     # Rebuilt from NSIDC's 720 monthly grids (register C1). The edge is PLACED so the extent matches NSIDC's
     # mean, so these three are a regression guard, not evidence; the evidence is the per-year check the
@@ -131,7 +137,11 @@ CHECKS = [
     # Needs reference/epic/clearsky (epic_clearsky.py --fetch, 300 MB). instrument_bias is the numpy copy of the
     # shader against the shader's own render: if it grows, shader_model.py has drifted and nothing here means anything.
     ("clear-sky", [[SPY, M("epic_render.py"), "clr", "air,daylight,ice"], [PY, "-W", "ignore", M("land_transfer.py"), "--json"]],
-     {"instrument_bias": 1.1, "clearsky_land_abs": 4.9, "clearsky_land_bias": 0.7}, True,
+     # Sixth round, RE-SET 0.7 -> 0.8 on clearsky_land_bias, and it is the instrument's population, not the picture:
+     # this audit sorts pixels into land and water by the water mask, and the mask gained rivers and the lakes along
+     # them, so 825 part-water pixels of 168,716 left the land set. The SAME renders scored with the old mask for
+     # sorting give 0.7; with the new one 0.8. Mean absolute difference and the instrument check did not move.
+     {"instrument_bias": 1.1, "clearsky_land_abs": 4.9, "clearsky_land_bias": 0.8}, True,
      "the cloud-free ground moving away from EPIC's, or the audit's copy of the shader drifting from the shader"),
     # Cloud at the zoom floor: five regimes at 2 km a pixel against three VIIRS days each (register B1). Each
     # number is how far the atlas sits OUTSIDE the day-to-day spread of the photographs, summed over the
@@ -149,10 +159,23 @@ CHECKS = [
     # the texture took a second row; scores here carry about 0.05 of that. TRUE: cumulus does not line up along
     # the wind (B1).
     ("cloud-texture", [[SPY, M("cloud_scenes_render.py"), "cur"], [PY, "-W", "ignore", M("cloud_texture.py"), "--tag", "cur", "--json"]],
-     {"texture_bands_excess": 0.152, "texture_aniso_excess": 0.078, "texture_cover_excess": 0.159, "texture_contrast_excess": 0.059}, True,
+     # Sixth round: sizes 0.152 -> 0.122 and contrast 0.059 -> 0.058 with no change to the cloud. The Amazon and
+     # Congo scenes now have rivers in them, and the cumulus rank is mixed by the water fraction. Tightened, as the
+     # rule says; it is within the 0.05 a scene that the tile layout alone is known to move this audit by.
+     {"texture_bands_excess": 0.122, "texture_aniso_excess": 0.078, "texture_cover_excess": 0.159, "texture_contrast_excess": 0.058}, True,
      "close-in cloud drifting from real cloud's grain, direction, cover or contrast"),
     ("visual", [[SPY, os.path.join(STUDIO, "tools", "frame_baseline.py"), "check", "--project", ROOT]], {"failures": 0}, True,
      "any of the six canonical frames changing without a recorded reason (Research/baselines/FRAME-LOG.md)"),
+    # The same six frames on the machine's own GPU (ANGLE Metal) against the accepted software frames, and the one
+    # GL path the frames do not reach (register G7). gpu_broken: frames that are blank, errored or beyond what two
+    # rasterisers differ by, plus 1 if the lights-into-alpha write is wrong. The other two are the worst frame's
+    # difference: measured 0.73 levels and 0.59% of pixels on 2026-11-10 (Apple M5 Ultra). Those two are printed and
+    # written to REGISTER-gpu.md but are NOT ratcheted here: hardware frames are not the same bits after a system
+    # update. The audit gates them itself, by a tolerance set five to ten times above the measurement ("broken" is
+    # tens of levels), and counts a frame beyond it in gpu_broken.
+    # It runs AFTER "visual", so the software frames it compares against are the accepted ones.
+    ("gpu", [[SPY, M("audit_gpu.py"), "--json"]], {"gpu_broken": 0}, True,
+     "the page failing on real hardware while every software-GL audit passes (a seventeenth sampler, a driver's stricter GLSL)"),
 ]
 TOL = 1e-9
 

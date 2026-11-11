@@ -130,6 +130,67 @@ def cover(polys, w=W8, h=H8, ss=3):
 DRY_LUM = 110        # a salt lake brighter than this in the July picture is a salt pan, not water
 
 
+def rivers8(land8, dry8):
+    """The wide rivers as a water fraction at 8192: the share of each 5 km cell that is river. (register A10)
+
+    A river is a line in Natural Earth and brown, not dark, in Blue Marble, so neither of the mask's sources
+    ever made one water, and the Amazon, 5 to 15 km wide for 3000 km, was drawn as forest with a line on it.
+    The width comes from NASA's MODIS land-water mask (MOD44W; GIBS layer MODIS_Water_Mask, fetched at 610 m).
+    Only RIVERS are taken from it, so that the coast and the lakes stay the sources they were audited as:
+
+        1. its water, where Natural Earth has land (this cuts every river off from the sea at its mouth);
+        2. of that, the connected bodies that a Natural Earth 1:10m river centreline runs through, within 3 km
+           (connection is judged on 2.4 km blocks, so a channel is not broken where it narrows to one pixel);
+        3. less the salt pans the picture shows dry, which a centreline also runs into.
+
+    A reservoir or a floodplain lake joined to its river comes with it; a lake with no river through it does not.
+    At 5 km a cell a river must fill half a cell to be drawn as water, so it is the rivers wider than about
+    2.5 km that appear: the Amazon and its great tributaries, the lower Congo, Ob, Yenisei, Lena, Parana,
+    Brahmaputra. The Mississippi and the Yangtze above its estuary are narrower and stay lines."""
+    from PIL import ImageDraw
+    from scipy import ndimage
+    N, P = 4096, 4
+    n = N // P
+    Wm, Hm = 16 * n, 8 * n                                        # 16384 x 8192: 2.4 km blocks of the 610 m mask
+    cache = os.path.join(CACHE, "modiswater16.npy")
+    if os.path.exists(cache):
+        frac = np.load(cache).astype(np.float32)
+    else:
+        frac = np.zeros((Hm, Wm), np.float32)
+        for j in range(8):
+            for i in range(16):
+                a = np.asarray(Image.open(os.path.join(DATA, "modiswater", f"w_{j}_{i:02d}.png")).convert("RGBA").getchannel("A")) > 0
+                assert a.shape == (N, N), f"MODIS water piece {j},{i} is {a.shape}"
+                frac[j * n:(j + 1) * n, i * n:(i + 1) * n] = a.reshape(n, P, n, P).mean((1, 3))
+        np.save(cache, frac.astype(np.float16))
+    seed = Image.new("L", (Wm, Hm), 0)
+    dr = ImageDraw.Draw(seed)
+    nline = 0
+    for f in json.load(open(os.path.join(DATA, "ne", "ne_10m_rivers_lake_centerlines.geojson")))["features"]:
+        g = f["geometry"]
+        if not g:
+            continue
+        for line in (g["coordinates"] if g["type"] == "MultiLineString" else [g["coordinates"]]):
+            pts = [((q[0] + 180.0) / 360.0 * Wm, (90.0 - q[1]) / 180.0 * Hm) for q in line]
+            for a, b in zip(pts, pts[1:]):
+                if abs(a[0] - b[0]) < Wm / 2:                     # not across the seam
+                    dr.line([a, b], fill=255, width=3)
+            nline += 1
+    seed = np.asarray(seed) > 0
+    up = lambda m: np.repeat(np.repeat(m, 2, 0), 2, 1)            # the 8192 fields on the 16384 grid
+    inland = (frac > 0) & up(land8 > 0.5) & ~up(dry8 > 0.5)
+    lab, nlab = ndimage.label(inland, structure=np.ones((3, 3), bool))
+    keep = np.zeros(nlab + 1, bool)
+    keep[np.unique(lab[seed])] = True
+    keep[0] = False
+    river = np.where(keep[lab], frac, 0.0).astype(np.float32)
+    del lab
+    r8 = F.reduce_aligned(river, W8, H8)
+    area = F.cell_area_km2(W8, H8) * np.ones((1, W8), dtype=np.float32) / 1e6
+    print(f"  rivers: {nline} centrelines, {int(keep.sum())} of {nlab} inland MODIS water bodies lie on one; {float((r8 * area).sum()):.3f} M km2 of water")
+    return r8
+
+
 def step_water():
     """Water fraction at 8192, from a coastline and not from the picture.
 
@@ -143,7 +204,8 @@ def step_water():
     Now: land is Natural Earth's 1:10m land, its minor islands and the Antarctic ice shelves (ice a
     viewer sees as ice); everything else is sea. Inland water is Natural Earth's 1:10m lakes, plus the
     open fresh water Blue Marble itself shows inside the land (lakes too small for the 1:10m sheet).
-    Natural Earth draws dry salt pans as lakes; one that is bright in the picture is left dry."""
+    Natural Earth draws dry salt pans as lakes; one that is bright in the picture is left dry.
+    Rivers wide enough to fill a cell are NASA's MODIS water mask along Natural Earth's river lines (rivers8)."""
     print("water")
     land = cover(list(_polys("ne_10m_land")) + list(_polys("ne_10m_minor_islands")) + list(_polys("ne_10m_antarctic_ice_shelves_polys")))
     a = np.asarray(bmng(7))
@@ -174,7 +236,7 @@ def step_water():
     land = np.where(south, np.maximum(land, white8), land)
 
     # salt lakes: wet or dry by the picture
-    lakes, dry = [], []
+    lakes, dry, dry_polys = [], [], []
     for f in json.load(open(os.path.join(DATA, "ne", "ne_10m_lakes.geojson")))["features"]:
         g = f["geometry"]
         polys = g["coordinates"] if g["type"] == "MultiPolygon" else [g["coordinates"]]
@@ -186,11 +248,15 @@ def step_water():
             core = win[win.shape[0] // 4: max(win.shape[0] // 4 + 1, 3 * win.shape[0] // 4), win.shape[1] // 4: max(win.shape[1] // 4 + 1, 3 * win.shape[1] // 4)]
             if core.size and float(np.median(core)) > DRY_LUM:
                 dry.append((f["properties"].get("name"), round(float(np.median(core)))))
+                dry_polys += polys
                 continue
         lakes += polys
     print(f"  salt lakes left dry (bright in the July picture): {len(dry)}: " + ", ".join(f"{n} {v}" for n, v in sorted(dry, key=lambda t: -t[1])[:12]))
     lake = cover(lakes)
-    inland = np.minimum(land, np.maximum(lake, dark8))            # inland water lies inside the land
+    river = rivers8(land, cover(dry_polys) if dry_polys else np.zeros_like(land))
+    still = np.minimum(land, np.maximum(lake, dark8))
+    inland = np.minimum(land, np.maximum(np.maximum(lake, dark8), river))            # inland water lies inside the land
+    np.save(os.path.join(CACHE, "river8.npy"), np.clip(inland - still, 0, 1).astype(np.float16))    # what the rivers added: the audit and the cards read it
     water = np.clip((1.0 - land) + inland, 0, 1)
     save_gray(water, "water.webp", quality=92)
     # Water whose colour the picture has. Over deep sea Blue Marble is one flat fill and the atlas paints its
@@ -227,8 +293,14 @@ def step_water():
     assert px(water, -112.5, 41.1) > 0.5, "the Great Salt Lake holds water"
     assert px(water, 5.45, 52.8) > 0.8, "the IJsselmeer is water"
     assert px(water, 175.0, -81.0) < 0.01, "the Ross Ice Shelf is ice, not sea"
-    # (No assertion on the Amazon's main stem: it is brown, not dark, in the picture and a line in Natural Earth,
-    # so neither source has ever made it water here. Rivers are drawn as lines. Register A5.)
+    # the wide rivers (register A10), and the land beside them
+    def near(lon, lat):                                           # the most water within two cells: a river is narrow, and a named place is on its bank
+        i, j = F.lonlat_to_px(lon, lat, W8, H8)
+        return float(water[j - 2:j + 3, i - 2:i + 3].max())
+    assert near(-54.7, -2.3) > 0.8 and near(-58.44, -3.15) > 0.8, "the Amazon is water at Santarem and at Itacoatiara"
+    assert near(-55.0, -4.5) < 0.2 and near(-59.0, -1.0) < 0.3, "the forest south of Santarem and north of Manaus is land"
+    assert near(15.4, -4.2) > 0.7, "Malebo Pool on the Congo is water"
+    assert px(water, 137.3, -28.6) < 0.2, "Lake Eyre stays dry though a river line runs into it"
     print(f"  ocean+lake fraction of the sphere: {(water * np.cos(np.radians(F.canon_lat(H8)))[:, None]).sum() / (np.cos(np.radians(F.canon_lat(H8))).sum() * W8):.4f} (Earth: ~0.71 ocean)")
 
 

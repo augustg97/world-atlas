@@ -1,5 +1,52 @@
 [
  {
+  "version": "1.4",
+  "date": "10 November 2026",
+  "title": "Rivers, sharper nights, and quieter skies",
+  "summary": "The widest rivers are water now, not lines on land. Close in, the ground and the city lights are twice as fine and the night landscape can be read. Aircraft are fine threads, and a quick zoom out no longer leaves a crowded box of ships behind.",
+  "sections": [
+   {
+    "name": "Rivers",
+    "items": [
+     "The Amazon, the lower Negro and Tapajós, the Congo, the Ob, the Yenisei, the Lena, the Paraná and the Brahmaputra are drawn as water where they are wide enough to fill a 5 km cell: on average 87% of the length of nine wide reaches, from under 1%. They catch the Sun, keep their own brown or black colour, answer a click as water, and the Siberian ones freeze in winter.",
+     "Lakes strung along rivers came with them. Canada's inland water went from 0.40 to 0.76 million km² (a lake inventory counts 0.66 in lakes alone), Siberia's from 0.12 to 0.25.",
+     "The width is NASA's MODIS water mask, read along Natural Earth's river lines. The coast is unchanged."
+    ]
+   },
+   {
+    "name": "Close in",
+    "items": [
+     "The streamed ground is now as fine as 0.5 km a texel (it was 1 km) and its relief 0.3 km, from the closest zoom out to about 1.2 km a pixel.",
+     "On the night side the city lights are streamed at 0.5 km too, and drawn in amber and gold in place of one white sheet: towns have edges, roads between them show, and names set on a city can be read.",
+     "The night ground close in is lifted so mountains and coast can be seen under the lights. This is brighter than a real night, by about ten times moonlight, and the Night lights card says so. Seen whole, the night side is as dark as before."
+    ]
+   },
+   {
+    "name": "Things that move",
+    "items": [
+     "Aircraft are fine pale threads that fade behind each plane, shorter from far off and fainter close in. The number aloft is unchanged.",
+     "After a quick zoom out, the wind, current and ship streaks that belonged to the closer view fade within a fraction of a second. They used to linger as a dense box until each died of age."
+    ]
+   },
+   {
+    "name": "Checked on a real graphics card",
+    "items": [
+     "Every picture-based check ran on software rendering, which once let through a fault that gave a black page on real hardware. A new check draws the six reference frames on the machine's own GPU: all six agree with the software frames to under one brightness level in 255 on average."
+    ]
+   },
+   {
+    "name": "Known to be wrong",
+    "items": [
+     "A river narrower than about 2.5 km is still a line: the Mississippi, the Danube, the Nile, the Yangtze above its estuary. The Paraná is drawn for half its length and the Congo for 71%.",
+     "Inside a large city the lights are one even field. Every public 500 m night picture is at full brightness there, so there are no streets to show.",
+     "Half a kilometre is the limit of the pictures this atlas may use freely. Finer ground needs a new source.",
+     "Rivers freeze as if they were lakes 7 m deep. No river's ice record has been scored.",
+     "Ships are still drawn on Arctic lanes in winter: the shipping field is one average year."
+    ]
+   }
+  ]
+ },
+ {
   "version": "1.3",
   "date": "10 November 2026",
   "title": "Deep lakes, and small cumulus over the forest",
