@@ -24,6 +24,100 @@ IDs are referenced from code comments and commit messages. **Never recycle one.*
 | stale-data guard | `web/version.json` stamp on every fetch | a cached two-key `climate.json` had crashed the tracers once |
 | ephemeris check | `build/test_app_math.mjs` | Sun declination within 0.004° at the four 2026 seasonal instants |
 
+## APPLIED (fifth round, 2026-11-10)
+
+Scope agreed for the round: lake depth in the lake-ice model (C4), and the Amazon's cloud (B1).
+
+**Lake depth.** Measured first: the fixed-lag model's error went with the logarithm of a lake's recorded mean
+depth at r = 0.76 (102 lakes), and with its area at 0.23. Lakes under 6 m were iced 9 days too few, lakes over
+25 m about 50 too many. The freeze-up lag is now 10 x depth^0.7 days, to 160 (`build/lakeice.py`; the two
+numbers and the melt rate fitted on the 48 lakes of the fitting half whose depth is recorded; the 160 set on
+the 8 lakes deeper than 25 m, both halves).
+
+| lake ice against the lakes' own records | release 1.2 | now |
+|---|---|---|
+| the model on 83 lakes it was not fitted to, days a year | 10.9 | 9.8 |
+| the same, the 54 of them whose depth is recorded | 10.3 | 9.0 |
+| mean error by depth: under 6 m, 6-12, 12-25, over 25 m | -9, 0, +13, +50 | +4, +4, -1, -1 |
+| what is DRAWN, at the 23 lakes that are themselves water in the mask | 17.2 | 12.7 |
+| Lake Constance (record: 0 days) | 57 | 6 |
+| Lake Vattern (13) | 55 | 13 |
+| Baikal, southern station (102) | - | 106 |
+| Lake Mjosa (50) | 150 | **135** |
+
+Where the depth comes from, and three things that went wrong on the way:
+
+- **HydroLAKES** (CC BY 4.0, a new build-time source: `fetch_sources.py hydrolakes`, 79 MB; nothing of it
+  ships but the ice it helps compute; credited in About). Each body of inland water in the atlas's mask takes
+  the depth of the HydroLAKES lake whose outlet lies on or near it and whose area is nearest its own.
+  *The outlet is not on the lake as the mask draws it*: Superior's is 20 km past the last water pixel and
+  Constance's is on the Untersee, 50 km from the main basin; matching within 10 km left Superior, Baikal,
+  Great Slave and Onega without a depth. A second pass reaches 60-200 km for lakes over 50 km2.
+- **Most HydroLAKES depths are predictions, not measurements** (its `Vol_src` 3: from the slope of the land).
+  Against 60 recorded depths they correlate at 0.39 and run two to three times too deep in Finland; taken at
+  face value they made the drawn lakes WORSE (17.2 to 18.7 days). Dropping them lost Mjosa, whose prediction
+  is roughly right. They are used through their regression (ln depth = 0.94 + 0.46 ln predicted), which is
+  how a noisy predictor should be used. Measured depths (every lake over 500 km2) are taken as they stand.
+- **Great lakes take the floor itself.** Where ETOPO carries a lake's floor (the Caspian, Baikal, the Great
+  Lakes, the Black Sea), depth is local: the north Caspian is 3 m and freezes 66 days, its middle 560 m and
+  does not. The lake's surface is the 2nd percentile of the land touching it; two first tries (the lowest
+  land near each cell; the lowest pixel touching the body) read hills as water at Issyk-Kul and put the
+  Black Sea's shore at -230 m.
+- **The audit was scoring the wrong lake.** "What the atlas draws" took every recorded lake in a cell with
+  ice; but a cell's ice is the ice of whatever body the mask has there, and for a pond beside Lake Ontario
+  that is Lake Ontario. With one lag for all lakes it did not matter. It now scores a lake only if the mask
+  has a body within a pixel of it whose area is within a factor of four of the lake's own: 23 lakes. Earlier
+  "drawn" numbers (16 days at 106 lakes) do not compare; on the 23, release 1.1 was 120 days out.
+
+Still wrong: Mjosa 135 days against 50 (its depth is a prediction: 80 m, shrunk to 19; it is 153). Issyk-Kul,
+which is not in the record and does not freeze, 53 days (the air it is given is 10 C below freezing in
+January, colder than its shore, and it is salt). A great lake freezes whole or not at all, cell by cell.
+
+**The Amazon's cloud.** Two changes, and the texture now holds two rows of grain tiles to carry them.
+
+- *A fourth grain: cumulus over land* (`cloudgrain2.jpg`; a dry-season afternoon over the Rio Negro forest,
+  27 August 2023; only what is white counts, so a silty river is not cloud). By itself it moved little: the
+  Amazon scene's size spectrum 0.53 to 0.50.
+- *The cause was the partition of light, not the grain.* VIIRS shows the Amazon at 13:30 as small cumulus and
+  little else (0.11 of the light); ISCCP files 0.02 of it under cumulus and 0.09 under middle and high types;
+  drawn through the cloud photograph, that 0.09 gathers into a few bright clusters. By day over warm, wet
+  land a share of it is now drawn as cumulus fields (`LAND_CU_SHARE`). **The share is fitted: 0.2, to EPIC's
+  clear-forest medians at four places. Half was tried first and overshot three of the four.**
+
+| close in, against 15 VIIRS scenes | release 1.2 | now |
+|---|---|---|
+| sizes, 4-256 km | 0.226 | 0.152 |
+| cover | 0.253 | 0.159 |
+| contrast | 0.088 | 0.059 |
+| direction | 0.032 | **0.078, worse** |
+| Amazon: mean light, atlas / VIIRS | 0.186 / 0.171 | 0.167 / 0.171 |
+| Amazon: size spectrum (floor 0.39) | 0.53 | 0.45 |
+| Congo: excess of bright cover | 0.25 | 0.15 |
+
+Every scene, every measure. Worse: trades direction 0.06 to 0.10 (floor 0.03) and size spectrum 0.12 to 0.18
+(floor 0.15, now outside); SE Pacific size spectrum 0.34 to 0.41 and North Atlantic direction 0.01 to 0.05,
+both still inside their floors. None of these scenes has land cumulus in it: what moved is WHICH PART of each
+tile falls on each scene, because the tiles are laid in two rows now. Classified: the audit carries about
+0.05 of layout noise per scene, which this exposed; the trades' lack of direction is TRUE and old (the
+cumulus grain has 0.03-0.07 where VIIRS has 0.13). The direction baseline is re-set with this note.
+
+| whole disc against EPIC | release 1.2 | now |
+|---|---|---|
+| clear-ground colour | 13.1 | 11.9 |
+| contrast | 1.53 | **1.85, worse** |
+| mean brightness | 2.62 | **2.67** |
+| bright-white fraction | 0.026 | **0.028** |
+| forest medians, atlas minus EPIC: Amazon Dec, Congo Mar, Amazon Mar, Congo Dec | -31, -13, -5, +10 | -13, +6, +9, **+22** |
+
+Contrast is a TRUE regression, taken deliberately and written beside the baseline: light moved from bright
+clusters into thin fields lowers the disc's contrast by up to a level in six of eight frames. The Congo in
+December is a TRUE regression too: the fitted share helps three forests and hurts the fourth.
+
+The mean light of the same ground at 2 and at 8 km a pixel now differs by 0.001 to 0.028 (Congo -0.028;
+it was 0.005 to 0.022).
+
+---
+
 ## APPLIED (fourth round, 2026-11-10)
 
 Scope agreed for the round: the water mask, then lake ice (A5).
@@ -394,7 +488,7 @@ texture is a magnified photograph, and vegetated land still reads darker than EP
 
 | # | P | item | touches | from |
 |---|---|---|---|---|
-| B1 | P2 | **Clouds: amount and brightness from observation; fine structure from real cloud since 2026-11-10 (third round).** Three kinds (photograph for fronts and storms, sheets, broken low cloud), amount and light from ISCCP (2007-2016), and closer than 10 km a pixel the shape is cut from three VIIRS scenes' ordering fields (`build/cloud_grain.py`), scored against fifteen other VIIRS scenes (`cloud_texture.py`; tables in APPLIED). Open, in order of what the pairs and the numbers show: (1) the Amazon in the dry season is fine cumulus everywhere and the atlas draws fewer, larger, brighter pieces (size spectrum 0.53 against a floor of 0.39); a fourth grain of continental cumulus would answer it, and there is no free texture channel (uClouds is R photograph + GBA grain; unit count is 16 of 16); (2) the trades' brightest tenth is 0.45 against 0.23, and cumulus no longer lines up along the wind; (3) Congo carries 0.14 too much light and twice the bright cover (0.47 against 0.22): ISCCP's April mean against three afternoons, and no daily cycle in the photograph regime; (4) bright cloud over the summer Southern Ocean is short in EPIC's December frames (white share 15-18% against 22%); (5) one scene stands for each kind everywhere and repeats every 2048 km; (6) no towers, no cloud shadows at an offset, no clearings along rivers and coasts; (7) sheet share under a fifth of the sky is not drawn; (8) positions are still one 2002 photograph carried on a monthly-mean wind; (9) the Sun-side brightening is pinned at two angles only; (10) between 4 and 11 km a pixel the grain fades into the 10 km photograph and the view is soft; (11) ISCCP shows a faint ring at the GOES-West sub-satellite point | `cloudAt()`, `pieces()`, `grainAt()`, `deckAt()`, `cumulusAt()`, `build/cloud_grain.py` | interview |
+| B1 | P2 | **Clouds: amount and brightness from observation; fine structure from real cloud since 2026-11-10 (third round).** Three kinds (photograph for fronts and storms, sheets, broken low cloud), amount and light from ISCCP (2007-2016), and closer than 10 km a pixel the shape is cut from three VIIRS scenes' ordering fields (`build/cloud_grain.py`), scored against fifteen other VIIRS scenes (`cloud_texture.py`; tables in APPLIED). Open, in order of what the pairs and the numbers show: (1) the Amazon in the dry season is fine cumulus everywhere; since the fifth round the atlas has a land-cumulus grain and draws a fifth of wet-land cloud light as cumulus fields (`LAND_CU_SHARE`, fitted to four EPIC forest medians, one of which it makes worse), and still has too few small clouds and clusters too bright (size spectrum 0.45 against a floor of 0.39); the share should come from a cloud-type climatology that resolves small cumulus, not from one fitted number; two grain channels are spare (`cloudgrain2.jpg` G, B); (2) the trades' brightest tenth is 0.45 against 0.23, and cumulus does not line up along the wind (direction 0.03 against VIIRS's 0.13; the texture audit also carries about 0.05 of noise per scene from which part of a tile falls on it, and should average several layouts); (3) Congo carries 0.14 too much light and twice the bright cover (0.47 against 0.22): ISCCP's April mean against three afternoons, and no daily cycle in the photograph regime; (4) bright cloud over the summer Southern Ocean is short in EPIC's December frames (white share 15-18% against 22%); (5) one scene stands for each kind everywhere and repeats every 2048 km; (6) no towers, no cloud shadows at an offset, no clearings along rivers and coasts; (7) sheet share under a fifth of the sky is not drawn; (8) positions are still one 2002 photograph carried on a monthly-mean wind; (9) the Sun-side brightening is pinned at two angles only; (10) between 4 and 11 km a pixel the grain fades into the 10 km photograph and the view is soft; (11) ISCCP shows a faint ring at the GOES-West sub-satellite point | `cloudAt()`, `pieces()`, `grainAt()`, `deckAt()`, `cumulusAt()`, `build/cloud_grain.py` | interview |
 | B2 | P2 | No independent witness for wind, temperature, pressure or precipitation. Score the shipped means against ERA5 monthly means (measure-against only) | new `Research/modeling/audit_climate.py` | SOURCE-SURVEY §5 |
 | B3 | P2 | The daily temperature cycle is a three-parameter model with no check. Compare its range against a station or reanalysis diurnal-range climatology | `airTemp()` in shader and `cards.js` | SCOPE §4 |
 | B4 | P3 | The lapse-rate correction is a constant 6.5 K/km; winter inversions over ice sheets and basins are wrong in sign | same | SOURCE-SURVEY |
@@ -407,7 +501,7 @@ texture is a magnified photograph, and vegetated land still reads darker than EP
 | C1 | — | **RESOLVED 2026-11-10** for extent. The field is built from NSIDC's Sea Ice Index v4 monthly grids, all 720 of 1991-2020, through a tested polar-stereographic conversion (`frames.py`). Per cell: how often it was iced and its mean concentration; the typical-year edge is drawn so that the extent, counted as the dashboard counts it, equals NSIDC's mean of yearly extents. **So the 0.0% is by construction.** The evidence is the per-year check: each grid on its own reproduces NSIDC's cell count within 0.6% median, 3.7% worst. Findings: the median ice edge (iced in half the years) overshoots the mean extent by up to 13.8%, and no fixed threshold works (16-28% by month), which is why the edge is solved per month. Ice AREA is not solved: concentration inside the edge is the plain mean and runs up to 15.5% under NSIDC's area (Antarctic February). Lake ice kept from OISST, not counted. Not done: the month-to-month blend was not watched in motion; 8.9 M km² of OISST-valid cells the atlas draws as less than half water were not investigated | `fields_climate.step_ocean`, `REGISTER-ice.md` | NSIDC |
 | C2 | P2 | Currents come from a 1° ocean model: no eddies, a weak Gulf Stream (0.12 m/s where drifters give ~1), nothing poleward of 65°N / 74°S. A drifter-derived climatology would be the better source | `fields_climate.step_currents` | landmark check |
 | C3 | P3 | Ocean colour is one hue plus a shelf tint; no chlorophyll field | shader water block | source survey (NEO gone) |
-| C4 | P2 | **Lake ice is modelled from the air alone and knows no depth.** Fitted and tested on NSIDC's lake-ice phenology records (11 days a year on 83 unseen lakes), and wrong in a known direction for deep lakes, by the lakes' own records: Mjøsa iced 145 days against 50, Lake Constance 54 against none, Baikal's southern station 148 against 102, Superior's Bayfield shore 132 against 66. Issyk-Kul and Tahoe, which are not in the record and are generally known not to freeze, are iced about 120 days. A great lake left to it would freeze whole (the Great Lakes are on OISST for that reason, and OISST's lake ice is itself weak: a floor of up to 0.34 had to be removed). The north-west Black Sea shelf is iced half of January and February, which looks too much and is unchecked. Answer: lake depth (HydroLAKES, CC BY) as heat storage in the freeze-up lag, and solar melt for high lakes; or an observed lake-ice climatology (NOAA GLERL for the Great Lakes, IMS elsewhere). The air temperature is a 2-degree reanalysis lowered to the lake's height by a fixed lapse rate | `build/lakeice.py`, `fields_climate.step_ocean` | fourth round |
+| C4 | P3 | **Mostly DELIVERED 2026-11-10 (fifth round): lake ice knows depth.** Freeze-up lag 10 x depth^0.7 days to 160; depth from HydroLAKES (measured volumes as they stand, predicted ones through their regression) and from ETOPO's lake floors for the Caspian, Baikal, the Great Lakes and the Black Sea. 9.8 days a year on 83 unseen lakes; 12.7 at the 23 recorded lakes the mask itself draws (17.2 before). Open: lakes under 500 km2 mostly have only a predicted depth (Mjøsa: 135 days against 50); Issyk-Kul is iced 53 days and should not be (salt, and the reanalysis's air is too cold there); a great lake freezes whole or not, cell by cell (the Great Lakes stay on OISST for that, itself weak); the north-west Black Sea shelf is unchecked; the audit can score only 23 lakes as drawn, because the phenology database is mostly small lakes; solar melt on high lakes is not modelled (Nam Co, Qinghai unchecked) | `build/lakeice.py`, `fields_climate.lake_depth`, `audit_lakeice.py` | fourth round |
 
 ## D. Solid Earth
 
@@ -451,10 +545,10 @@ texture is a magnified photograph, and vegetated land still reads darker than EP
 
 ---
 
-**Count: 38 items; none open at P1** (A5 delivered in the fourth round, 2026-11-10; A10 and C4 added). In order:
+**Count: 38 items; none open at P1** (C4 mostly delivered in the fifth round, 2026-11-10). In order:
 
-1. **B1** - a continental-cumulus grain for the Amazon; bright cloud over the summer Southern Ocean; a daily cycle for convective cloud over land.
-2. **C4** - lake depth in the lake-ice model (Mjøsa, Constance, Baikal), and partial cover for great lakes.
-3. **G7** - run one audit on a real GPU.
-4. **F2** - population by polygon.
+1. **G7** - run one audit on a real GPU.
+2. **B1** - bright cloud over the summer Southern Ocean; cumulus that lines up along the wind; a daily cycle for convective cloud over land; average the texture audit over several tile layouts.
+3. **F2** - population by polygon.
+4. **A10** - wide rivers as water.
 5. **F1** - the sixteen European states the sheet still cannot name; an inset for the Levant and Caucasus.

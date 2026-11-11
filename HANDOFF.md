@@ -17,13 +17,14 @@ Paste this whole file as the first message of a new session.
 
 ## The current task
 
-Kickoff, the first build, a verify round and four build rounds are done, and the atlas is published. The
+Kickoff, the first build, a verify round and five build rounds are done, and the atlas is published. The
 contract is `SCOPE.md`; the open work is `Research/MODEL-GAPS.md` (38 items, none at P1). Against NASA's
 photographs the Space register is **close, with named exceptions**. Cloud close in now takes its fine
 structure from real cloud and reads as a satellite photograph; it is not the cloud of the place, and it is
 wrong in measured ways over the Amazon, the trades and the Congo (B1). The whole-Earth sheet carries a Europe
 inset and a Lesser Antilles inset and its continent names (F1). The water mask is a real coastline and lakes
-freeze, by a model that knows the air and not the lake's depth (A5 delivered; C4, A10 open).
+freeze, by a model that knows the air and, since the fifth round, the lake's depth (A5 delivered; C4 mostly;
+A10 open). Over warm wet land a fifth of the cloud's light is drawn as small cumulus (B1).
 
 ## Reference material and the measurement harness
 
@@ -59,17 +60,35 @@ The comparison is only meaningful at **matched scale**. All of this exists; reus
 
 ## State right now
 
-- Last live deploy: **2026-11-10**, release 1.2 (water mask, lake ice); the stamps are in `docs/version.json` and must match the live `version.json`
+- Last live deploy: **2026-11-10**, release 1.3 (lake depth, cumulus over land); the stamps are in `docs/version.json` and must match the live `version.json`
 - Branch `main` is what is published; `verify-round` was merged into it at release 1.0
 - `data/` holds about 3.6 GB of sources and caches (gitignored); `python build/fetch_sources.py` rebuilds it,
   including 438 MB of NSIDC grids and 581 MB of ISCCP. Three reference sets live under `reference/`
   (gitignored): `epic/` and `epic/clearsky/` (300 MB) and `gibs_clouds/` (5 MB); each has a `--fetch`.
   `data/cloudtex/` holds the three grain scenes (`fetch_sources.py cloudtex`); `data/lakeice/` the lake-ice
-  records (`fetch_sources.py lakeice`); `data/ne/` now also Natural Earth's 1:10m land and lakes.
+  records (`fetch_sources.py lakeice`); `data/hydrolakes/` lake depths (`fetch_sources.py hydrolakes`, then
+  unzip it there); `data/ne/` now also Natural Earth's 1:10m land and lakes.
 - `./venv/bin/python Research/modeling/audit_all.py` passes: thirteen checks, about 5 min.
 - **The app now talks to two outside hosts when zoomed in** (NASA GIBS, AWS Terrain Tiles), by default, and
   says so in About. Read register A2 before publishing: one line of the tile documentation needs the owner's eye.
 - **The earth shader uses 16 of 16 texture units.** See G7.
+
+## What the fifth round found (2026-11-10)
+
+1. **The lake-ice model's error went with depth at r = 0.76** (and with area at 0.23). Lag = 10 x depth^0.7
+   days, to 160. Constance 57 to 6 days (record 0), Vattern 55 to 13 (13).
+2. **Most HydroLAKES depths are predictions** (`Vol_src` 3) and at face value made the drawn lakes worse.
+   Used through their regression; measured ones (all lakes over 500 km2) as they stand.
+3. **A lake's HydroLAKES point is its outlet**, up to 50 km from the lake as a 5 km mask draws it.
+4. **The "drawn" lake-ice score was scoring whichever lake fills the cell.** It now takes only lakes that are
+   themselves in the mask: 23. Old and new numbers do not compare.
+5. **The Amazon's missing cumulus was a partition problem, not a texture problem.** A land grain alone moved
+   the size spectrum 0.53 to 0.50; drawing a fifth of wet-land cloud light as cumulus fields moved it to 0.45
+   and made the mean light match. The fifth is FITTED to four EPIC forest medians and hurts one of them.
+6. **EPIC's contrast got worse for it (1.53 to 1.85)**, on purpose, written beside the baseline.
+7. **The cloud-texture audit carries about 0.05 of layout noise per scene**: re-laying the tiles in two rows
+   moved scenes with no land in them.
+8. **The cloud texture has two spare channels** (`cloudgrain2.jpg` G and B) for a fifth and sixth grain.
 
 ## What the fourth round found (2026-11-10)
 
@@ -188,10 +207,10 @@ Plus the standing ones:
 
 ## The work queue
 
-1. **C4** - lake depth in the lake-ice model, and part-frozen great lakes.
-2. **B1** - a continental-cumulus grain for the Amazon (needs a texture channel: uClouds is full, and so are
-   the 16 units), bright cloud over the summer Southern Ocean, a daily cycle for convective cloud over land.
-3. **G7** - one audit on a real GPU.
+1. **G7** - one audit on a real GPU.
+2. **B1** - bright cloud over the summer Southern Ocean; cumulus along the wind; a daily cycle for convective
+   cloud over land; the land-cumulus share from data, not one fitted number.
+3. **C4** - what is left: small lakes' depths, part-frozen great lakes, Issyk-Kul.
 4. **F2** - population by polygon, not by the country raster.
 5. **F1** - what the label round left open (see its row).
 6. **A10** - wide rivers as water.

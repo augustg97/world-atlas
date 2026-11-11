@@ -1,5 +1,38 @@
 [
  {
+  "version": "1.3",
+  "date": "10 November 2026",
+  "title": "Deep lakes, and small cumulus over the forest",
+  "summary": "Two things the last release said were wrong: lakes froze by the air alone, so deep ones were iced for months too long; and over the Amazon the sky was a few bright clusters where the real afternoon sky is small cumulus everywhere.",
+  "sections": [
+   {
+    "name": "Lake ice",
+    "items": [
+     "A lake now takes longer to freeze the deeper it is. Lake Constance is iced 6 days a year (it was 57; its record says none), Lake Vättern 13 (it was 55; its record says 13), Lake Tahoe 5.",
+     "On lakes the model was not fitted to, it is 10 days a year out on average, from 11. At the 23 recorded lakes large enough to be water in this atlas, what is drawn is 13 days out, from 17.",
+     "The north Caspian is 3 m deep and freezes; its middle is 500 m deep and does not. Depth there, and in Baikal and the Great Lakes, is the lake floor itself."
+    ]
+   },
+   {
+    "name": "Cloud over land",
+    "items": [
+     "By day over warm, wet land a fifth of the cloud's light is now drawn as fields of small cumulus, with a fine structure taken from a real afternoon over the Rio Negro forest. The total light is unchanged.",
+     "Against satellite scenes at 2 km: over the Amazon the mean light now matches (0.167 against 0.171), and over the Congo the excess of bright cloud fell from 0.25 to 0.15 of the scene.",
+     "Against NASA EPIC, forest between the clouds is nearer its real brightness at three of four places measured, and further at one (the Congo in December)."
+    ]
+   },
+   {
+    "name": "Known to be wrong",
+    "items": [
+     "Lake Mjøsa is still iced 135 days a year against 50: its depth is an estimate, not a measurement. Issyk-Kul, which does not freeze, is iced about 50 days.",
+     "Moving light into thin cumulus lowered the whole disc's contrast against EPIC by about one level in 255 in most frames.",
+     "Cumulus over the sea does not line up along the wind, and the Amazon still has too few small clouds.",
+     "The earlier lists still stand, except where this one says otherwise."
+    ]
+   }
+  ]
+ },
+ {
   "version": "1.2",
   "date": "10 November 2026",
   "title": "The sea where the sea is, and lakes that freeze",

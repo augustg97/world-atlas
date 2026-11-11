@@ -26,6 +26,7 @@ uniform sampler2DArray uAtmoB;     // layers 0-11: slp, cloud fraction, precip. 
 uniform sampler2DArray uOceanA;    // sst, ice, valid (255 sea; 215 inland, sst, modelled ice; 200 inland, observed ice; 180 shore; 150 inland, modelled ice, no sst)
 uniform float uHasCloudT;
 uniform float uHasGrain;          // 1 when uClouds carries the cloud grain in G, B, A (build/cloud_grain.py)
+uniform float uHasGrain2;         // 1 when its bottom row is the second grain file (cumulus over land), not a copy of the top
 uniform vec2 uE_deck, uE_cu, uE_light;
 uniform sampler2D uCountries;      // R: id  G: disputed  B: map colour index * 32
 uniform sampler2D uLens2D;         // the selected static lens field (log-companded 0..1)
@@ -206,6 +207,7 @@ const float NIGHT_GAIN = 3.0;      // faint light (cities, moonlight, stars, aur
 // brighter than bare ground under clear air, in every latitude band, while desert and ocean matched.
 const float CUMULUS_COVER = 0.20;  // fallback only (no cloud-kind field loaded): afternoon cover over the wettest land
 const float DECK_R = 0.50;         // reflectance of sheet cloud where there is one (ISCCP: sheet light over sheet share)
+const float LAND_CU_SHARE = 0.2;   // share of 'all other cloud' over heated wet land drawn as small cumulus. FITTED to EPIC's clear-ground medians over the Amazon and the Congo (four values); VIIRS is the check
 const float CU_FILL = 0.28;        // share of a satellite pixel called "cumulus" that cloud really fills: its 0.14 reflectance over a cell's 0.5
 const float CLOUD_SLANT = 0.5;     // how fast the gaps in broken cloud close as the view tilts (towers about half as tall as wide)
 const float CLOUD_OPP = 0.50;      // extra brightness of broken cloud seen from the Sun's side. Amplitude from EPIC (4-12 degrees
@@ -220,20 +222,23 @@ const float CLOUD_OPP = 0.50;      // extra brightness of broken cloud seen from
 // and ragged edge, is the photograph's. Ranks are uniform, so a cut at 1 - p covers p with nothing to
 // tune, and the mean does not move with zoom. x: sheet. y: cumulus. z: frontal.
 const float GRAIN_N = 19.568;      // grain tiles round the equator: one tile is 2048 km, 2 km a texel
-// One reading of the tile. It is laid along a parallel with a whole number of tiles round it, so it
-// closes on itself; `turned` reads it a quarter turn round, for the second layout below.
-vec3 grainTile(vec2 uvd, float band, bool turned) {
+// One reading of a tile. It is laid along a parallel with a whole number of tiles round it, so it closes
+// on itself east-west; `turned` reads it a quarter turn round, for the second layout below. The texture
+// holds two ROWS of tiles (row 0: sheet, cumulus, frontal; row 1: cumulus over land), each four tiles
+// wide. Across a row the sampler's own wrap carries from tile to tile. Up and down there is no wrap to
+// lean on, since the other row is a different cloud: the tile is wrapped by hand inside its own row, one
+// texel clear of the row's edge (the tiles are built to close on themselves, so the join is a two-texel
+// skip and no more). Reading it mirrored, there and back, was tried first: it turned every cloud street
+// to the opposite slant every 2048 km, and the trades lost their direction (0.07 to 0.04, VIIRS 0.13).
+const float GRAIN_EDGE = 0.0005;   // one texel of 2048
+vec3 grainTile(vec2 uvd, float band, bool turned, float row) {
   float n = max(1.0, floor(GRAIN_N * cos(radians(band * 6.0)) + 0.5));
-  vec2 q, dx, dy;
-  // the tiles sit 4 x 2 in the texture: a quarter of u is one tile, and v is folded into the middle one
-  if (turned) {
-    q = vec2(uvd.y * GRAIN_N * 0.125 + 0.37, 0.25 + 0.5 * fract(uvd.x * n + 0.61));
-    dx = vec2(gDx.y * GRAIN_N * 0.125, gDx.x * n * 0.5); dy = vec2(gDy.y * GRAIN_N * 0.125, gDy.x * n * 0.5);
-  } else {
-    q = vec2(uvd.x * n * 0.25, 0.25 + 0.5 * fract(uvd.y * GRAIN_N * 0.5));
-    dx = vec2(gDx.x * n * 0.25, gDx.y * GRAIN_N * 0.25); dy = vec2(gDy.x * n * 0.25, gDy.y * GRAIN_N * 0.25);
-  }
-  return textureGrad(uClouds, q, dx, dy).gba;
+  float along, across; vec2 dA, dC;                       // tiles along the row, tiles up and down it, and their gradients
+  if (turned) { along = uvd.y * GRAIN_N * 0.5 + 1.48; across = uvd.x * n + 0.61; dA = vec2(gDx.y, gDy.y) * GRAIN_N * 0.5; dC = vec2(gDx.x, gDy.x) * n; }
+  else        { along = uvd.x * n;                    across = uvd.y * GRAIN_N * 0.5; dA = vec2(gDx.x, gDy.x) * n; dC = vec2(gDx.y, gDy.y) * GRAIN_N * 0.5; }
+  float span = 0.5 - 2.0 * GRAIN_EDGE;
+  vec2 q = vec2(along * 0.25, row * 0.5 + GRAIN_EDGE + span * fract(across));
+  return textureGrad(uClouds, q, vec2(dA.x * 0.25, dC.x * span), vec2(dA.y * 0.25, dC.y * span)).gba;
 }
 // Two rank fields cross-faded. A plain average of two unrelated fields crowds toward 0.5 and a cut would
 // no longer cover what it should; dividing by the length of the weights keeps the spread.
@@ -242,17 +247,17 @@ vec3 rankMix(vec3 a, vec3 b, float w) { return 0.5 + ((a - 0.5) * (1.0 - w) + (b
 // 1 / cos(latitude), so each 6-degree band of latitude has its own whole number of tiles and neighbours
 // are faded into each other. And a tile repeats every 2048 km: two layouts, one a quarter turn round,
 // take turns in irregular patches some 900 km across, so no cloud is seen twice in one view.
-vec3 grainLay(vec2 uvd, bool turned) {
+vec3 grainLay(vec2 uvd, bool turned, float row) {
   float b = (0.5 - uvd.y) * 30.0, j = floor(b), w = smoothstep(0.25, 0.75, b - j);
-  if (w < 0.004) return grainTile(uvd, j, turned);
-  if (w > 0.996) return grainTile(uvd, j + 1.0, turned);
-  return rankMix(grainTile(uvd, j, turned), grainTile(uvd, j + 1.0, turned), w);
+  if (w < 0.004) return grainTile(uvd, j, turned, row);
+  if (w > 0.996) return grainTile(uvd, j + 1.0, turned, row);
+  return rankMix(grainTile(uvd, j, turned, row), grainTile(uvd, j + 1.0, turned, row), w);
 }
-vec3 grainAt(vec2 uvd, vec3 Pd) {
+vec3 grainAt(vec2 uvd, vec3 Pd, float row) {
   float w = smoothstep(0.46, 0.54, clumps3(Pd + 0.43, 900.0));
-  if (w < 0.004) return grainLay(uvd, false);
-  if (w > 0.996) return grainLay(uvd, true);
-  return rankMix(grainLay(uvd, false), grainLay(uvd, true), w);
+  if (w < 0.004) return grainLay(uvd, false, row);
+  if (w > 0.996) return grainLay(uvd, true, row);
+  return rankMix(grainLay(uvd, false, row), grainLay(uvd, true, row), w);
 }
 // Cloud whose light, averaged over all the sky, is `a`: where it is, and how bright. r is the grain's
 // rank here. Two numbers describe a kind of cloud, both MEASURED on eighteen VIIRS scenes at 2 km a pixel,
@@ -266,6 +271,7 @@ vec3 grainAt(vec2 uvd, vec3 Pd) {
 //   sheet        0.35    1.5
 //   cumulus      0.33    1.8
 //   frontal      0.45    1.6
+//   land cumulus 0.38    1.95
 float pieces(float r, float a, float m0, float ratio) {
   if (a < 1e-4) return 0.0;                    // no light asked for: no cloud (and no 0 / 0 below)
   float p = clamp(a / m0, 0.02, 1.0);
@@ -281,10 +287,10 @@ float pieces(float r, float a, float m0, float ratio) {
 // middling brightness widely there: cut into pieces, the far view came out more two-toned than the
 // photographs).
 // `conv`: how far this is cloud heaped up over heated wet land (0..1) and not the layered cloud of a
-// storm: the cumulus numbers, not the frontal ones.
+// storm: the land-cumulus numbers, not the frontal ones.
 float broken(float r, float a, float fade, float conv) {
   if (fade > 0.99 || a < 0.01) return a;
-  return mix(pieces(r, a, mix(0.45, 0.33, conv), mix(1.6, 1.8, conv)), a, fade);
+  return mix(pieces(r, a, mix(0.45, 0.38, conv), mix(1.6, 1.95, conv)), a, fade);
 }
 
 // Thin broken low cloud: fair-weather cumulus over land, trade cumulus over the sea. `amount` is the
@@ -486,7 +492,7 @@ void main() {
   // ---- clouds -------------------------------------------------------------------------------
   vec2 flowUV = vec2(wind.x / coslat / (2.0 * PI), -wind.y / PI) * (3600.0 / 6371008.8) * 2.5;   // uv per hour, x2.5 so drift reads at global scale
   float cloud = 0.0, cloudSh = 0.0, cloudSun = 0.0, cum = 0.0, deck = 0.0, cumFar = 0.0, deckFar = 0.0;
-  float grainFade = 1.0, conv = 0.0; vec3 grain = vec3(0.5);
+  float grainFade = 1.0, conv = 0.0, landCu = 0.5; vec3 grain = vec3(0.5);
   // the generated cloud's own frame: the sphere, turned by the same slow eastward carry as the photograph
   float dA = 2.0 * PI * fract(uHours * 2.2e-4), cdA = cos(dA), sdA = sin(dA);
   vec3 Pd = vec3(cdA * N.x + sdA * N.y, -sdA * N.x + cdA * N.y, N.z);
@@ -500,10 +506,17 @@ void main() {
     // 0.02 under cumulus and 0.09 under middle and high types. It is drawn with the cumulus grain there.
     // Warm ground that is not desert: the same rain gate as the cumulus share, and no heaping over cold land.
     conv = (1.0 - water) * smoothstep(0.1, 0.6, precip) * smoothstep(8.0, 22.0, tAir) * sunUp;
-    cloud = cloudAt(uv, flowUV, kinds.z);
+    // Over heated wet land by day, half of that cloud's light is drawn as cumulus fields, not through the
+    // photograph's systems (LAND_CU_SHARE). The satellite climatology files a sky of small cumulus mostly under
+    // middle and high types (over the Amazon at 13:30: 0.02 of the light as cumulus, 0.09 as the rest, where VIIRS
+    // shows cumulus and little besides), and drawn through the photograph that light gathers into a few bright
+    // clusters with clear forest between. The total is unchanged.
+    float moved = LAND_CU_SHARE * conv;
+    float restLight = kinds.z < 0.0 ? kinds.z : kinds.z * (1.0 - moved);
+    cloud = cloudAt(uv, flowUV, restLight);
     float slant = 1.0 / max(mu0, 0.18);
-    cloudSh = cloudAt(uv + sunStep * 0.0035 * slant, flowUV, kinds.z); // what stands between this ground and the Sun
-    cloudSun = cloudAt(uv + sunStep * 0.0016, flowUV, kinds.z);        // the cloud's own sunward neighbour
+    cloudSh = cloudAt(uv + sunStep * 0.0035 * slant, flowUV, restLight); // what stands between this ground and the Sun
+    cloudSun = cloudAt(uv + sunStep * 0.0016, flowUV, restLight);        // the cloud's own sunward neighbour
     // Broken low cloud. Over land it follows the day: little at dawn, most in the afternoon (the satellite's
     // amount is a daytime mean, so the cycle is scaled to average 1). The satellite also reports thin low
     // cloud over bright desert that is not there: none is drawn where it does not rain.
@@ -513,12 +526,20 @@ void main() {
     // the grain is read once for all three kinds, and only where a pixel is fine enough to show it:
     // whole to 4 km a pixel, gone by 11
     if (uHasGrain > 0.5) grainFade = smoothstep(1.0, 2.5, lodOf(2.0));
-    if (grainFade < 0.99) grain = grainAt(vec2(uv.x - fract(uHours * 2.2e-4), uv.y), Pd);
+    vec2 uvd = vec2(uv.x - fract(uHours * 2.2e-4), uv.y);
+    if (grainFade < 0.99) {
+      grain = grainAt(uvd, Pd, 0.0);
+      // over land, cumulus is the land's: finer cells, everywhere (the sea's cumulus drawn over the Amazon gave
+      // fewer, larger, brighter pieces than the real sky). Read only where there is land to need it.
+      landCu = (uHasGrain2 > 0.5 && water < 0.99) ? grainAt(uvd, Pd, 1.0).x : grain.y;
+    }
     // each kind twice: its light as the far view has it, and cut into the grain's pieces where a pixel can show them
+    if (kinds.z > 0.0) cuAmt += moved * kinds.z / 0.45;                   // as a share of sky: a cell reflects 0.45
     cumFar = cumulusAt(uv, cuAmt); deckFar = deckAt(Pd, kinds.x);
     cum = cumFar; deck = deckFar;
     if (grainFade < 0.99) {
-      cum = mix(pieces(grain.y, cumFar, 0.33, 1.8), cumFar, grainFade);
+      float cuRank = rankMix(vec3(landCu), vec3(grain.y), water).x;        // the land's cumulus on land, the sea's at sea
+      cum = mix(pieces(cuRank, cumFar, mix(0.38, 0.33, water), mix(1.95, 1.8, water)), cumFar, grainFade);
       deck = mix(pieces(grain.x, deckFar, 0.35, 1.5), deckFar, grainFade);
     }
   }
@@ -596,7 +617,7 @@ void main() {
     float cRef = cloud < 0.55 ? cloud : 0.55 + (CLOUD_MAX - 0.55) * tanh((cloud - 0.55) / (CLOUD_MAX - 0.55));
     float tC = CLOUD_MU * cRef / (1.0 - cRef);
     float cloudFar = mix(cRef, tC / (max(mu0, 0.30) + tC), dayF); // below 17 degrees of Sun, broken cloud shades itself and the gain stops
-    float cloudA = broken(rankMix(grain, grain.yyy, conv).z, cloudFar, grainFade, conv);
+    float cloudA = broken(rankMix(grain, vec3(landCu), conv).z, cloudFar, grainFade, conv);
     cloudA = 1.0 - (1.0 - cloudA) * (1.0 - lowCloud);              // sheets and cumulus under and between the larger systems
     cloudFar = 1.0 - (1.0 - cloudFar) * (1.0 - cumFar) * (1.0 - deckFar);
     // Two things the eye's position does to broken cloud, neither of which changes what the cloud is.

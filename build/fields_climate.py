@@ -168,6 +168,136 @@ def land_air_t0():
     return t0p[:, idx[0], idx[1]][:, :, 60:-60]
 
 
+def hydrolakes(min_area=1.0):
+    """HydroLAKES v1.0 pour points with at least `min_area` km2: dict of arrays lon, lat, area (km2), depth
+    (mean, m) and src. The .dbf is fixed-width text; read with numpy, no shapefile library. Cached.
+
+    Most of HydroLAKES's depths are not measurements. Its Vol_src says which: 1, a volume from the literature
+    (every lake over 500 km2); 2, from a reservoir database; 3, PREDICTED from the slope of the land round the
+    lake. See `usable_depth` for what is done about the third kind."""
+    cache = os.path.join(CACHE, "hydrolakes_all.npz")
+    if os.path.exists(cache):
+        return dict(np.load(cache))
+    path = os.path.join(DATA, "hydrolakes", "HydroLAKES_points_v10_shp", "HydroLAKES_points_v10.dbf")
+    if not os.path.exists(path):
+        raise SystemExit("missing HydroLAKES: run build/fetch_sources.py hydrolakes and unzip data/hydrolakes/HydroLAKES_points_v10_shp.zip there")
+    import struct
+    raw = open(path, "rb").read()
+    nrec, hlen, rlen = struct.unpack("<IHH", raw[4:12])
+    off, cols, k = 1, {}, 32
+    while raw[k] != 0x0D:
+        name = raw[k:k + 11].split(b"\0")[0].decode(); width = raw[k + 16]
+        cols[name] = (off, width); off += width; k += 32
+    recs = np.frombuffer(raw, dtype=np.uint8, count=nrec * rlen, offset=hlen).reshape(nrec, rlen)
+    num = lambda name: np.char.strip(recs[:, cols[name][0]:cols[name][0] + cols[name][1]].copy().view(f"S{cols[name][1]}")[:, 0]).astype(np.float64)
+    area = num("Lake_area")
+    m = area >= min_area
+    out = dict(lon=num("Pour_long")[m], lat=num("Pour_lat")[m], area=area[m], depth=num("Depth_avg")[m], src=num("Vol_src")[m])
+    np.savez(cache, **out)
+    return out
+
+
+def usable_depth(depth, src):
+    """HydroLAKES mean depth as the ice model should take it. A depth resting on a measured volume (src 1 or
+    2) is taken as it stands. A PREDICTED one (src 3) is a noisy guess: against the depths recorded for 60
+    witness lakes it correlates at r = 0.39 (in logarithms), and it runs two to three times too deep in the
+    Finnish lake district. A noisy predictor is used through its regression, not at face value:
+    ln(depth) = 0.94 + 0.46 ln(predicted), fitted on the 24 such lakes of the fitting half. So a predicted
+    5 m stays 5 m, 30 m becomes 12 m and 80 m becomes 19 m."""
+    d = np.maximum(np.asarray(depth, dtype=np.float64), 0.3)
+    return np.where(np.asarray(src) <= 2, d, np.exp(0.94 + 0.46 * np.log(d)))
+
+
+def lake_depth(W, H):
+    """Mean depth of the inland water in each cell of the (H, W) grid, metres; NaN where none is known.
+
+    Each connected body of inland water in the atlas's own mask takes the mean depth HydroLAKES gives the
+    lake whose outlet lies on or near it and whose area is nearest its own, within a factor of four. Bodies over 5000 km2 where ETOPO carries a lake
+    floor (the Caspian, Baikal, the Great Lakes, and the Black Sea, which is no lake to HydroLAKES) take the
+    LOCAL depth instead, cell by cell: the north Caspian is 5 m deep and freezes, its middle is 200 m and
+    does not."""
+    import fields_surface as S
+    Image.MAX_IMAGE_PIXELS = None
+    water8 = np.asarray(Image.open(os.path.join(OUT, "water.webp")).convert("L"), dtype=np.float32) / 255.0
+    H8, W8 = water8.shape
+    wet = water8 > 0.5
+    inland = wet & ~S.ocean_connected(wet)
+    lab, n = ndimage.label(inland)
+    cell8 = F.cell_area_km2(W8, H8)[:, 0]
+    body_area = np.bincount(lab.ravel(), weights=np.repeat(cell8, W8), minlength=n + 1)
+    hl = hydrolakes()
+    depth_of = np.full(n + 1, np.nan)
+    # A lake's point in HydroLAKES is its OUTLET. Close by first: within 10 km, the body nearest the lake's own
+    # area, within a factor of four (a pond beside Lake Superior is not Lake Superior). Then, for lakes of
+    # 50 km2 and more that found nothing, further out: a great lake's outlet lies at the head of a river the
+    # 5 km mask does not reach (Superior's is 20 km past the last water pixel), and the mask can cut a lake in
+    # two at a narrows (Lake Constance's outlet is on the Untersee, 80 km2; the lake is the body 50 km east).
+    order = np.argsort(-hl["area"])
+    use = usable_depth(hl["depth"], hl["src"])
+    placed = np.zeros(len(order), bool)
+    for reach in (False, True):
+        for i in order:
+            a = float(hl["area"][i])
+            if placed[i] or (reach and a < 50.0):
+                continue
+            x, y = F.lonlat_to_px(float(hl["lon"][i]), float(hl["lat"][i]), W8, H8)
+            r = int(np.clip(np.ceil(np.sqrt(a) / 4.9), 12, 40)) if reach else 2          # 60 km, or the lake's own breadth, to 200 km
+            ids = np.unique(lab[max(0, y - r):y + r + 1, max(0, x - r):x + r + 1])
+            ids = ids[ids > 0]
+            ids = ids[np.isnan(depth_of[ids])] if ids.size else ids
+            if ids.size == 0:
+                continue
+            ratio = np.abs(np.log(a / body_area[ids]))
+            if ratio.min() <= np.log(4.0):
+                depth_of[ids[ratio.argmin()]] = use[i]; placed[i] = True
+    depth8 = depth_of[lab]
+    known = np.isfinite(depth8) & inland
+    mean_d = F.reduce_aligned(np.where(known, depth8, 0.0), W, H) / np.maximum(F.reduce_aligned(known.astype(np.float32), W, H), 1e-6)
+    mean_d = np.where(F.reduce_aligned(known.astype(np.float32), W, H) > 1e-4, mean_d, np.nan)
+    # Local depth where ETOPO has the lake's FLOOR. A lake's surface is one level: the lowest land touching the
+    # body (not clamped at zero: the Caspian's shore is at -28 m). Floor = that level less ETOPO. Most lakes are
+    # carried by ETOPO at their surface, and then this is zero everywhere; a body counts as having a floor only
+    # if it reaches 15 m somewhere. (Taking the lowest land near each CELL instead read the hills round
+    # Issyk-Kul as 53 m of water where the lake's mean depth is 280.)
+    w4 = np.load(os.path.join(CACHE, "water4.npy")).astype(np.float32)
+    e4 = np.load(os.path.join(CACHE, "elev4.npy")).astype(np.float32)
+    wet4 = w4 >= 0.5
+    lab4, n4 = ndimage.label(wet4 & ~S.ocean_connected(wet4))
+    cell4 = F.cell_area_km2(e4.shape[1], e4.shape[0])[:, 0]
+    area4 = np.bincount(lab4.ravel(), weights=np.repeat(cell4, e4.shape[1]), minlength=n4 + 1)
+    local4 = np.full(e4.shape, np.nan, dtype=np.float32)
+    floors = []
+    for b, sl in enumerate(ndimage.find_objects(lab4), 1):
+        if sl is None or area4[b] < 5000.0:
+            continue
+        sl = (slice(max(0, sl[0].start - 2), sl[0].stop + 2), slice(max(0, sl[1].start - 2), sl[1].stop + 2))
+        body = lab4[sl] == b
+        # the shore: land within two pixels that is land through and through (a shore pixel that is half water
+        # carries half the lake floor in its mean height: the Black Sea's "shore" came out at -230 m)
+        ring = ndimage.binary_dilation(body, iterations=2) & ~body & (w4[sl] < 0.1)
+        if ring.sum() < 8:
+            continue
+        surface = float(np.percentile(e4[sl][ring], 2))
+        d = surface - e4[sl]
+        # Is this a floor, or a lake carried at its surface with hills round it? A floor goes deep: past 15 m, and
+        # past half the mean depth HydroLAKES gives the lake (Issyk-Kul, mean 280 m, "reached" 20 m this way).
+        sl8 = (slice(sl[0].start * 2, sl[0].stop * 2), slice(sl[1].start * 2, sl[1].stop * 2))
+        hyd = depth8[sl8][np.isfinite(depth8[sl8])]
+        need = max(15.0, 0.5 * float(np.median(hyd))) if hyd.size else 15.0
+        if float(d[body].max()) > need:
+            local4[sl] = np.where(body, np.maximum(d, 1.0), local4[sl])
+            floors.append((round(area4[b]), round(surface), round(float(d[body].max()))))
+    loc_ok = np.isfinite(local4)
+    local = F.reduce_aligned(np.where(loc_ok, local4, 0.0), W, H) / np.maximum(F.reduce_aligned(loc_ok.astype(np.float32), W, H), 1e-6)
+    use_local = F.reduce_aligned(loc_ok.astype(np.float32), W, H) > 0.05
+    out = np.where(use_local, local, mean_d)
+    print("  bodies whose floor ETOPO carries (km2, surface m, deepest m): " + ", ".join(f"{a} {z} {d}" for a, z, d in sorted(floors, reverse=True)[:12]))
+    n_known = int(np.isfinite(depth_of[1:]).sum())
+    print(f"  lake depth: {n_known} of {n} bodies of inland water matched to a HydroLAKES lake "
+          f"({float(body_area[1:][np.isfinite(depth_of[1:])].sum() / max(body_area[1:].sum(), 1) * 100):.0f}% of their area); the floor itself in {int(use_local.sum())} cells of great lakes")
+    return out
+
+
 def step_atmo():
     print("atmosphere")
     W, H = 360, 180
@@ -561,8 +691,12 @@ def step_ocean():
     inland_frac = F.reduce_aligned(w4, W, H)
     near_water = ndimage.maximum_filter(inland_frac, size=3, mode=("nearest", "wrap")) > 0.01
     todo = near_water & ~(valid[0] & ~lake)                       # every cell with water in or beside it that is not the sea
+    depth = lake_depth(W, H)
     model = np.zeros((12, H, W), dtype=np.float32)
-    model[:, todo] = lakeice.monthly_ice(t_lake[:, todo])
+    model[:, todo] = lakeice.monthly_ice(t_lake[:, todo], depth=depth[todo])              # unknown depth: the median, in lakeice
+    for name, lo, la in (("Baikal", 108.0, 53.5), ("Tahoe", -120.03, 39.1), ("Issyk-Kul", 77.3, 42.45), ("Balaton", 17.7, 46.85), ("north Caspian", 50.5, 45.8),
+                         ("middle Caspian", 51.0, 40.0), ("Erie", -81.2, 42.2), ("Great Bear", -121.0, 66.0), ("Titicaca", -69.4, -15.8), ("Sea of Azov", 37.0, 46.2)):
+        print(f"    {name:15} depth {float(at(depth, lo, la)):7.1f} m   iced {float((at(model, lo, la) * np.array([31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31])).sum()):4.0f} days a year")
     silent = lake & (ice_o.max(0) < 0.02)                         # OISST has the water and no ice in any month: there the model speaks (and says none, over warm water)
     modelled = (todo & ~lake) | silent
     lake_ice = np.where(silent[None], model, ice_o)
@@ -585,9 +719,14 @@ def step_ocean():
     assert at(ice[1], 37.0, 46.2) > 0.2 and at(ice[1], 33.0, 43.0) < 0.05, ("the Sea of Azov has ice in February; the middle of the Black Sea has next to none",
         float(at(ice[1], 37.0, 46.2)), float(at(ice[1], 33.0, 43.0)), bool(at(lake, 37.0, 46.2)), float(at(ice_o.max(0), 37.0, 46.2)), float(at(model.max(0), 37.0, 46.2)), float(at(t_lake[0], 37.0, 46.2)))
     assert at(ice[0], 33.0, -1.0) == 0 and at(ice[6], 33.0, -1.0) == 0, "Lake Victoria never freezes"
+    assert at(depth, 108.0, 53.5) > 300 and at(depth, 17.7, 46.85) < 6 and at(depth, 50.5, 45.8) < 15 and at(depth, 51.0, 40.0) > 100 and at(depth, 77.3, 42.45) > 200, \
+        ("Baikal is deep, Balaton shallow, the north Caspian shallow and its middle deep, Issyk-Kul deep", [float(at(depth, lo, la)) for lo, la in ((108.0, 53.5), (17.7, 46.85), (50.5, 45.8), (51.0, 40.0), (77.3, 42.45))])
+    assert at(ice.max(0), -120.03, 39.1) < 0.2, "Lake Tahoe, 280 m deep, all but never freezes (five days a year, in the coldest of the five winters)"
+    # Issyk-Kul, as deep, is still iced about 50 days here and should not be at all (it was 125 before depth):
+    # the air it is given is -10 C in January, colder than its own shore, and it is salt. Not asserted. Register C4.
+    assert float((at(ice, 77.3, 42.45) * np.array([31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31])).sum()) < 70, "Issyk-Kul is iced far less than a shallow lake under the same air"
     assert at(ice[6], -69.4, -15.8) < 0.05, "Lake Titicaca (3800 m, 16 S) does not freeze in July (the model leaves it one day in the coldest of its five years)"
-    # Known to be wrong, and not asserted away: the model knows no depth. By the lakes' own records it ices
-    # Mjosa 145 days (50), Lake Constance 54 (0), Baikal at its southern station 148 (102). Register C4.
+    # (Depth is in since the fifth round: Tahoe and Issyk-Kul were iced about 120 days without it.)
 
     assert at(sst[8], -150, 5) > 26 and at(sst[2], 0, -60) < 3, "warm pool; Southern Ocean"
     assert at(ice[2], 0, 85) > 0.9 and at(ice[8], 0, 85) > 0.5, "central Arctic ice"

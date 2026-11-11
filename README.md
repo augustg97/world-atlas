@@ -203,7 +203,7 @@ Failures that have each cost real time here. *(The general catalogue is in
 | elevation and bathymetry | NOAA NCEI ETOPO 2022 60 arc-second ice surface, doi:10.25921/fd45-gt74 - public domain |
 | night lights | NASA Black Marble 2016 (Roman et al. 2018) - public domain |
 | clouds (texture) | NASA Blue Marble: Clouds (Stockli 2002) - public domain |
-| clouds (fine structure) | NASA VIIRS (NOAA-20) corrected reflectance via GIBS, three scenes of 2023 - public domain |
+| clouds (fine structure) | NASA VIIRS (NOAA-20) corrected reflectance via GIBS, four scenes of 2023 - public domain |
 | wind, temperature, pressure, cloud fraction | NCEP/NCAR Reanalysis 1 (Kalnay et al. 1996), 1991-2020 means, NOAA PSL - public domain |
 | precipitation | GPCP v2.3 (Adler et al. 2018), 1991-2020 means - public domain |
 | sea-surface temperature, lake ice | NOAA OISST v2.1 (Huang et al. 2021), 1991-2020 means - public domain |
@@ -211,6 +211,7 @@ Failures that have each cost real time here. *(The general catalogue is in
 | surface currents | NCEP GODAS 5 m, 2019-2023 means - public domain |
 | countries, borders, places, names | Natural Earth 5.1.2, de facto worldview - public domain |
 | where the sea, the land and the lakes are | Natural Earth 5.1.2, 1:10m land, minor islands, lakes - public domain; Antarctica's ice front and the colour of shallow water from Blue Marble |
+| lake depth (build time; the ice it helps compute ships) | HydroLAKES v1.0 (Messager et al. 2016) - CC BY 4.0 |
 | lake ice (witness only, not shipped) | NSIDC Global Lake and River Ice Phenology Database, G01377 - citation required |
 | plate boundaries | Bird (2003) PB2002, G-cubed 4(3) 1027; GeoJSON H. Ahlenius - ODC PDDL |
 | earthquakes | USGS ANSS ComCat (record) and real-time feed (live) - public domain |
@@ -234,7 +235,7 @@ The section that makes the rest credible. State plainly what is reconstructed, w
 and what the model cannot know.
 
 - **This is a typical year, not this year.** No weather history, no forecast.
-- **Lake ice is modelled, and knows no depth.** Outside the Great Lakes and Ladoga a lake's ice comes from the air temperature there (`build/lakeice.py`): 11 days a year out on lakes it was not fitted to, and too long on deep ones (Mjøsa 145 days against 50, Baikal 148 against 102). Wide rivers are lines, not water (C4, A10).
+- **Lake ice is modelled.** Outside the Great Lakes and Ladoga a lake's ice comes from the air temperature there and the lake's depth (`build/lakeice.py`): 10 days a year out on lakes it was not fitted to. Depth is measured for every lake over 500 km² and mostly estimated below that (Mjøsa is iced 135 days against 50); a great lake freezes whole or not at all. Wide rivers are lines, not water (C4, A10).
 - **Clouds are illustrative.** How much cloud there is and how much light it returns come from a satellite climatology (ISCCP) and are checked against VIIRS and EPIC; where each cloud is, is modelled. Close in, the fine structure is real cloud's, borrowed: one photographed sheet, one cumulus field and one storm stand in for all of their kind and repeat every 2048 km. It reads as cloud; it is not the cloud of the place. Wrong in measured ways over the Amazon, the trades and the Congo (register B1).
 - **Sea-ice extent matches NSIDC because the edge is placed to make it match**; ice area inside the edge runs up to 15% low. Each of NSIDC's 720 monthly grids on its own converts within 1.5% in the middle case and 4.0% at worst (C1).
 - **The ground's albedo is Blue Marble re-read against EPIC's view from the Sun's side**, not measured reflectance; dense forest is probably drawn too bright in the red (A7).

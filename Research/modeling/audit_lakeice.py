@@ -7,9 +7,11 @@ in a typical year, which is the quantity the atlas draws. Nothing from it is shi
 
 Two things are scored against it.
 
-    the model     build/lakeice.py, fed the air temperature the atlas has at each lake. Its two fitted
-                  numbers come from HALF the lakes (--fit prints them); the scores are on the other half.
-    the atlas     the ice the shipped field (web/fields/oceanA.png) holds at each lake: what is drawn.
+    the model     build/lakeice.py, fed the air temperature the atlas has at each lake and the lake's
+                  recorded mean depth (the median where none is recorded). Its three fitted numbers
+                  come from HALF the lakes (--fit prints them); the scores are on the other half.
+    the atlas     the ice the shipped field (web/fields/oceanA.png) holds at each lake: what is drawn. Only
+                  at lakes that are themselves water in the atlas's mask (see shipped_at).
 
     mae           mean, over lakes and the twelve months, of |share of the month iced, atlas - record|
     days          mean over lakes of |days iced a year, atlas - record|
@@ -121,17 +123,35 @@ def score(pred, obs):
     return float(np.abs(pred - obs).mean()), float(np.abs(d).mean()), float(d.mean())
 
 
-def shipped_at(lakes):
-    """(12, n) ice the shipped field holds at each lake, and (n,) whether the field marks the cell as water it has ice for."""
+def shipped_at(lakes, path=None):
+    """(12, n) ice the shipped field holds at each lake; (n,) whether the field has ice for the cell at all;
+    (n,) whether the water the atlas draws there IS that lake.
+
+    The last matters. The ice field is a quarter of a degree and its water is whatever body of the 5 km mask
+    lies there: for a pond beside Lake Ontario that is Lake Ontario, and Frame Lake in Yellowknife is Great
+    Slave Lake. Scoring the pond's record against the great lake's ice is scoring the wrong lake. A lake
+    counts as drawn only if the mask has a body of inland water within a pixel of it whose area is within a
+    factor of four of the lake's own recorded area."""
+    import fields_surface as S
+    from scipy import ndimage
     Image.MAX_IMAGE_PIXELS = None
-    a = np.asarray(Image.open(os.path.join(ROOT, "web", "fields", "oceanA.png")))
+    a = np.asarray(Image.open(path or os.path.join(ROOT, "web", "fields", "oceanA.png")))
     W = a.shape[1]; H = a.shape[0] // 12
-    ice = np.zeros((12, len(lakes))); ok = np.zeros(len(lakes), bool)
+    water8 = np.asarray(Image.open(os.path.join(ROOT, "web", "fields", "water.webp")).convert("L"), dtype=np.float32) / 255.0
+    H8, W8 = water8.shape
+    wet = water8 > 0.5
+    lab, n = ndimage.label(wet & ~S.ocean_connected(wet))
+    body_area = np.bincount(lab.ravel(), weights=np.repeat(F.cell_area_km2(W8, H8)[:, 0], W8), minlength=n + 1)
+    ice = np.zeros((12, len(lakes))); ok = np.zeros(len(lakes), bool); same = np.zeros(len(lakes), bool)
     for i, lk in enumerate(lakes):
         ii, jj = F.lonlat_to_px(lk["lon"], lk["lat"], W, H)
         ice[:, i] = a[jj::H, ii, 1][:12] / 255.0
         ok[i] = a[jj, ii, 2] >= 128
-    return ice, ok
+        x, y = F.lonlat_to_px(lk["lon"], lk["lat"], W8, H8)
+        ids = np.unique(lab[max(0, y - 1):y + 2, max(0, x - 1):x + 2]); ids = ids[ids > 0]
+        if ok[i] and ids.size and lk["area"]:
+            same[i] = bool((np.abs(np.log(body_area[ids] / lk["area"])) <= np.log(4.0)).any())
+    return ice, ok, same
 
 
 def run(as_json=False, fit=False, register=False):
@@ -141,20 +161,25 @@ def run(as_json=False, fit=False, register=False):
     obs = np.stack([lk["months"] for lk in lakes], 1)
     tm = temperature(lakes)
     hv = np.array([half(c) for c in codes])
+    dep = np.array([lk["depth"] if lk["depth"] else np.nan for lk in lakes])
+    known = np.isfinite(dep) & (dep > 0)
     if fit:
+        # the depth rule LAG_A * depth^LAG_P and MELT, on the lakes of the fitting half whose depth is recorded
+        m = known & (hv == 0)
         best = None
-        for lag in (6, 10, 14, 18, 24, 30, 38, 48, 60):
-            for melt in (0.003, 0.004, 0.0055, 0.007, 0.009, 0.012):
-                p = LI.monthly_ice(tm[:, hv == 0], lag=lag, melt=melt)
-                s = score(p, obs[:, hv == 0])
-                if best is None or s[0] < best[0][0]:
-                    best = (s, lag, melt)
-                print(f"  lag {lag:3d}  melt {melt:.4f}   mae {s[0]:.4f}  days {s[1]:5.1f} ({s[2]:+.1f})")
-        print(f"fitted on {int((hv == 0).sum())} lakes:  LAG = {best[1]}   MELT = {best[2]}   (mae {best[0][0]:.4f})")
+        for a in (10, 12, 14, 16, 18, 22):
+            for p in (0.4, 0.5, 0.6, 0.7):
+                for melt in (0.009, 0.012, 0.016, 0.022):
+                    pr = LI.monthly_ice(tm[:, m], lag=LI.lag_days(dep[m], a, p), melt=melt)
+                    sc = score(pr, obs[:, m])
+                    if best is None or sc[0] < best[0][0]:
+                        best = (sc, a, p, melt)
+        print(f"fitted on {int(m.sum())} lakes of known depth:  LAG_A = {best[1]}   LAG_P = {best[2]}   MELT = {best[3]}   (mae {best[0][0]:.4f}, {best[0][1]:.1f} days)")
         return
-    pred = LI.monthly_ice(tm)
+    pred = LI.monthly_ice(tm, depth=dep)                                          # a lake of unknown depth gets the median (lakeice.DEPTH_UNKNOWN)
+    s_known = score(pred[:, known & (hv == 1)], obs[:, known & (hv == 1)])
     s_fit, s_test = score(pred[:, hv == 0], obs[:, hv == 0]), score(pred[:, hv == 1], obs[:, hv == 1])
-    ice, ok = shipped_at(lakes)
+    ice, cell_ok, ok = shipped_at(lakes)                                          # ok: the water drawn there is this lake
     s_ship = score(ice[:, ok], obs[:, ok]) if ok.any() else (float("nan"),) * 3
     never = score(np.zeros_like(obs), obs)                                         # what "lakes never freeze" scores
     out = dict(lakeice_test_mae=round(s_test[0], 4), lakeice_test_days=round(s_test[1], 1), lakeice_shipped_mae=round(s_ship[0], 4),
@@ -163,7 +188,13 @@ def run(as_json=False, fit=False, register=False):
         print(f"lake ice against {len(lakes)} lakes' own records, 1980-81 to 2019-20 (NSIDC G01377)")
         print(f"  the model, on the {int((hv == 0).sum())} lakes it was fitted to:  mae {s_fit[0]:.3f} of a month, {s_fit[1]:.0f} days a year ({s_fit[2]:+.0f} mean)")
         print(f"  the model, on the {int((hv == 1).sum())} lakes it never saw:      mae {s_test[0]:.3f} of a month, {s_test[1]:.0f} days a year ({s_test[2]:+.0f} mean)")
-        print(f"  what the atlas draws, at the {int(ok.sum())} lakes it has ice for: mae {s_ship[0]:.3f} of a month, {s_ship[1]:.0f} days a year ({s_ship[2]:+.0f} mean);  {int((~ok).sum())} lakes in cells it draws no ice in")
+        print(f"  what the atlas draws, at the {int(ok.sum())} lakes that are themselves water in its mask: mae {s_ship[0]:.3f} of a month, {s_ship[1]:.0f} days a year ({s_ship[2]:+.0f} mean)")
+        print(f"    ({int((cell_ok & ~ok).sum())} more lie in a cell with ice whose water is another lake or whose own area is not recorded; {int((~cell_ok).sum())} in cells with no water at 5 km)")
+        print(f"  the model, on the {int((known & (hv == 1)).sum())} unseen lakes whose depth is recorded: mae {s_known[0]:.3f} of a month, {s_known[1]:.0f} days a year ({s_known[2]:+.0f} mean)")
+        ed = (pred * DAYS[:, None]).sum(0) - (obs * DAYS[:, None]).sum(0)
+        for lo, hi in ((0, 6), (6, 12), (12, 25), (25, 1e9)):
+            mm = known & (dep >= lo) & (dep < hi)
+            print(f"    mean depth {lo:>3} to {'%3d' % hi if hi < 1e8 else 'any'} m: {int(mm.sum()):3d} lakes, mean error {ed[mm].mean():+5.1f} days, mean size of error {np.abs(ed[mm]).mean():4.1f}")
         print(f"  for scale, lakes that never freeze would score:           mae {never[0]:.3f} of a month, {never[1]:.0f} days a year")
         print("  month by month, share iced, record then model (all lakes): " + " ".join(f"{a:.2f}/{b:.2f}" for a, b in zip(obs.mean(1), pred.mean(1))))
         d = (pred * DAYS[:, None]).sum(0) - (obs * DAYS[:, None]).sum(0)

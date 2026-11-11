@@ -105,7 +105,7 @@ node build/test_app_math.mjs                     # ephemeris vs almanac, project
 # rebuild data (each step asserts landmarks and stamps web/version.json)
 ./venv/bin/python build/fetch_sources.py        # ~3.6 GB into data/ (gitignored); idempotent
 ./venv/bin/python build/fields_surface.py       # water albedo elev night clouds   (albedo:7 = one month). After `water`: fields_climate.py ocean, fields_human.py ships
-./venv/bin/python build/cloud_grain.py          # cloudgrain.jpg: three VIIRS scenes as rank fields (fetch_sources.py cloudtex first; --preview to look)
+./venv/bin/python build/cloud_grain.py          # cloudgrain.jpg, cloudgrain2.jpg: four VIIRS scenes as rank fields (fetch_sources.py cloudtex first; --preview to look)
 ./venv/bin/python build/fields_climate.py       # atmo ocean currents
 ./venv/bin/python build/fields_human.py         # pop ships lanes co2 countries
 ./venv/bin/python build/vectors.py              # political places physical plates quakes volcanoes power stats air
@@ -226,6 +226,17 @@ node build/test_app_math.mjs                     # ephemeris vs almanac, project
 - **A witness built from records must not average over the records it could not read.** Lake seasons with a date
   missing were dropped and open seasons kept; Lake Champlain came out as never freezing. The largest "error" of a
   new model is the first place to check the instrument.
+- **A dataset's numbers are not all the same kind of number.** HydroLAKES gives a mean depth for 1.4 million
+  lakes; 5700 are measured and the rest are predicted from the slope of the land (`Vol_src`). At face value the
+  predicted ones made the drawn lakes worse. Read the provenance column; use a prediction through its regression
+  against what you can check (`fields_climate.usable_depth`).
+- **An audit that samples a coarse field scores whatever fills the cell.** "Ice at the recorded lake" was the ice
+  of the biggest lake in that quarter-degree cell. It did not matter until lakes froze by their own depth; then it
+  scored Lake Ontario against a pond's record. Check that the object under the probe is the object in the record.
+- **A point in a table is not where the thing is on a coarse map.** A lake's HydroLAKES point is its outlet, up
+  to 50 km from the lake as a 5 km mask draws it.
+- **Before blaming the texture, check where the light is.** A land-cumulus grain barely moved the Amazon; the
+  light had been filed under another kind of cloud and drawn as a few bright clusters. Partition first, then grain.
 - **A change to the water mask is a change to everything downstream of it**: sea ice (rebuild `fields_climate.py
   ocean`), ships and lanes (`fields_human.py ships`), and the EPIC audits' own sorting of pixels.
 

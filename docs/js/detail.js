@@ -13,9 +13,9 @@
 // class of bug in this project (CLAUDE.md, "The canonical frame"); change nothing here without
 // running that test.
 
-import { UNIT } from './fields.js?v=20261110T223704Z';
-import { stamped } from './gl.js?v=20261110T223704Z';
-import { R_KM } from './camera.js?v=20261110T223704Z';
+import { UNIT } from './fields.js?v=20261111T002557Z';
+import { stamped } from './gl.js?v=20261111T002557Z';
+import { R_KM } from './camera.js?v=20261111T002557Z';
 
 const D2R = Math.PI / 180, R2D = 180 / Math.PI;
 export const KM_PER_DEG = R_KM * D2R;                       // 111.195 km on the atlas's sphere

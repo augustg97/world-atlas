@@ -2,7 +2,7 @@
 """Cloud grain: the fine structure of real cloud, as three tileable ORDERING fields (register B1).
 
     ./venv/bin/python build/fetch_sources.py cloudtex      # three VIIRS scenes from NASA GIBS, 8 MB
-    ./venv/bin/python build/cloud_grain.py                  # -> web/fields/cloudgrain.jpg (1024 x 1024, RGB)
+    ./venv/bin/python build/cloud_grain.py                  # -> web/fields/cloudgrain.jpg, cloudgrain2.jpg (1024 x 1024, RGB)
     ./venv/bin/python build/cloud_grain.py --preview        # also scratchpad/cloudgrain_preview.jpg
     ./venv/bin/python build/cloud_grain.py --selftest
 
@@ -18,11 +18,13 @@ own p (from the cloud climatology and the far-field photograph), so amount still
 of amount, and shape now comes from observation of shape. A rank field is uniform by construction, so a
 cut at 1 - p covers p: no quantile curve to measure, and the mean does not move with zoom.
 
-Three scenes, three kinds of cloud, one channel each:
+Four scenes, four kinds of cloud, one channel each (cloudgrain.jpg R, G, B; cloudgrain2.jpg R):
 
-    R  sheet      stratocumulus, closed and open cells         (Namibian deck)
-    G  cumulus    shallow broken cumulus over open sea          (southern Indian Ocean trades)
-    B  frontal    layered and fibrous cloud of a mid-latitude storm, with its broken edges (Southern Ocean)
+    sheet      stratocumulus, closed and open cells         (Namibian deck)
+    cumulus    shallow broken cumulus over open sea          (southern Indian Ocean trades)
+    frontal    layered and fibrous cloud of a mid-latitude storm, with its broken edges (Southern Ocean)
+    landcu     fine cumulus over tropical forest on a dry-season afternoon (Rio Negro basin). Added when the
+               sea's cumulus, drawn over the Amazon, came out as fewer, larger, brighter pieces than the real sky
 
 None is one of the fifteen scenes the texture audit scores against (Research/modeling/cloud_texture.py):
 different oceans, a different year. A match made by construction would not be evidence.
@@ -54,17 +56,26 @@ SCENES = {
     "sheet": ("sheet_2023-09-05.png", 240.0, 0.75),
     "cumulus": ("cumulus_2023-08-03.png", 400.0, 0.45),
     "frontal": ("frontal_2023-01-22.png", 200.0, 0.80),
+    # cumulus over land: fine cells everywhere over the Rio Negro forest on a dry-season afternoon. Over land the
+    # ground shows between the clouds, so only what is WHITE counts (see reflectance): a brown river is not cloud.
+    "landcu": ("landcu_2023-08-27.png", 300.0, 0.50),
 }
 # GIBS corrected reflectance: reflectance x 255 goes through this table to the picture (as cloud_texture.py)
 _GX = np.array([0, 30, 60, 120, 190, 255.0]); _GY = np.array([0, 110, 160, 210, 240, 255.0])
 
 
-def reflectance(path):
+def reflectance(path, white_only=False):
     img = np.asarray(Image.open(path).convert("RGB"), dtype=np.float32)
     assert img.shape[:2] == (PX + OVERLAP, PX + OVERLAP), f"{path}: {img.shape}"
     rgb = np.interp(img, _GY, _GX) / 255.0
     # cloud is white; land and sunglint are not. Taking the dimmest channel keeps cloud and drops most of the rest.
-    return rgb.min(-1)
+    r = rgb.min(-1)
+    if white_only:
+        # Over land that is not enough: a silty river is 0.10 in its dimmest channel, as bright as thin cloud.
+        # But it is coloured (its channels differ by 0.4 of the brightest) and cloud is not. Fade out what is coloured.
+        sat = (rgb.max(-1) - r) / np.maximum(rgb.max(-1), 1e-3)
+        r = r * (1.0 - np.clip((sat - 0.25) / 0.35, 0, 1))
+    return r
 
 
 def periodic(r, overlap=OVERLAP):
@@ -118,7 +129,7 @@ def build():
         p = os.path.join(SRC, f)
         if not os.path.exists(p):
             raise SystemExit(f"missing {p}; run build/fetch_sources.py cloudtex")
-        r = periodic(reflectance(p))
+        r = periodic(reflectance(p, white_only=(name == "landcu")))
         out[name] = (r, ordering(r, win, share))
     return out
 
@@ -133,7 +144,8 @@ def build():
 #   storm cloud       mean 0.39-0.50, spread 0.38-0.44  ->  k 0.6
 # (The audit's own Amazon and Congo scenes are wider still, 0.55-0.63; they are not used here.)
 # The shader holds the same numbers.
-KIND = {"sheet": (0.35, 1.5), "cumulus": (0.33, 1.8), "frontal": (0.45, 1.6)}
+#   cumulus on land   mean 0.33-0.43, spread 0.53-0.60  ->  k 0.95   (seven Amazon scenes of 2023, none the audit's)
+KIND = {"sheet": (0.35, 1.5), "cumulus": (0.33, 1.8), "frontal": (0.45, 1.6), "landcu": (0.38, 1.95)}
 
 
 def pieces(r, a, m0, ratio, cmax=0.96):
@@ -164,19 +176,26 @@ def checks(fields):
         print(f"  {name:8} scene cloud share (reflectance > 0.30) {float((r > 0.3).mean()):.2f}; rank uniform within {np.abs(h - 0.05).max():.4f}; wrap step {wrap / inside:.2f}, {wrap_y / inside_y:.2f} of an inside step")
 
 
+OUT2 = os.path.join(ROOT, "web", "fields", "cloudgrain2.jpg")
+# which scenes go in which file, channel by channel. The second file's spare channels repeat its first
+# (a grey picture codes small); they are free for a fifth and sixth kind of cloud.
+FILES = ((OUT, ("sheet", "cumulus", "frontal")), (OUT2, ("landcu", "landcu", "landcu")))
+
+
 def write(fields):
-    rgb = np.stack([np.clip(fields[k][1] * 255.0, 0, 255).astype(np.uint8) for k in ("sheet", "cumulus", "frontal")], -1)
-    # JPEG at full chroma resolution. The three channels are unrelated fields: WebP's lossy coder halves the
-    # chroma resolution and cost 4.5% of the rank range; this costs under 2.5%.
-    Image.fromarray(rgb).save(OUT, quality=93, subsampling=0)
-    back = np.asarray(Image.open(OUT).convert("RGB"), dtype=np.float32) / 255.0
-    err = float(np.abs(back - rgb / 255.0).mean())
-    assert err < 0.025, err
-    for c, k in enumerate(("sheet", "cumulus", "frontal")):               # still uniform after coding: a cut at 1 - p covers p
-        for p_ in (0.1, 0.3, 0.5, 0.8):
-            got = float((back[..., c] > 1 - p_).mean())
-            assert abs(got - p_) < 0.012, (k, p_, got)
-    print(f"wrote {os.path.relpath(OUT, ROOT)}: {os.path.getsize(OUT) / 1e3:.0f} kB, mean coding error {err:.3f} of the rank range")
+    for out, names in FILES:
+        rgb = np.stack([np.clip(fields[k][1] * 255.0, 0, 255).astype(np.uint8) for k in names], -1)
+        # JPEG at full chroma resolution. The three channels are unrelated fields: WebP's lossy coder halves the
+        # chroma resolution and cost 4.5% of the rank range; this costs under 2.5%.
+        Image.fromarray(rgb).save(out, quality=93, subsampling=0)
+        back = np.asarray(Image.open(out).convert("RGB"), dtype=np.float32) / 255.0
+        err = float(np.abs(back - rgb / 255.0).mean())
+        assert err < 0.025, err
+        for c, k in enumerate(names):                                         # still uniform after coding: a cut at 1 - p covers p
+            for p_ in (0.1, 0.3, 0.5, 0.8):
+                got = float((back[..., c] > 1 - p_).mean())
+                assert abs(got - p_) < 0.012, (k, p_, got)
+        print(f"wrote {os.path.relpath(out, ROOT)}: {os.path.getsize(out) / 1e3:.0f} kB, mean coding error {err:.3f} of the rank range")
 
 
 def preview(fields):

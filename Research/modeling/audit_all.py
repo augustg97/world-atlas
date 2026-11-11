@@ -53,11 +53,15 @@ CHECKS = [
     ("water", [[PY, M("audit_water.py"), "--json"]], {"sea_as_land_Mkm2": 0.309, "land_as_sea_Mkm2": 0.568, "worst_patch_kkm2": 12.1}, False,
      "sea drawn as land or land as sea: the water mask drifting from the coast"),
     # Lake ice against 174 lakes' own freeze and thaw records (NSIDC G01377). test_*: the model on the half of
-    # the lakes it was not fitted to. shipped_*: what the field draws at the lakes it has ice for. Before the
-    # model (2026-11-10) the field had ice at 18 of the 174 and was 59 days a year short there; lakes that never
-    # freeze would score 0.392 and 142 days. undrawn: lakes too small to be water at 5 km, where nothing is drawn.
+    # the lakes it was not fitted to (given each lake's recorded depth where there is one). shipped_*: what the
+    # field draws, at the lakes that are THEMSELVES water in the atlas's mask.
+    # THE SHIPPED SCORE CHANGED MEANING on 2026-11-10 (fifth round) and earlier numbers do not compare. It used
+    # to take every lake in a cell with ice (106 of them); but the ice in a cell is the ice of whatever body the
+    # mask draws there, and for a pond beside Lake Ontario that is Lake Ontario. Once lakes freeze by their depth
+    # that scores the wrong lake. On the 23 lakes that are themselves drawn: release 1.1 (no lake model) 120 days
+    # a year out, release 1.2 (no depth) 17.2 and 0.065, now 12.7 and 0.048. undrawn = the other 151.
     ("lake-ice", [[PY, "-W", "ignore", M("audit_lakeice.py"), "--json"]],
-     {"lakeice_test_mae": 0.0433, "lakeice_test_days": 10.9, "lakeice_shipped_mae": 0.0577, "lakeice_shipped_days": 16.1, "lakeice_undrawn": 68}, False,
+     {"lakeice_test_mae": 0.0385, "lakeice_test_days": 9.8, "lakeice_shipped_mae": 0.0476, "lakeice_shipped_days": 12.7, "lakeice_undrawn": 151}, False,
      "lake ice drifting from the lakes' own records"),
     # Rebuilt from NSIDC's 720 monthly grids (register C1). The edge is PLACED so the extent matches NSIDC's
     # mean, so these three are a regression guard, not evidence; the evidence is the per-year check the
@@ -111,8 +115,17 @@ CHECKS = [
      # 0.119 (every frame's ring-to-centre ratio rose 0.001-0.002: the Arctic shelf seas at the limb are sea now, with
      # the sea's sky reflection at a grazing angle), glint 0.13 -> 0.14 (the pixels counted as water round the
      # specular point changed by 0-22 of about 5000). Classified CANCELLATION: none is a change to the light model.
-     {"lum_err": 2.62, "contrast_err": 1.53, "white_err": 0.026, "disc_err": 4.16, "limb_err": 0.119, "ocean_rgb_err": 4.7,
-      "land_rgb_err": 13.1, "halo_err": 0.2, "glint_err": 0.14, "epic_shift_px": 2}, True,
+     # RE-SET 2026-11-10 (fifth round: cumulus over land). A fifth of the "all other cloud" light over heated wet
+     # land is drawn as cumulus fields (LAND_CU_SHARE, fitted to this audit's own clear-ground medians over the
+     # Amazon and the Congo; VIIRS is its check). Better and tightened: land 13.1 -> 11.9, limb 0.119 -> 0.118, glint
+     # 0.14 -> 0.13. BACKWARDS, on purpose: contrast 1.53 -> 1.85, lum 2.62 -> 2.67, white 0.026 -> 0.028, disc 4.16 ->
+     # 4.17. Classified TRUE. The disc's contrast falls by up to one level in six of eight frames because light
+     # moves from bright clusters to thin fields. Taken for what it buys. EPIC's four clear-forest medians, atlas
+     # minus EPIC, before and now: Amazon December -31 -> -13, Congo March -13 -> +6, Amazon March -5 -> +9, and
+     # Congo December +10 -> +22, which is WORSE (sum of sizes 59 -> 50). And at 2 km VIIRS's Amazon scene now
+     # matches in mean light (0.167 against 0.171).
+     {"lum_err": 2.67, "contrast_err": 1.85, "white_err": 0.028, "disc_err": 4.17, "limb_err": 0.118, "ocean_rgb_err": 4.7,
+      "land_rgb_err": 11.9, "halo_err": 0.2, "glint_err": 0.13, "epic_shift_px": 2}, True,
      "the lit globe moving away from the photograph: exposure, contrast, cloud, the disc profile, ocean, ground, glint"),
     # The ground alone: clouds off, against a cloud-free composite of about a hundred EPIC frames (register A7).
     # Needs reference/epic/clearsky (epic_clearsky.py --fetch, 300 MB). instrument_bias is the numpy copy of the
@@ -129,8 +142,14 @@ CHECKS = [
     # and trades outside it by 0.02-0.03 each. Congo is PRE-EXISTING (0.14 too much light there in both states;
     # resolved pieces show it where flat grey ones hid it). Amazon and trades are TRUE: fewer, larger, brighter
     # pieces than the real fine cumulus. Amazon's size spectrum also went backwards (bands 0.38 -> 0.53). In B1.
+    # Fifth round (a land-cumulus grain; a fifth of wet-land cloud light as cumulus fields; grains in two rows):
+    # bands 0.226 -> 0.152, cover 0.253 -> 0.159, contrast 0.088 -> 0.059 better. DIRECTION BACKWARDS, 0.032 -> 0.078,
+    # re-set on purpose: the trades went from 0.06 to 0.10 off (floor 0.03). The cumulus grain has little direction
+    # of its own (0.03-0.07 where VIIRS's trades have 0.13), and which part of the tile falls on a scene moved when
+    # the texture took a second row; scores here carry about 0.05 of that. TRUE: cumulus does not line up along
+    # the wind (B1).
     ("cloud-texture", [[SPY, M("cloud_scenes_render.py"), "cur"], [PY, "-W", "ignore", M("cloud_texture.py"), "--tag", "cur", "--json"]],
-     {"texture_bands_excess": 0.226, "texture_aniso_excess": 0.032, "texture_cover_excess": 0.253, "texture_contrast_excess": 0.088}, True,
+     {"texture_bands_excess": 0.152, "texture_aniso_excess": 0.078, "texture_cover_excess": 0.159, "texture_contrast_excess": 0.059}, True,
      "close-in cloud drifting from real cloud's grain, direction, cover or contrast"),
     ("visual", [[SPY, os.path.join(STUDIO, "tools", "frame_baseline.py"), "check", "--project", ROOT]], {"failures": 0}, True,
      "any of the six canonical frames changing without a recorded reason (Research/baselines/FRAME-LOG.md)"),
