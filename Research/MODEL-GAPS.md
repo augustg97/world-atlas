@@ -24,6 +24,62 @@ IDs are referenced from code comments and commit messages. **Never recycle one.*
 | stale-data guard | `web/version.json` stamp on every fetch | a cached two-key `climate.json` had crashed the tracers once |
 | ephemeris check | `build/test_app_math.mjs` | Sun declination within 0.004° at the four 2026 seasonal instants |
 
+## APPLIED (seventh round, 2026-11-11)
+
+Scope, the owner's: Sentinel-2 cloudless (EOX, CC BY 4.0) as a streamed source for ground finer than 0.5 km (A11).
+The host was approved by the owner before any of it was written.
+
+**The source.** `tiles.maps.eox.at`, WMTS layer `s2cloudless` (the 2016 mosaic: the one edition under CC BY 4.0;
+2018 onward are non-commercial), tile matrix set `WGS84`: the atlas's own equirectangular frame, 256 px tiles,
+level 13 = 9.5 m. CORS open. EOX asks for its attribution on the map: it is shown in the HUD, with a link,
+whenever those tiles are on screen, and in About.
+
+**The planner** (`detail.planDetail`). A wanted texel finer than 0.45 km goes to Sentinel-2 at the coarsest level
+that meets it, within 120 tiles; if that does not fit, one level coarser; if its coarsest useful level (8,
+0.31 km) does not fit, Blue Marble's last level. Terrain zoom to 12 (32 m). Tested at 0.4, 0.2, 0.1, 0.05 km a
+pixel and at 62 N (`test_app_math.mjs`): levels 8, 9, 10, 11; 72 to 85 tiles.
+**The zoom floor** went from 0.35 km to 20 m a pixel (10 m a device pixel at 2x: the mosaic's own). Looked at
+there for wobble in the ray-cast (float32 resolves 2.4 m of longitude): none seen.
+
+**Joining another camera's picture to the shipped month** took three tries, each looked at:
+1. *Added*, as Blue Marble's fine structure is. Sentinel-2 has more contrast: beside the Nile delta its sand went
+   past full scale and its fields below zero, and the clamp drew a lime desert and blue-black fields.
+2. *By ratio at one coarse scale* (39 km). Hue kept, coast sharp, but one tint for a screen that holds two
+   kinds of ground turned the desert olive.
+3. *By ratio at the shipped 5 km inland, and coarser (10 to 39 km) only within reach of water* (the shipped water
+   fraction), where it carries brightness only: the shipped sea is one dark navy fill, and a colour ratio across
+   land and that fill turned Manhattan olive. The desert is the far view's tan, the delta green, the harbour's
+   coast the picture's own. **Used.** Left over: a strip of coastal land tinted differently from the land behind
+   it; a faint halo where very different grounds meet; a yellow cast on pale roofs near water (A12, A13).
+
+**Three faults found by looking at the first frames, all older than this round or exposed by it:**
+- *The terrain tiles carry bad heights*: one texel 1,895 m below Manhattan, 679 in one window along the piers.
+  At 30 m a texel each was a black pit. `detail.despike` takes out any texel further than 40 m (at 30 m; more at
+  coarser texels) from the median of its eight neighbours; a 45 degree ridge is untouched (tested). Slopes for
+  shading are also taken over at least 90 m.
+- *The planner could miss a view for good.* `viewBox` used the camera's cached basis, which after a camera
+  change that no label pass had seen was the previous view's: a pole "on screen", the whole Earth as the box, no
+  plan, and the planner plans once per view. It showed after a fast zoom to the new floor. `viewBox` now takes
+  the basis itself. Present since the first streamed window; never seen because a wheel zoom relabels first.
+- *A city's resolved light was a sepia photograph of the day*, rivers lit. The pattern is now the ground's
+  relative brightness squared, with ordinary ground at under half: water and parks go dark.
+
+**Three declared departures from the real view, all close in, all stated in their cards:**
+- *Cloud thins and goes* between 0.7 and 0.15 km a device pixel. Its finest structure is 2 km; over streets drawn
+  to 40 m it was a white slab.
+- *Exposure rises*, up to 1.7 times, where the cloud is gone and the shipped ground is not itself bright. The
+  whole-disc exposure leaves a city at a tenth of full scale. By eye.
+- *City light takes the ground's pattern* below about 300 m a pixel: Black Marble's amount, times the daytime
+  picture's brightness against its surroundings. This is what F11 lacked: a metropolis at night now has streets.
+  The amount is measured; the pattern is MODELLED (a pale roof is not always a lit one).
+
+**Not measured.** Nothing scores the close-in picture: there is no reference at that scale in the repository,
+and the frozen frames do not reach it (it needs the network). Checked by eye at Los Angeles and its port, Paris,
+Cairo (globe and sheet) and the Valais in January, by day and by night. Recorded as G8.
+
+**Regression gate.** Fourteen checks pass; no baseline moved; the six frames are unchanged (the largest
+difference 0.049% of pixels).
+
 ## APPLIED (sixth round, 2026-11-10)
 
 Scope, the owner's: the real-GPU audit (G7), wide rivers (A10), finer ground and readable cities close in, the
@@ -572,7 +628,10 @@ texture is a magnified photograph, and vegetated land still reads darker than EP
 | A8 | P3 | Snow and ice at a low Sun read grey. Partly better 2026-11-10: white Blue Marble pixels are now given snow's albedo (0.90) by rule, since the picture clips there, and Antarctica in December reads white. Sea ice and winter snow at high latitude are still grey: the surface model is Lambert (plus a Lommel-Seeliger share for land) and snow scatters forward. Seen, not measured: the composite excludes latitudes above 60 | shader | EPIC |
 | A9 | P3 | **The outermost ring of the disc is 5-10 levels too bright and too green** (cos 0.1-0.2: atlas 85, 94, 100; EPIC 80, 84, 95). Rayleigh scattering saturates there in the model as in a plane atmosphere; the real loss is probably ozone, which EPIC's product does not show elsewhere on the disc, so it was not added. Would need a spherical-shell treatment of the last 2% of the radius | shader air block | EPIC |
 | A10 | P3 | **Mostly DELIVERED 2026-11-10 (sixth round): wide rivers are water.** MODIS water (MOD44W) along Natural Earth's 1:10m river lines; nine wide reaches are drawn for 87% of their length on average (under 1% before). **Open:** the Parana (50%) and the Congo (71%), whose channels between islands are narrower than half a cell; Canada's inland water is now above the lake inventory (0.76 against 0.66 M km2 in lakes), because the mask takes the larger of three sources cell by cell; the river check is not independent of MODIS, and a width dataset (GRWL, Allen & Pavelsky 2018, CC BY 4.0, a new host) would make it so | `fields_surface.rivers8`, `audit_water.reaches` | fourth round |
-| A11 | P3 | **The ground close in stops at 0.49 km a texel**, which is where Blue Marble stops, and the zoom floor (0.35 km a pixel at 2x) already shows its texels. A finer cloud-free picture exists (Sentinel-2 cloudless 2016, 10 m, CC BY 4.0, EOX) but on a host this project does not use: the owner's call (rule 16) | `detail.js` GIBS, `camera.zoom` | sixth round |
+| A11 | — | **DELIVERED 2026-11-11 (seventh round).** Sentinel-2 cloudless 2016 (EOX, CC BY 4.0; the owner approved the host) is streamed where the view wants a texel finer than 0.45 km, down to 19 m, and the zoom floor is 20 m a pixel | `detail.js` S2, `camera.MIN_KM_PER_PX` | sixth round |
+| A12 | P3 | **Close in, land and water are still the shipped 5 km field.** The colour is the picture's own, but within a few kilometres of a coast sea is partly shaded as land and land as sea; coastal land carries a different tint from the land behind it (the join goes coarse near water); lakes and rivers under 2.5 km are in the picture and are not water to the atlas. A fine water flag in the window (the terrain tiles' sign, guarded against polders and depressions) would answer most of it | `earth.frag.glsl` join, `detail.compositeElevation` | seventh round |
+| A13 | P3 | **Sentinel-2's colours go through a table fitted to Blue Marble** (`ALB_LUT`), and the picture is 2016 in one season: winter snow close in is the shipped field's 5 km patches over summer ground, and the Alps in January look it. A second table, or EOX's later mosaics (non-commercial licence: the owner's call), would be the routes | `earth.frag.glsl` albedoOf | seventh round |
+| A14 | P4 | Borders (Natural Earth 1:50m) and the coast outline are drawn for a view fifty times further out and are visibly coarse at 20 m a pixel; place names stop at Natural Earth's 1:10m populated places | `vectors.py`, `overlays.Labels` | seventh round |
 
 ## B. Atmosphere
 
@@ -621,7 +680,7 @@ texture is a magnified photograph, and vegetated land still reads darker than EP
 | F8 | P3 | Feature, volcano and power-station cards are generic tier; no curated text exists for any physical feature | `cards.js` | card contract |
 | F9 | P3 | Country tints are a 4 km raster sampled nearest: stair-stepped along borders when zoomed in (hidden under the vector line at most scales) | `fields_human.step_countries` | build notes |
 | F10 | P4 | Time zones (Natural Earth, public domain) are downloaded and unused | — | fetch list |
-| F11 | P3 | **A large city at night is one even field.** Every 500 m night product on GIBS is at full scale across a metropolis (Los Angeles basin: median 255 in Black Marble 2016, VIIRS_Night_Lights and the gap-filled daily radiance), so there are no streets to draw. Radiance with range exists (VNP46A4 annual composites) behind an Earthdata login | `detail.js` nightLight, `earth.frag.glsl` ramp | sixth round |
+| F11 | P4 | **Mostly answered 2026-11-11 by modelling.** Every 500 m night product on GIBS is at full scale across a metropolis, so the light's street pattern is taken from the daytime picture below about 300 m a pixel (amount measured, pattern modelled, labelled so). Between 300 m and 2 km a pixel a large city is still one even field of gold. Radiance with range exists (VNP46A4) behind an Earthdata login | `earth.frag.glsl` nightTex, ramp | sixth round |
 | F12 | P3 | Ship tracers run on lanes that are under ice in that month (the Kara Sea in February): the shipping field is one average year. Gate lane tracers on the month's ice | `particles.laneAccept`, `fields.climate` | sixth round |
 | F13 | P4 | Aircraft and tracer styling is by eye; nothing measures clutter. The ocean-current streaks are long white arcs at 3 to 5 km a pixel (seen off the Amazon's mouth) and may want the same treatment the aircraft got | `main.buildTracers` | sixth round |
 
@@ -640,11 +699,11 @@ texture is a magnified photograph, and vegetated land still reads darker than EP
 
 ---
 
-**Count: 43 items; none open at P1** (A10 mostly and G7 delivered in the sixth round, 2026-11-10; A11, C5, F11 to F13 and G8 added). In order:
+**Count: 46 items; none open at P1** (A11 delivered and F11 mostly answered in the seventh round, 2026-11-11; A12 to A14 added). In order:
 
 1. **B1** - bright cloud over the summer Southern Ocean; cumulus that lines up along the wind; a daily cycle for convective cloud over land; average the texture audit over several tile layouts.
-2. **A11 and F11** - finer ground and city lights with range: both need a source this project does not yet use, so both start with the owner.
+2. **A12** - a fine land/water flag inside the close-in window.
 3. **F2** - population by polygon.
 4. **A10** - what is left: the Parana and the Congo, Canada's part-water cells, an independent width dataset.
-5. **F12** - no ships on ice-bound lanes.
-6. **F1** - the sixteen European states the sheet still cannot name; an inset for the Levant and Caucasus.
+5. **A13** - a colour table for Sentinel-2; winter close in.
+6. **F12** - no ships on ice-bound lanes. **F1** - the sixteen European states the sheet still cannot name.

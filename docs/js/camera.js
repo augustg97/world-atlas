@@ -1,7 +1,7 @@
 // The two cameras: a perspective globe and a Winkel Tripel sheet. The projection maths here is
 // the JS twin of web/shaders/common.glsl; js/selftest.js checks that the two agree.
 
-import { D2R, R2D, lonLatToVec, norm180 } from './astro.js?v=20261111T032852Z';
+import { D2R, R2D, lonLatToVec, norm180 } from './astro.js?v=20261111T203826Z';
 
 export const R_KM = 6371.0088;
 const TAN_HALF_FOV_DEFAULT = Math.tan(15 * D2R);  // 30 degree vertical field of view
@@ -37,6 +37,10 @@ export function wtInverse(x, y) {
   return [lam, phi];
 }
 
+// The zoom floor, km a CSS pixel. 0.35 until 2026-11-11, when Blue Marble's 0.49 km was the finest ground there was.
+// 20 m: on a 2x display a device pixel is then 10 m, which is Sentinel-2's own. Looked at there for wobble in the
+// ray-cast (a float32 coordinate resolves 2.4 m of longitude): none seen.
+export const MIN_KM_PER_PX = 0.02;
 export class Camera {
   constructor() {
     this.view = 'globe';
@@ -68,8 +72,8 @@ export class Camera {
     return this.mapUnitsPerPx * R_KM;
   }
   setKmPerPx(k) {
-    if (this.view === 'globe') this.dist = Math.max(1.02, Math.min(12, 1 + k * this.h / (R_KM * 2 * this.tanHalfFov)));
-    else this.mapUnitsPerPx = Math.max(1e-5, Math.min(0.02, k / R_KM));
+    if (this.view === 'globe') this.dist = Math.max(1.004, Math.min(12, 1 + k * this.h / (R_KM * 2 * this.tanHalfFov)));
+    else this.mapUnitsPerPx = Math.max(5e-6, Math.min(0.02, k / R_KM));
   }
 
   uniforms() {
@@ -146,7 +150,7 @@ export class Camera {
   /** Zoom by a factor about a screen point, keeping the place under the cursor still. */
   zoom(factor, x = this.w / 2, y = this.h / 2) {
     const before = this.unproject(x, y);
-    const k = Math.max(0.35, Math.min(this.maxKmPerPx(), this.kmPerPx() * factor));
+    const k = Math.max(MIN_KM_PER_PX, Math.min(this.maxKmPerPx(), this.kmPerPx() * factor));
     this.setKmPerPx(k);
     if (!before) return;
     if (this.view === 'sheet') {

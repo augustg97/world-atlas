@@ -339,7 +339,7 @@ function tick(now) {
   if (labelsDirty) { labelsDirty = false; drawNames(); }
   // 6. panels
   fs.detail = det.detail;
-  if (now - (fs.uiAt || 0) > 250) { fs.uiAt = now; ui.clock(); ui.hud(k, hover, det.detail === 'full' ? (detail.busy ? 'fetching finer tiles…' : '') : det.detail === 'preview' ? 'refining detail…' : 'loading terrain…'); }
+  if (now - (fs.uiAt || 0) > 250) { fs.uiAt = now; ui.clock(); ui.hud(k, hover, det.detail === 'full' ? (detail.busy ? 'fetching finer tiles…' : '') : det.detail === 'preview' ? 'refining detail…' : 'loading terrain…', state.layers.detail && detail.cur && detail.uniforms(performance.now()).uDetAlbW > 0 ? detail.cur.credit : null); }
   if (now - (fs.dashAt || 0) > 1000) { fs.dashAt = now; updateDash(false); if (state.clock !== 'paused' && card) refreshCard(); }
 }
 

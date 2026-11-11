@@ -41,6 +41,7 @@ uniform sampler2D uDetElev;        // R: elevation in metres (float), linear-fil
 uniform vec4 uDetWin;
 uniform float uDetAlbW, uDetElevW; // 0..1: how much of each to use (0 = not loaded; fade in when ready)
 uniform float uDetNightW;          // 0..1: the same for the lights in uDetAlb's alpha (0 when the window was fetched without them)
+uniform float uDetS2;              // 1 when uDetAlb is Sentinel-2 (joined by ratio, at a coarser scale), 0 when it is Blue Marble
 uniform float uDetAlbLod;          // mip level of uDetAlb whose texel is the shipped albedo's (5 km): log2(5 km / texel km)
 uniform vec2 uDetElevPx;           // one texel of uDetElev in window units (1 / width, 1 / height)
 uniform vec2 uDetElevM;            // one texel of uDetElev in metres at the equator (east-west, north-south)
@@ -197,6 +198,7 @@ vec3 fromDisplay(vec3 d) { return pow(d, vec3(GAMMA)) / EXPO; }
 const float WIND_SPREAD = 4.5;     // m/s, day-to-day spread of the wind about its monthly mean vector
 const float LAND_LS = 0.30;        // share of the ground's light that follows Lommel-Seeliger (rough, self-shadowing) rather than Lambert
 const float CLOUD_MU = 0.75;       // the Sun height (cosine) at which the photograph's brightness IS the reflectance
+const float NEAR_EXPOSURE = 1.7;   // exposure gain at the zoom floor, by day (see the end of main). BY EYE: a city reads; white roofs do not clip
 const float NIGHT_SHIPPED = 0.53;  // the streamed lights' value at which the shipped field is at full scale (js/detail.js, nightLight)
 const vec3 NIGHT_NEAR = vec3(0.085, 0.10, 0.14);   // the lifted night ground, close in (see nearT). BY EYE: the land reads, the lights still lead
 const float NIGHT_GAIN = 3.0;      // faint light (cities, moonlight, stars, aurora) is not scored by a daylit photograph; this keeps it where it was set by eye
@@ -440,16 +442,56 @@ void main() {
   // over the outer 6% so the window never shows an edge.
   vec2 dw = vec2(fract(uv.x - uDetWin.x), uv.y - uDetWin.y) / uDetWin.zw;
   float inWin = (uDetAlbW + uDetElevW) > 0.0 ? smoothstep(0.0, 0.06, min(min(dw.x, 1.0 - dw.x), min(dw.y, 1.0 - dw.y))) : 0.0;
-  float nightFine = 0.0;
+  float sceneL = luma(bm);          // how bright this ground is in the shipped picture, at 5 km: what the close-in exposure meters on
+  float nightFine = 0.0, nightTex = 1.0;
   if (inWin * uDetAlbW > 0.0) {
     // Frequency split. The month's colour stays the shipped field's (it is the right SEASON); the fine
     // structure is the streamed picture's, with its own coarse part taken out so nothing is counted twice.
     vec4 fineT = textureGrad(uDetAlb, dw, gDx / uDetWin.zw, gDy / uDetWin.zw);
-    vec3 fineBm = fineT.rgb - textureLod(uDetAlb, dw, uDetAlbLod).rgb;
+    // HOW THE STREAMED PICTURE AND THE SHIPPED MONTH ARE JOINED.
+    // Blue Marble (down to a 0.49 km texel) is the shipped field's own picture: the month's colour stays the
+    // shipped field's and the structure finer than its 5 km is ADDED, with the streamed picture's own coarse
+    // part taken out so that nothing is counted twice.
+    // Sentinel-2 (finer) is another camera with more contrast, and its windows are seen from much nearer:
+    //  - added, its sand went past full scale and its fields below zero, and the clamp turned a desert lime and a
+    //    delta blue-black. It is joined by RATIO instead: the picture itself, times the shipped month's colour over
+    //    the picture's own, both taken coarse. Hue is kept and nothing can clip that the picture did not;
+    //  - "coarse" is the shipped field's 5 km wherever that is safe, so each kind of ground gets its own month's
+    //    colour (one tint for a whole screen turned the desert beside the Nile delta olive). It is NOT safe near
+    //    water: the shipped colour there is a 5 km blur of land and sea, and a coast seen at 20 m a pixel had brown
+    //    bleeding 200 pixels out to sea. Within reach of water (the shipped water fraction, itself a 5 km field)
+    //    the join is made coarser, 10 km to 39 km with the zoom: wider than the screen at those scales. And there
+    //    it carries BRIGHTNESS only: the shipped picture's sea is one dark navy fill, and a colour ratio taken
+    //    across land and that fill turned Manhattan and both its rivers olive.
+    float boost = uDetS2 > 0.5 ? clamp(uDetAlbLod - 3.0, 1.0, 3.0) : 0.0;
+    vec3 lowDet = textureLod(uDetAlb, dw, uDetAlbLod).rgb;
+    vec3 joined = bm + fineT.rgb - lowDet;
+    if (uDetS2 > 0.5) {
+      vec2 lod = boost + log2(vec2(float(textureSize(uAlbA, 0).x), float(textureSize(uAlbB, 0).x)) / 8192.0);   // a preview month is a smaller texture
+      vec3 shipC = mix(textureLod(uAlbA, uv, max(lod.x, 0.0)).rgb, textureLod(uAlbB, uv, max(lod.y, 0.0)).rgb, uAlbMix);
+      vec3 detC = textureLod(uDetAlb, dw, uDetAlbLod + boost).rgb;
+      float nearWater = smoothstep(0.01, 0.12, tex(uWaterNight, uv).r);
+      vec3 ratio = mix(clamp(bm / max(lowDet, vec3(0.03)), 0.3, 3.0), vec3(clamp(luma(shipC) / max(luma(detC), 0.03), 0.5, 2.0)), nearWater);
+      joined = fineT.rgb * ratio;
+      lowDet = mix(lowDet, detC, nearWater);
+    }
+    // past full scale, come back along the colour's own line: clamping each channel alone turned pale sand green
+    if (uDetS2 > 0.5) joined /= max(1.0, max(joined.r, max(joined.g, joined.b)) / 0.97);
     nightFine = fineT.a;
     // not under snow: the streamed picture is one month, and summer ground does not show through winter snow
     float snowy = smoothstep(0.70, 0.90, min(bm.r, min(bm.g, bm.b)));
-    bm = clamp(bm + fineBm * inWin * uDetAlbW * (1.0 - snowy), 0.0, 1.0);
+    bm = clamp(mix(bm, joined, inWin * uDetAlbW * (1.0 - snowy)), 0.0, 1.0);
+    // What a city's light falls on. From above, a lit city is its streets and roofs sending the light back, so
+    // where the ground is drawn finer than the lights are known (0.5 km) the light takes the ground's own pattern:
+    // brighter on pale roofs and roads, darker on parks, by the ground's brightness against its surroundings'.
+    // The light's AMOUNT stays Black Marble's. Whole at 100 m a device pixel, none by 330 m.
+    float texT = (1.0 - smoothstep(-4.3, -2.6, lodOf(2.0))) * inWin * uDetAlbW;
+    // (squared: at the first power a river was lit at a third of a street's brightness and the night read as a
+    // sepia photograph of the day. Water and parks, at a third of their surroundings by day, fall to a tenth.)
+    float gRel = luma(fineT.rgb) / max(luma(lowDet), 0.05);
+    // 0.45: ordinary ground returns under half of the unresolved glow and only the palest roofs and roads all of
+    // it, so the picture is points and lines of light on dark, as a city is from above, and nothing clips.
+    nightTex = mix(1.0, clamp(0.45 * gRel * gRel, 0.03, 1.0), texT);
   }
   vec3 alb = albedoOf(bm);
   vec3 wn = tex(uWaterNight, uv).rgb;
@@ -470,9 +512,14 @@ void main() {
     // G is 1 where the texel is the streamed tiles' own (land) and 0 where the window was filled from the
     // shipped field (sea floor, beyond 85 degrees): there the shipped height and slope stay in charge.
     float wE = inWin * uDetElevW * texture(uDetElev, dw).g;
-    float zE = texture(uDetElev, dw + vec2(uDetElevPx.x, 0.0)).r, zW = texture(uDetElev, dw - vec2(uDetElevPx.x, 0.0)).r;
-    float zN = texture(uDetElev, dw - vec2(0.0, uDetElevPx.y)).r, zS = texture(uDetElev, dw + vec2(0.0, uDetElevPx.y)).r;
-    vec2 gD = vec2((zE - zW) / (2.0 * uDetElevM.x * max(cos(ll.y), 0.02)), (zN - zS) / (2.0 * uDetElevM.y));
+    // The slope is taken over at least 90 m each way. At 30 m a texel the tiles carry single-texel pits and
+    // spikes where the survey met water it could not measure (river surfaces, bridges, dredged slips), and over
+    // one texel each shaded as a dark dot on the Nile and the East River. A hill is much longer than 90 m.
+    vec2 st = uDetElevPx * clamp(90.0 / uDetElevM, vec2(1.0), vec2(3.0));
+    vec2 stM = uDetElevM * clamp(90.0 / uDetElevM, vec2(1.0), vec2(3.0));
+    float zE = texture(uDetElev, dw + vec2(st.x, 0.0)).r, zW = texture(uDetElev, dw - vec2(st.x, 0.0)).r;
+    float zN = texture(uDetElev, dw - vec2(0.0, st.y)).r, zS = texture(uDetElev, dw + vec2(0.0, st.y)).r;
+    vec2 gD = vec2((zE - zW) / (2.0 * stM.x * max(cos(ll.y), 0.02)), (zN - zS) / (2.0 * stM.y));
     grad = mix(grad, gD, wE);
     z = mix(z, texture(uDetElev, dw).r, wE);
   }
@@ -501,6 +548,8 @@ void main() {
 
   // ---- clouds -------------------------------------------------------------------------------
   vec2 flowUV = vec2(wind.x / coslat / (2.0 * PI), -wind.y / PI) * (3600.0 / 6371008.8) * 2.5;   // uv per hour, x2.5 so drift reads at global scale
+  // How far inside the cloud's own scale the view is: 0 down to about 0.7 km a device pixel, 1 by 0.15 km.
+  float nearCam = 1.0 - smoothstep(-3.7, -1.6, lodOf(2.0));
   float cloud = 0.0, cloudSh = 0.0, cloudSun = 0.0, cum = 0.0, deck = 0.0, cumFar = 0.0, deckFar = 0.0;
   float grainFade = 1.0, conv = 0.0, landCu = 0.5; vec3 grain = vec3(0.5);
   // the generated cloud's own frame: the sphere, turned by the same slow eastward carry as the photograph
@@ -552,6 +601,12 @@ void main() {
       cum = mix(pieces(cuRank, cumFar, mix(0.38, 0.33, water), mix(1.95, 1.8, water)), cumFar, grainFade);
       deck = mix(pieces(grain.x, deckFar, 0.35, 1.5), deckFar, grainFade);
     }
+    // CLOSER THAN THE CLOUD HAS ANY SHAPE, IT THINS AND GOES. Its finest structure is the grain's 2 km; at 150 m a
+    // pixel a cloud is a white slab with a soft edge lying on streets that are drawn to 40 m, and the ground is
+    // what that view is for. Whole down to about 0.7 km a device pixel, gone by 0.15. Not the sky as it is: the
+    // Clouds card says so (catalog.js). Every use of the cloud below (shadow, haze, the lights it dims) thins with it.
+    float cloudNear = 1.0 - nearCam;
+    cloud *= cloudNear; cloudSh *= cloudNear; cloudSun *= cloudNear; cum *= cloudNear; deck *= cloudNear; cumFar *= cloudNear; deckFar *= cloudNear;
   }
 
   // ---- relief normal ------------------------------------------------------------------------
@@ -669,7 +724,7 @@ void main() {
       ramp = mix(ramp, vec3(0.68, 0.45, 0.21), smoothstep(0.18, 0.48, nightFine));
       ramp = mix(ramp, vec3(0.88, 0.65, 0.34), smoothstep(0.48, 0.76, nightFine));
       ramp = mix(ramp, vec3(0.97, 0.82, 0.54), smoothstep(0.76, 1.0, nightFine));
-      vec3 nearG = fromDisplay(ramp) * (1.0 - dayF) * (1.0 - 0.72 * cloud);
+      vec3 nearG = fromDisplay(ramp) * nightTex * (1.0 - dayF) * (1.0 - 0.72 * cloud);
       // the change of curve is spread over the zoom from where the window opens (5 km a pixel) to 2 km
       col += mix(NIGHT_GAIN * farG, nearG, (1.0 - smoothstep(-1.2, 0.5, lodOf(2.0))) * uDetNightW * inWin);
     }
@@ -755,6 +810,13 @@ void main() {
     col = mix(col, lc * lit * relief, a);
   }
 
+  // CLOSE IN, THE EXPOSURE RISES, as a camera's does when nothing bright is in frame. The exposure above is the
+  // whole disc's, set so that cloud tops do not clip, and it leaves a city or a forest at a tenth of full scale:
+  // right for the planet, too dark to read streets by. Where the cloud has thinned away (nearCam) the daylit
+  // scene is opened up by NEAR_EXPOSURE, less where the ground is itself bright (desert, salt, snow: metered on the
+  // shipped picture at 5 km), which at full gain went to a clipped yellow. Stated in the Finer ground card. Night
+  // is left alone: its lights are authored in display values.
+  if (uStyle == 0) col *= 1.0 + (NEAR_EXPOSURE - 1.0) * nearCam * dayF * (1.0 - smoothstep(0.38, 0.68, sceneL));
   // the Atlas register is display-referred already
   fragColor = vec4((uStyle == 0 ? display(col) : pow(max(col, 0.0), vec3(1.0 / 2.2))) + dither, 1.0);
 }

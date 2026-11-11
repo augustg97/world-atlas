@@ -4,7 +4,7 @@
 import { sun, moon, dayLength, monthState, gmstDeg } from '../web/js/astro.js';
 import { wtForward, wtInverse, Camera } from '../web/js/camera.js';
 import { GIBS, gibsTileDeg, gibsTexelDeg, gibsMatrix, gibsPixel, gibsLonLat, gibsTile, gibsTileBounds, TERRAIN, mercY, mercLat, terrPixel, terrLonLat, terrTile,
-  terrTileBounds, terrDecode, terrTexelDeg, terrTexelKm, tentTaps, compositeElevation, shippedElevation, planDetail, viewBox, windowHolds, windowUniforms, PLAN, KM_PER_DEG, nightLight, NIGHT_SHIPPED } from '../web/js/detail.js';
+  terrTileBounds, terrDecode, terrTexelDeg, terrTexelKm, tentTaps, compositeElevation, shippedElevation, planDetail, viewBox, windowHolds, windowUniforms, PLAN, KM_PER_DEG, nightLight, NIGHT_SHIPPED, despike, S2, s2TileDeg, s2TexelDeg, s2Matrix, s2Tile, s2TileBounds } from '../web/js/detail.js';
 import { INSETS, Inset, freeRect, fitInset, insetAlpha, INSET_FULL, INSET_GONE, INSET_PAD, MIN_GAIN } from '../web/js/insets.js';
 import { inflateSync } from 'node:zlib';
 import { readFileSync, existsSync } from 'node:fs';
@@ -373,10 +373,38 @@ if (online) {
   const worst = Math.max(...run.slice(0, 3).map((c) => Math.abs(Math.min(1, nightLight(...c) / NIGHT_SHIPPED) - shipped(...c))));
   ok('lights: below full scale the streamed value is the shipped field\'s, within 0.06', worst < 0.06, `worst ${worst.toFixed(3)}`);
   ok('lights: where the shipped field is at full scale, so is the streamed one read back', run.slice(3).every((c) => Math.min(1, nightLight(...c) / NIGHT_SHIPPED) > 0.97));
-  const cam = new Camera(); cam.resize(1280, 800, 2); cam.lookAt(-117.6, 33.9); cam.setKmPerPx(0.4);
-  const p = planDetail(viewBox(cam), 0.4, { night: true }), q = planDetail(viewBox(cam), 0.4);
-  ok('plan: at the zoom floor the imagery is the finest level there is, 0.49 km, with the lights on the same tiles', p && p.alb.L === GIBS.maxLevel && Math.abs(p.alb.texelKm - 0.489) < 0.01 && p.night && !q.night && p.key !== q.key, p ? `${p.alb.count} tiles` : 'no plan');
+  const cam = new Camera(); cam.resize(1280, 800, 2); cam.lookAt(-117.6, 33.9); cam.setKmPerPx(0.6);
+  const p = planDetail(viewBox(cam), 0.6, { night: true }), q = planDetail(viewBox(cam), 0.6);
+  ok('plan: at 0.6 km a pixel the imagery is Blue Marble\'s last level, 0.49 km, with the lights on the same tiles', p && p.alb.src === 'bm' && p.alb.L === GIBS.maxLevel && Math.abs(p.alb.texelKm - 0.489) < 0.01 && p.night && !q.night && p.key !== q.key, p ? `${p.alb.count} tiles` : 'no plan');
+  // Sentinel-2 cloudless (EOX): the tiling, and the plans that use it
+  ok('s2: level 0 is two tiles of 180 degrees; level 13 is the 10 m mosaic', s2TileDeg(0) === 180 && s2Matrix(0).w === 2 && s2Matrix(0).h === 1 && Math.abs(s2TexelDeg(13) * KM_PER_DEG - 0.00954) < 0.0001, `${(s2TexelDeg(13) * KM_PER_DEG * 1000).toFixed(2)} m`);
+  { const t = s2Tile(-118.25, 34.05, 11), bb = s2TileBounds(t.col, t.row, 11);
+    ok('s2: downtown Los Angeles is in tile 11/636/702, and inside that tile\'s bounds', t.row === 636 && t.col === 702 && bb.west <= -118.25 && bb.east > -118.25 && bb.south <= 34.05 && bb.north > 34.05, `${t.row}/${t.col}`);
+    ok('s2: the tile address is row then column', S2.url(11, t.row, t.col).endsWith('/WGS84/11/636/702.jpg')); }
+  for (const [k, zWant] of [[0.4, 8], [0.2, 9], [0.1, 10], [0.05, 11]]) {
+    cam.setKmPerPx(k);
+    const v = viewBox(cam), r = planDetail(v, k, { night: true });
+    ok(`plan: at ${k} km a pixel the imagery is Sentinel-2 level ${zWant}, no coarser than 0.8 of a pixel, within its request budget, and covers the view`,
+      r && r.alb.src === 's2' && r.alb.L === zWant && r.alb.texelKm <= 0.8 * k * 1.001 && r.alb.count <= PLAN.maxS2Tiles && r.alb.tiles.length === r.alb.count && windowHolds(r.win, v, 0) && r.alb.tiles.every((t) => Number.isInteger(t.dx) && Number.isInteger(t.dy)),
+      r ? `level ${r.alb.L}, ${(r.alb.texelKm * 1000).toFixed(0)} m, ${r.alb.count} tiles, ${r.alb.w} x ${r.alb.h}, elevation zoom ${r.elev.z} (${r.elev.count} tiles), margin ${r.margin}` : 'no plan');
+    ok(`plan: at ${k} km a pixel, with Sentinel-2 refused, it is Blue Marble's last level`, (() => { const b = planDetail(v, k, { noS2: true }); return b && b.alb.src === 'bm' && b.alb.L === GIBS.maxLevel; })());
+  }
+  { cam.lookAt(25, 62); cam.setKmPerPx(0.05); const v = viewBox(cam), r = planDetail(v, 0.05);
+    ok('plan: at 62 N, where a tile is half as wide on the ground, the Sentinel-2 plan still fits its budget', r && r.alb.src === 's2' && r.alb.count <= PLAN.maxS2Tiles && r.elev.count <= PLAN.maxElevTiles, r ? `level ${r.alb.L}, ${r.alb.count} tiles, margin ${r.margin}` : 'no plan'); }
   ok('plan: the lights\' tiles are the imagery\'s own rows and columns', GIBS.nightUrl(7, 24, 27).endsWith('/500m/7/24/27.png') && GIBS.url(7, 24, 27).endsWith('/500m/7/24/27.jpeg'));
+}
+
+// despike: bad heights in the terrain tiles go, terrain stays
+{
+  const w = 60, h = 50, g = new Float32Array(w * h);
+  // a 45 degree slope at 30 m a texel, with a sharp ridge crest down the middle and a gully across it
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) g[y * w + x] = 2000 - 30 * Math.abs(x - 30) - 20 * Math.abs(y - 25);
+  const clean = Float32Array.from(g);
+  ok('despike: a 45 degree ridge and gully at 30 m a texel are left alone', despike(g, w, h, 40) === 0 && g.every((v, i) => v === clean[i]));
+  g[10 * w + 12] = -1895; g[30 * w + 40] -= 300; g[30 * w + 41] -= 300; g[40 * w + 20] += 500;       // Manhattan's pit, a pit two texels wide, a spike
+  const n = despike(g, w, h, 40);
+  let worst = 0; for (let i = 0; i < g.length; i++) worst = Math.max(worst, Math.abs(g[i] - clean[i]));
+  ok('despike: a 1900 m pit, a pit two texels wide and a spike are taken out, to within the slope across a texel', n >= 4 && n <= 8 && worst <= 30, `${n} texels changed, worst left ${worst.toFixed(0)} m`);
 }
 
 console.log(bad ? `\napp math: ${bad} FAILURES` : '\napp math: ALL PASS');

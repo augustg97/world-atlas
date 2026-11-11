@@ -272,7 +272,7 @@ ground, mark what is disputed.
 |---|---|
 | A1 the claim | *One coupled machine* |
 | A2 time axis | *A year of Earth, anchored at now* |
-| A3 zoom floor | *Regional, about 2 km per pixel* (baked ~10 km → revised to 5 km baked, streamed below) |
+| A3 zoom floor | *Regional, about 2 km per pixel* (baked ~10 km → revised to 5 km baked, streamed below). **Revised by the owner 2026-11-10 and 11: "increase the resolution"; Sentinel-2 cloudless (EOX) approved as a streamed source. The floor is now 20 m a pixel.** |
 | B2 human systems | all four: *Political and settlement · Movement · Energy and emissions · Connectivity and economy* |
 | C8 borders and names | *De facto, disputes dashed and carded* |
 | C4 default view | *Earth from space, labels on zoom*, with a separate Atlas style |

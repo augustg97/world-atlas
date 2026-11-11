@@ -4,7 +4,12 @@
 //
 //   imagery    NASA GIBS WMTS, EPSG:4326, layer BlueMarble_NextGeneration (August 2004), tile matrix
 //              set "500m". Equirectangular 512 px tiles: compositing is a copy.
-//   lights     the same service and the same tiling, layer VIIRS_Black_Marble (2016): the picture the shipped
+//   imagery, finer   Sentinel-2 cloudless 2016 by EOX (https://s2maps.eu; contains modified Copernicus Sentinel data
+//              2016; CC BY 4.0), WMTS at tiles.maps.eox.at, layer "s2cloudless", tile matrix set "WGS84": the
+//              atlas's own equirectangular frame, 256 px tiles, 10 m at its finest. Used where the view wants a
+//              texel finer than Blue Marble's last level (0.49 km). The owner approved the host on 2026-11-11.
+//              EOX asks for the attribution on the map itself: main.js shows it while these tiles are on screen.
+//   lights     the same service and the same tiling as Blue Marble, layer VIIRS_Black_Marble (2016): the picture the shipped
 //              night lights were made from, at 500 m. Fetched only while part of the view is in the dark, and
 //              carried in the imagery texture's fourth channel (there is no seventeenth sampler: fields.js UNIT).
 //   elevation  Terrain Tiles on AWS (Mapzen/Tilezen "terrarium" PNG), Web Mercator 256 px tiles,
@@ -59,6 +64,30 @@ export function gibsTile(lon, lat, L) {
 }
 export function gibsTileBounds(col, row, L) {
   const d = gibsTileDeg(L);
+  return { west: -180 + col * d, east: -180 + (col + 1) * d, north: 90 - row * d, south: 90 - (row + 1) * d };
+}
+
+// ================================================================ Sentinel-2 cloudless (EOX), EPSG:4326
+// From https://tiles.maps.eox.at/wmts/1.0.0/WMTSCapabilities.xml : layer "s2cloudless" (the 2016 mosaic, the one
+// edition under CC BY 4.0; 2018 onwards are non-commercial), TileMatrixSet "WGS84", top-left corner (-180, 90),
+// 256 px tiles, level 0 two tiles side by side (180 degrees each), each level half the last, levels 0-17. The
+// mosaic itself is 10 m, which is level 13 (9.6 m at the equator); beyond that the tiles only magnify.
+export const S2 = {
+  layer: 's2cloudless', tilePx: 256, level0Deg: 180, minLevel: 8, maxLevel: 13,
+  url: (z, row, col) => `https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless/default/WGS84/${z}/${row}/${col}.jpg`,
+  credit: 'Sentinel-2 cloudless by EOX (contains modified Copernicus Sentinel data 2016)', link: 'https://s2maps.eu',
+};
+export const s2TileDeg = (z) => S2.level0Deg / 2 ** z;
+export const s2TexelDeg = (z) => s2TileDeg(z) / S2.tilePx;
+export const s2Matrix = (z) => ({ w: 2 ** (z + 1), h: 2 ** z });
+export const s2Pixel = (lon, lat, z) => [(lon + 180) / s2TexelDeg(z), (90 - lat) / s2TexelDeg(z)];
+export function s2Tile(lon, lat, z) {
+  const [gx, gy] = s2Pixel(lon, lat, z), m = s2Matrix(z);
+  const col = Math.min(m.w - 1, Math.max(0, Math.floor(gx / S2.tilePx))), row = Math.min(m.h - 1, Math.max(0, Math.floor(gy / S2.tilePx)));
+  return { col, row, px: Math.floor(gx - col * S2.tilePx), py: Math.floor(gy - row * S2.tilePx) };
+}
+export function s2TileBounds(col, row, z) {
+  const d = s2TileDeg(z);
   return { west: -180 + col * d, east: -180 + (col + 1) * d, north: 90 - row * d, south: 90 - (row + 1) * d };
 }
 
@@ -134,6 +163,34 @@ export function shippedElevation(f, lon, lat) {
   return (v / 65535) * 20000 - 11000;
 }
 
+/**
+ * Take single bad heights out of a grid, in place. The terrain tiles carry them where a survey met water or a
+ * building it could not measure: one texel 1900 m below Manhattan, hundreds along the East River's piers. Seen
+ * from 30 m a texel each is a black pit in the relief. A texel further than `thr` metres from the MEDIAN of its
+ * eight neighbours is not terrain (on a uniform slope, however steep, the median of the neighbours is the texel
+ * itself; a ridge crest or a gully floor at 45 degrees is within 20 m of it at 30 m a texel) and takes that
+ * median. Two passes, for pits two texels wide. Returns how many texels were changed.
+ */
+export function despike(d, w, h, thr) {
+  let changed = 0;
+  const nb = new Float32Array(8);
+  for (let pass = 0; pass < 2; pass++) {
+    const src = pass === 0 ? d : Float32Array.from(d);
+    for (let y = 1; y < h - 1; y++) {
+      for (let x = 1; x < w - 1; x++) {
+        const o = y * w + x, v = src[o];
+        // cheap way out: within the threshold of any two opposite neighbours' mean, it cannot be a spike worth the sort
+        if (Math.abs(v - 0.5 * (src[o - 1] + src[o + 1])) <= thr && Math.abs(v - 0.5 * (src[o - w] + src[o + w])) <= thr) continue;
+        nb[0] = src[o - w - 1]; nb[1] = src[o - w]; nb[2] = src[o - w + 1]; nb[3] = src[o - 1]; nb[4] = src[o + 1]; nb[5] = src[o + w - 1]; nb[6] = src[o + w]; nb[7] = src[o + w + 1];
+        nb.sort();
+        const med = 0.5 * (nb[3] + nb[4]);
+        if (Math.abs(v - med) > thr) { d[o] = med; changed++; }
+      }
+    }
+  }
+  return changed;
+}
+
 const smooth = (a, b, x) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
 
 /**
@@ -191,6 +248,8 @@ export function compositeElevation(win, z, w, h, getTile, shipped, water, own) {
     const t = xt[i];
     for (let k = 0; k < t.length; k += 2) { const wgt = t[k + 1], s = t[k] - gx0; for (let j = 0; j < h; j++) out[j * w + i] += wgt * tmp[j * mw + s]; }
   }
+  // single bad heights out (see despike): the threshold is 40 m at 30 m a texel and grows with the texel
+  despike(out, w, h, Math.max(40, 1.5 * dLat * KM_PER_DEG * 1000));
   // the polar caps and the sea
   if (own) own.fill(1);
   const edge = TERRAIN.latMax - 0.05;
@@ -211,10 +270,13 @@ export function compositeElevation(win, z, w, h, getTile, shipped, water, own) {
 export const PLAN = {
   activeKm: 5,          // closer than this many km a pixel, the window is on
   maxTiles: 64,         // imagery requests per window (512 px tiles)
+  maxS2Tiles: 120,      // the same for Sentinel-2's 256 px tiles: under half the pixels of 64 Blue Marble tiles
+  maxElevZ: 12,         // terrain zoom never asked beyond this (38 m at the equator)
   maxElevTiles: 96,     // elevation requests per window (256 px tiles: a quarter of the pixels each)
   maxTex: 8192,         // texels on a side
   gainKm: 3,            // a streamed texel coarser than this adds nothing to the shipped fields
-  minKm: 0.45,          // no source here is finer than this: Blue Marble and Black Marble stop at 0.49 km a texel
+  minKm: 0.0095,        // no source here is finer than this: Sentinel-2 cloudless is a 10 m mosaic
+  bmKm: 0.45,           // a wanted texel finer than this is beyond Blue Marble's last level (0.49 km): Sentinel-2's
   // The window is the view's lon/lat box grown by this share of its size on every side. Negative: the
   // box does not fit the request budget, and the window covers the middle of the view only.
   margins: [0.25, 0.15, 0.05, -0.05, -0.12, -0.19, -0.26, -0.32, -0.38],
@@ -238,14 +300,15 @@ function snap(b, step) {
   const north = Math.min(90, 90 - Math.floor((90 - b.north) / step + 1e-9) * step), south = Math.max(-90, 90 - Math.ceil((90 - b.south) / step - 1e-9) * step);
   return { west, north, lonSpan: east - west, latSpan: north - south };
 }
-function albPlan(win, L) {
-  const t = gibsTexelDeg(L), P = GIBS.tilePx, m = gibsMatrix(L);
+function albPlan(win, L, src = 'bm') {
+  const s2 = src === 's2';
+  const t = s2 ? s2TexelDeg(L) : gibsTexelDeg(L), P = s2 ? S2.tilePx : GIBS.tilePx, m = s2 ? s2Matrix(L) : gibsMatrix(L);
   const x0 = Math.round((win.west + 180) / t), y0 = Math.round((90 - win.north) / t), w = Math.round(win.lonSpan / t), h = Math.round(win.latSpan / t);
   const r0 = Math.max(0, Math.floor(y0 / P)), r1 = Math.min(m.h - 1, Math.floor((y0 + h - 1) / P));      // rows that exist
   const c0 = Math.floor(x0 / P), c1 = Math.floor((x0 + w - 1) / P), count = (r1 - r0 + 1) * (c1 - c0 + 1);
   const tiles = [];
   if (count <= LIST_MAX) for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) tiles.push({ col: ((c % m.w) + m.w) % m.w, row: r, dx: c * P - x0, dy: r * P - y0 });
-  return { L, w, h, tiles, count, texelDeg: t, texelKm: t * KM_PER_DEG };
+  return { L, w, h, tiles, count, texelDeg: t, texelKm: t * KM_PER_DEG, src, tilePx: P };
 }
 function elevPlan(win, z) {
   const src = terrTexelDeg(z), n = 2 ** z, south = win.north - win.latSpan;
@@ -278,23 +341,33 @@ export function planDetail(view, kmPerPx, opts = {}) {
   const want = Math.max(P.minKm, 0.8 * kmPerPx);
   const refLat = Math.min(80, Math.abs(view.lat));
   const albKm = (L) => gibsTexelDeg(L) * KM_PER_DEG, elevKm = (z) => terrTexelKm(refLat, z);
-  const fits = (p) => !p || (p.count <= (p.z === undefined ? P.maxTiles : P.maxElevTiles) && p.w <= P.maxTex && p.h <= P.maxTex);
+  const fits = (p) => !p || (p.count <= (p.z === undefined ? (p.src === 's2' ? P.maxS2Tiles : P.maxTiles) : P.maxElevTiles) && p.w <= P.maxTex && p.h <= P.maxTex);
+  let src = 'bm';
   const make = (m, L, z) => {
-    const win = snap(grow(view, m), L !== null ? gibsTexelDeg(L) : 1 / 64);
-    return { win, margin: m, alb: L !== null ? albPlan(win, L) : null, elev: z !== null ? elevPlan(win, z) : null, night: !!P.night && L !== null };
+    const win = snap(grow(view, m), L !== null ? (src === 's2' ? s2TexelDeg(L) : gibsTexelDeg(L)) : 1 / 64);
+    return { win, margin: m, alb: L !== null ? albPlan(win, L, src) : null, elev: z !== null ? elevPlan(win, z) : null, night: !!P.night && L !== null };
   };
   // the wanted level of each layer: the coarsest that meets the texel rule
   let L = GIBS.maxLevel; while (L > 5 && albKm(L - 1) <= want) L--;                   // 7 (0.49 km), 6 (0.98 km) or 5 (1.95 km)
-  let z = 9; while (z > 0 && elevKm(z - 1) <= Math.min(want, P.gainKm)) z--;
+  if (want < P.bmKm && !P.noS2) {
+    // finer than Blue Marble has: Sentinel-2, at the coarsest level that meets the rule, one level coarser at a time
+    // while the whole view does not fit. If even its coarsest useful level does not fit, Blue Marble's last level does.
+    const s2Km = (zz) => s2TexelDeg(zz) * KM_PER_DEG;
+    let zz = S2.maxLevel; while (zz > S2.minLevel && s2Km(zz - 1) <= want) zz--;
+    src = 's2';
+    while (zz > S2.minLevel && !fits(make(P.fullView, zz, null).alb)) zz--;
+    if (fits(make(P.fullView, zz, null).alb)) L = zz; else src = 'bm';
+  }
+  let z = P.maxElevZ; while (z > 0 && elevKm(z - 1) <= Math.min(want, P.gainKm)) z--;
   // one level coarser at a time while the whole view does not fit and the coarser level still gains
-  while (!fits(make(P.fullView, L, null).alb) && albKm(L - 1) <= P.gainKm) L--;
+  while (src === 'bm' && !fits(make(P.fullView, L, null).alb) && albKm(L - 1) <= P.gainKm) L--;
   while (!fits(make(P.fullView, null, z).elev) && z > 0 && elevKm(z - 1) <= P.gainKm) z--;
   for (const m of P.margins) { const p = make(m, L, z); if (fits(p.alb) && fits(p.elev)) return finish(p, want); }
   return null;
 }
 function finish(p, want) {
   p.wantKm = want;
-  p.key = `${p.win.west.toFixed(5)},${p.win.north.toFixed(5)},${p.win.lonSpan.toFixed(5)},${p.win.latSpan.toFixed(5)},${p.alb ? p.alb.L : '-'},${p.elev ? p.elev.z : '-'},${p.night ? 'n' : '-'}`;
+  p.key = `${p.win.west.toFixed(5)},${p.win.north.toFixed(5)},${p.win.lonSpan.toFixed(5)},${p.win.latSpan.toFixed(5)},${p.alb ? p.alb.src + p.alb.L : '-'},${p.elev ? p.elev.z : '-'},${p.night ? 'n' : '-'}`;
   return p;
 }
 
@@ -312,6 +385,7 @@ export function windowUniforms(p) {
   return {
     uDetWin: [w.west / 360 + 0.5, 0.5 - w.north / 180, w.lonSpan / 360, w.latSpan / 180],
     uDetAlbLod: p.alb ? Math.log2(SHIPPED_ALB_DEG / p.alb.texelDeg) : 0,
+    uDetS2: p.alb && p.alb.src === 's2' ? 1 : 0,
     uDetElevPx: p.elev ? [1 / p.elev.w, 1 / p.elev.h] : [1, 1],
     uDetElevM: p.elev ? [p.elev.texelDeg[0] * KM_PER_DEG * 1000, p.elev.texelDeg[1] * KM_PER_DEG * 1000] : [1000, 1000],
   };
@@ -319,6 +393,10 @@ export function windowUniforms(p) {
 
 /** The lon/lat box of what the camera sees: {lon, lat, west, east, south, north, full}. Longitudes are unwrapped about the centre. */
 export function viewBox(cam) {
+  // project() works from a basis the camera caches for a frame's worth of label work. After a camera change that
+  // no label pass has seen yet it is the OLD view's: a pole could "be on screen", the box came back as the whole
+  // Earth, no plan fitted, and the planner (which plans once per view) never looked again. Take the basis now.
+  if (cam.beginFrame) cam.beginFrame();
   const c = cam.center(), NX = 12, NY = 8;
   let w = 0, e = 0, s = c[1], n = c[1];
   for (let j = 0; j <= NY; j++) for (let i = 0; i <= NX; i++) {
@@ -338,7 +416,7 @@ export function viewBox(cam) {
 
 // =================================================================================== the live part
 const FADE_MS = 300, RETRIES = 2, PARALLEL = 8;
-const CACHE_TILES = Math.ceil(Math.max(PLAN.maxTiles, PLAN.maxElevTiles) * 1.5);          // decoded tiles kept per layer: one window and half of the next
+const CACHE_TILES = Math.ceil(Math.max(PLAN.maxTiles, PLAN.maxS2Tiles, PLAN.maxElevTiles) * 1.5);          // decoded tiles kept per layer: one window and half of the next
 
 /** A small LRU keyed by string: a Map keeps insertion order, so the first key is the oldest. */
 class LRU {
@@ -394,7 +472,7 @@ export class Detail {
     const plan = planDetail(view, k, { maxTex: this.maxTex, night: dark });
     if (!plan) { this._cancel(); if (this.state !== 'idle') this._set('idle', ''); return; }
     // a window serves if it is at least as fine as the one wanted now and holds what that one was to cover, less the slack
-    const serves = (p) => p && windowHolds(p.win, view, plan.margin - PLAN.slack) && (!plan.alb || (p.alb && p.alb.L >= plan.alb.L)) && (!plan.elev || (p.elev && p.elev.z >= plan.elev.z)) && (!plan.night || p.night);
+    const serves = (p) => p && windowHolds(p.win, view, plan.margin - PLAN.slack) && (!plan.alb || (p.alb && p.alb.texelDeg <= plan.alb.texelDeg * 1.001)) && (!plan.elev || (p.elev && p.elev.z >= plan.elev.z)) && (!plan.night || p.night);
     if (this.cur && serves(this.cur.plan)) { this._cancel(); return; }
     if (this.job && serves(this.job.plan)) return;
     if (plan.key === this.failedKey) return;
@@ -435,9 +513,13 @@ export class Detail {
     this.stats = { requests: job.requests, cached: job.hits, bytes: job.bytes, ms: Math.round(now - job.t0), compositeMs: job.compositeMs || 0, albTiles: plan.alb ? plan.alb.tiles.length : 0, elevTiles: plan.elev ? plan.elev.tiles.length : 0 };
     this.error = errs.length ? errs.join('; ') : null;
     this.failedKey = errs.length ? plan.key : '';
-    const parts = [alb ? `imagery ${alb.night ? 'and night lights ' : ''}${plan.alb.texelKm.toFixed(1)} km` : null, elev ? `elevation ${terrTexelKm(view.lat, plan.elev.z).toFixed(1)} km` : null].filter(Boolean);
+    const km = (v) => (v < 0.095 ? `${Math.round(v * 1000)} m` : `${v.toFixed(v < 0.95 ? 2 : 1)} km`);
+    const nightKm = plan.alb && plan.alb.src === 's2' ? gibsTexelDeg(GIBS.maxLevel) * KM_PER_DEG : plan.alb ? plan.alb.texelKm : 0;
+    const parts = [alb ? `imagery ${km(plan.alb.texelKm)}${plan.alb.src === 's2' ? ' (Sentinel-2)' : ''}` : null, alb && alb.night ? `night lights ${km(nightKm)}` : null,
+      elev ? `elevation ${km(terrTexelKm(view.lat, plan.elev.z))}` : null].filter(Boolean);
     next.note = errs.length ? `Some tiles could not be fetched (${errs.join('; ')}). ${parts.length ? `Showing ${parts.join(', ')}; the rest is the shipped field.` : 'Showing the shipped fields.'}`
       : `Streamed for this view: ${parts.join(', ')} a texel.`;
+    next.credit = alb && plan.alb.src === 's2' ? S2 : null;                 // EOX asks for its attribution on the map
     this._set(errs.length ? (parts.length ? 'partial' : 'failed') : 'ready', next.note);
   }
 
@@ -470,29 +552,32 @@ export class Detail {
   }
 
   async _imagery(job) {
-    const gl = this.gl, p = job.plan.alb, bmp = new Map();
+    const gl = this.gl, p = job.plan.alb, bmp = new Map(), src = p.src === 's2' ? S2 : GIBS;
     await this._each(p.tiles, job, async (t) => {
-      const key = `${p.L}/${t.row}/${t.col}`;
+      const key = `${p.src}/${p.L}/${t.row}/${t.col}`;
       let b = this.albCache.get(key);
       if (b) job.hits++;
       else {
         // no colour management and no premultiplication: the bytes in the file are the data
-        b = await createImageBitmap(await this._fetch(GIBS.url(p.L, t.row, t.col), job), { colorSpaceConversion: 'none', premultiplyAlpha: 'none' });
-        if (b.width !== GIBS.tilePx || b.height !== GIBS.tilePx) throw new Error(`tile ${key} is ${b.width} x ${b.height}`);
+        b = await createImageBitmap(await this._fetch(src.url(p.L, t.row, t.col), job), { colorSpaceConversion: 'none', premultiplyAlpha: 'none' });
+        if (b.width !== p.tilePx || b.height !== p.tilePx) throw new Error(`tile ${key} is ${b.width} x ${b.height}`);
         this.albCache.set(key, b);                                         // the cache holds more than one window's tiles, so none in use is evicted
       }
       bmp.set(key, b);
     });
-    // The lights, the same tiles of another layer. A failure here costs the lights only: the imagery still shows.
+    // The lights: Black Marble's tiles. Under Blue Marble they are the same rows and columns of another layer; under
+    // Sentinel-2 they are Black Marble's last level over the same window, magnified onto the finer grid below.
+    // A failure here costs the lights only: the imagery still shows.
     let nbmp = null;
+    const np = p.src === 's2' ? albPlan(snap({ west: job.plan.win.west, east: job.plan.win.west + job.plan.win.lonSpan, north: job.plan.win.north, south: job.plan.win.north - job.plan.win.latSpan }, gibsTexelDeg(GIBS.maxLevel)), GIBS.maxLevel) : p;
     if (job.plan.night) {
       nbmp = new Map();
-      await this._each(p.tiles, job, async (t) => {
-        const key = `${p.L}/${t.row}/${t.col}`;
+      await this._each(np.tiles, job, async (t) => {
+        const key = `${np.L}/${t.row}/${t.col}`;
         let b = this.nightCache.get(key);
         if (b) job.hits++;
         else {
-          b = await createImageBitmap(await this._fetch(GIBS.nightUrl(p.L, t.row, t.col), job), { colorSpaceConversion: 'none', premultiplyAlpha: 'none' });
+          b = await createImageBitmap(await this._fetch(GIBS.nightUrl(np.L, t.row, t.col), job), { colorSpaceConversion: 'none', premultiplyAlpha: 'none' });
           if (b.width !== GIBS.tilePx || b.height !== GIBS.tilePx) throw new Error(`lights tile ${key} is ${b.width} x ${b.height}`);
           this.nightCache.set(key, b);
         }
@@ -500,18 +585,29 @@ export class Detail {
       }).catch((e) => { if (e.name === 'AbortError') throw e; job.nightError = e.message || String(e); nbmp = null; });
     }
     // Equirectangular onto equirectangular at the same pixel size: every tile lands on whole pixels.
-    const mosaic = (tiles) => {
-      const c = new OffscreenCanvas(p.w, p.h), g = c.getContext('2d', { alpha: false, colorSpace: 'srgb' });
+    const mosaic = (tiles, q, pre = '') => {
+      const c = new OffscreenCanvas(q.w, q.h), g = c.getContext('2d', { alpha: false, colorSpace: 'srgb' });
       g.imageSmoothingEnabled = false;
-      for (const t of p.tiles) g.drawImage(tiles.get(`${p.L}/${t.row}/${t.col}`), t.dx, t.dy);
+      for (const t of q.tiles) g.drawImage(tiles.get(`${pre}${q.L}/${t.row}/${t.col}`), t.dx, t.dy);
       return c;
     };
-    const c = mosaic(bmp);
+    const c = mosaic(bmp, p, `${p.src}/`);
+    let nc = nbmp ? mosaic(nbmp, np) : null;
+    if (nc && np !== p) {
+      // the lights' mosaic covers the window snapped outwards to its own grid: take the window out of it, onto the imagery's grid
+      const t7 = gibsTexelDeg(GIBS.maxLevel), W = job.plan.win;
+      const sn = snap({ west: W.west, east: W.west + W.lonSpan, north: W.north, south: W.north - W.latSpan }, t7);
+      const sx = (W.west - sn.west) / t7, sy = (sn.north - W.north) / t7, sw = W.lonSpan / t7, sh = W.latSpan / t7;
+      const out = new OffscreenCanvas(p.w, p.h), g = out.getContext('2d', { alpha: false, colorSpace: 'srgb' });
+      g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high';
+      g.drawImage(nc, sx, sy, sw, sh, 0, 0, p.w, p.h);
+      nc = out;
+    }
     const tex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, tex);
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1); gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false); gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.NONE);
     gl.texImage2D(gl.TEXTURE_2D, 0, nbmp ? gl.RGBA8 : gl.RGB8, nbmp ? gl.RGBA : gl.RGB, gl.UNSIGNED_BYTE, c);
-    if (nbmp) this._writeLights(tex, mosaic(nbmp), p.w, p.h);
+    if (nc) this._writeLights(tex, nc, p.w, p.h);
     gl.bindTexture(gl.TEXTURE_2D, tex);
     gl.generateMipmap(gl.TEXTURE_2D);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
@@ -633,7 +729,7 @@ export class Detail {
 
   /** The shader's uniforms for this instant. With the layer off, or nothing loaded, both weights are 0. */
   uniforms(now) {
-    const u = { uDetAlb: UNIT.detAlb, uDetElev: UNIT.detElev, uDetWin: [0, 0, 1, 1], uDetAlbW: 0, uDetElevW: 0, uDetNightW: 0, uDetAlbLod: 0, uDetElevPx: [1, 1], uDetElevM: [1000, 1000] };
+    const u = { uDetAlb: UNIT.detAlb, uDetElev: UNIT.detElev, uDetWin: [0, 0, 1, 1], uDetAlbW: 0, uDetElevW: 0, uDetNightW: 0, uDetS2: 0, uDetAlbLod: 0, uDetElevPx: [1, 1], uDetElevM: [1000, 1000] };
     const c = this.cur;
     if (!this.enabled || !c) return u;
     const wgt = (l) => { if (!l) return 0; const x = Math.max(0, Math.min(1, (now - l.at) / FADE_MS)); return x * x * (3 - 2 * x); };

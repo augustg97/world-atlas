@@ -1,9 +1,9 @@
 // The interface: brand and clock, systems panel, time console, legend, card panel, dashboard,
 // search and About. All of it is generated from js/catalog.js.
 
-import { SYSTEMS, TIERS, LAYERS, LENS_DEFS, paletteCss } from './catalog.js?v=20261111T032852Z';
-import { coord } from './cards.js?v=20261111T032852Z';
-import { seasonName } from './astro.js?v=20261111T032852Z';
+import { SYSTEMS, TIERS, LAYERS, LENS_DEFS, paletteCss } from './catalog.js?v=20261111T203826Z';
+import { coord } from './cards.js?v=20261111T203826Z';
+import { seasonName } from './astro.js?v=20261111T203826Z';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const el = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstChild; };
@@ -34,7 +34,7 @@ export class UI {
       <button class="ghost reopen" id="left-open" hidden title="Show systems">Systems ›</button>
       <aside id="right"><div id="card" hidden></div><div id="dash"></div></aside>
       <div id="legend" hidden></div>
-      <div id="hud"><div id="scale"><div id="scale-bar"></div><span id="scale-txt"></span></div><div id="cursor"></div><div id="detail"></div></div>
+      <div id="hud"><div id="scale"><div id="scale-bar"></div><span id="scale-txt"></span></div><div id="cursor"></div><div id="detail"></div><div id="credit"></div></div>
       <footer id="time">
         <div class="tc-buttons">
           <button id="btn-now" class="pill" title="Return to the present moment">● Now</button>
@@ -166,14 +166,21 @@ export class UI {
     host.querySelector('[data-info]').onclick = () => this.app.openLayerCard(l.id, true);
   }
 
-  hud(kmPerPx, cursor, detail) {
+  hud(kmPerPx, cursor, detail, credit = null) {
     const target = 110 * kmPerPx;
     const pow = Math.pow(10, Math.floor(Math.log10(target)));
     const nice = [1, 2, 5, 10].map((m) => m * pow).filter((v) => v <= target * 1.15).pop() || pow;
     $('#scale-bar').style.width = `${(nice / kmPerPx).toFixed(1)}px`;
-    $('#scale-txt').textContent = `${nice.toLocaleString('en-US')} km · ${kmPerPx >= 10 ? kmPerPx.toFixed(0) : kmPerPx.toFixed(1)} km/px`;
+    const dist = nice >= 1 ? `${nice.toLocaleString('en-US')} km` : `${Math.round(nice * 1000)} m`;
+    $('#scale-txt').textContent = `${dist} · ${kmPerPx >= 10 ? kmPerPx.toFixed(0) + ' km' : kmPerPx >= 0.95 ? kmPerPx.toFixed(1) + ' km' : Math.round(kmPerPx * 1000) + ' m'}/px`;
     $('#cursor').textContent = cursor || '';
     $('#detail').textContent = detail || '';
+    // a source that asks to be named on the map itself, while its pictures are on it (Sentinel-2 cloudless, EOX)
+    const cr = $('#credit'), key = credit ? credit.credit : '';
+    if (cr.dataset.k !== key) {
+      cr.dataset.k = key; cr.textContent = '';
+      if (credit) { const a = document.createElement('a'); a.href = credit.link; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.textContent = credit.credit; cr.append('Imagery: ', a, ', CC BY 4.0'); }
+    }
   }
 
   layerStatus(id, text, cls = '') { const n = $(`[data-stat="${id}"]`); if (n) { n.textContent = text || ''; n.className = 'lstat ' + cls; } }
@@ -227,11 +234,12 @@ export class UI {
       <li>Air traffic and ship motion are modelled flows, not tracked vehicles. Live positions are licence-restricted and are not used.</li>
       <li>Latitude is treated as spherical on a 6371 km sphere; the error is below a pixel at every scale offered.</li></ul>
       <h3>What this page asks the network for</h3>
-      <p>Closer in than 5 km a pixel, with <i>Finer ground, close in</i> switched on (it is by default), the page fetches map tiles for the part of the Earth on screen from two hosts: imagery from NASA (gibs.earthdata.nasa.gov) and elevation from Amazon Web Services (s3.amazonaws.com). Those requests tell the two hosts roughly where you are looking, as any tiled map does. Nothing else about you is sent, and with the layer off neither host is asked for anything. The live layers (earthquakes, aurora, satellites, today’s Earth) fetch whole-Earth files that say nothing about where you look.</p>
+      <p>Closer in than 5 km a pixel, with <i>Finer ground, close in</i> switched on (it is by default), the page fetches map tiles for the part of the Earth on screen from three hosts: imagery and night lights from NASA (gibs.earthdata.nasa.gov), elevation from Amazon Web Services (s3.amazonaws.com), and, closer in than about 0.6 km a pixel, Sentinel-2 imagery from EOX in Vienna (tiles.maps.eox.at). Those requests tell the hosts roughly where you are looking, as any tiled map does. Nothing else about you is sent, and with the layer off none of them is asked for anything. The live layers (earthquakes, aurora, satellites, today’s Earth) fetch whole-Earth files that say nothing about where you look.</p>
       <div id="updlog"></div>
       <h3>Sources</h3><ul class="srcs">${sources.map((s) => `<li>${esc(s)}</li>`).join('')}<li>Country statistics: World Bank Open Data, CC BY 4.0.</li>
       <li>Where the sea, the land and the lakes are: Natural Earth 5.1.2, 1:10m land, minor islands and lakes (public domain); Antarctica’s ice front from Blue Marble. The wide rivers, and the lakes strung along them: NASA’s MODIS land-water mask (MOD44W), along Natural Earth’s 1:10m river lines. The colour of shallow and silty water is Blue Marble’s own.</li>
       <li>We acknowledge the use of imagery provided by services from NASA's Global Imagery Browse Services (GIBS), part of NASA's Earth Science Data and Information System (ESDIS).</li>
+      <li>The ground closer in than about 0.6 km a pixel: <a href="https://s2maps.eu" target="_blank" rel="noopener noreferrer">Sentinel-2 cloudless</a> by EOX IT Services GmbH (contains modified Copernicus Sentinel data 2016), CC BY 4.0, fetched as tiles while you look. It is named on the map whenever it is on screen.</li>
       <li>Terrain Tiles (Mapzen, a Linux Foundation project; Registry of Open Data on AWS), used closer in than 5 km a pixel: ArcticDEM terrain data DEM(s) were created from DigitalGlobe, Inc., imagery and funded under National Science Foundation awards 1043681, 1559691, and 1542736; Australia terrain data © Commonwealth of Australia (Geoscience Australia) 2017; Austria terrain data © offene Daten Österreichs – Digitales Geländemodell (DGM) Österreich; Canada terrain data contains information licensed under the Open Government Licence – Canada; Europe terrain data produced using Copernicus data and information funded by the European Union - EU-DEM layers; Global ETOPO1 terrain data U.S. National Oceanic and Atmospheric Administration; Mexico terrain data source: INEGI, Continental relief, 2016; New Zealand terrain data Copyright 2011 Crown copyright (c) Land Information New Zealand and the New Zealand Government (All rights reserved); Norway terrain data © Kartverket; United Kingdom terrain data © Environment Agency copyright and/or database right 2015. All rights reserved; United States 3DEP (formerly NED) and global GMTED2010 and SRTM terrain data courtesy of the U.S. Geological Survey.</li><li>Reference for layout and coverage (not reproduced): National Geographic, <i>The World — Political</i>.</li></ul>
       <p class="dim">Keys: space play/pause · N now · G globe/sheet · A atlas/space · / search · Esc close.</p></div>`;
     host.onclick = (e) => { if (e.target === host || e.target.closest('.about-x')) host.hidden = true; };

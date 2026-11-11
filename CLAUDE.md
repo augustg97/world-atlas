@@ -71,7 +71,9 @@ The general protocol lives in `~/Modeling Studio`. Its skills apply here:
     Pages from `main:/docs`. Everything committed to `main` is public. Nothing that is not the project's own
     or freely licensed goes in the tree: `reference/` (the National Geographic sheet, EPIC and VIIRS frames),
     `data/` and `scratchpad/` stay ignored. A NEW outside host, a new data licence, or anything about the
-    owner beyond what is already in the tree is the owner's call first.
+    owner beyond what is already in the tree is the owner's call first. Hosts the page talks to, each approved:
+    NASA GIBS, AWS Terrain Tiles, the live feeds, and since 2026-11-11 EOX (`tiles.maps.eox.at`, layer
+    `s2cloudless` ONLY: the 2016 mosaic is CC BY 4.0; the later years are non-commercial and not approved).
 
 ---
 
@@ -255,6 +257,11 @@ node build/test_app_math.mjs                     # ephemeris vs almanac, project
 - **Driving the page by hand does not settle it.** `ATLAS.step()` in a tight loop never satisfies "the camera has
   been still for 350 ms", so the focus window never starts and looks broken. Call `detail.update(cam, true, true,
   sun)` directly and wait on `detail.busy`.
+- **A second camera's picture cannot be added to the first's.** Sentinel-2's fine structure, added to the shipped
+  Blue Marble month the way Blue Marble's own is, ran past full scale and below zero and the clamp drew a lime
+  desert. Join by ratio; and choose the scale of the join by what is under it (5 km inland, coarse near water).
+- **Shoot after the fade.** A streamed window fades in over 300 ms of real time; `ATLAS.step()` does not advance
+  it. The new source "did not work" at first because the shot was taken at weight 0. Wait 450 ms after `detail.busy`.
 - **Coordinates from memory are not landmarks.** Four river asserts and two audit sample points were placed by
   recollection and missed rivers that were there. Find a named feature by its NAME in the vector data.
 

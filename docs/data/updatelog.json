@@ -1,5 +1,42 @@
 [
  {
+  "version": "1.5",
+  "date": "11 November 2026",
+  "title": "Down to the streets",
+  "summary": "You can now zoom in to 20 m a pixel, more than fifteen times closer than before. Below half a kilometre a pixel the ground is Sentinel-2's 10 m mosaic: street grids, runways, harbour piers, field patterns.",
+  "sections": [
+   {
+    "name": "Closer in",
+    "items": [
+     "The zoom floor went from 350 m to 20 m a pixel. From about 0.6 km a pixel inward the picture of the ground is Sentinel-2 cloudless 2016 by EOX, streamed for the view at about 20 m a texel at the closest, with relief to 32 m.",
+     "Coasts stay sharp at that scale, and each kind of ground keeps the shipped month's colour: the picture is joined to the month by ratio, at 5 km inland and across the whole view near water.",
+     "The exposure opens up close in, by up to 1.7 times, as a camera's does when no cloud is in frame, so a city can be read. Bright ground (desert, snow) is left as it is. The Finer ground card says so.",
+     "At night, close in, a city is no longer one field of gold. Its light takes the pattern of the streets and roofs it falls on. How much light there is, is measured; the street pattern is modelled from the daytime picture, and the Night lights card says so.",
+     "Cloud thins as you come closer than about 0.7 km a pixel and is gone by 150 m, so it does not lie over the streets as a white slab. That is a choice for legibility, stated in the Clouds card.",
+     "The scale bar reads in metres when it should."
+    ]
+   },
+   {
+    "name": "A new source and a new host",
+    "items": [
+     "Sentinel-2 cloudless by EOX IT Services GmbH (contains modified Copernicus Sentinel data 2016), CC BY 4.0. It is named on the map whenever it is on screen, as EOX asks.",
+     "Looking that close now also asks EOX's server in Vienna for tiles, as well as NASA's and Amazon's. Switch off \"Finer ground, close in\" and none of them is asked for anything."
+    ]
+   },
+   {
+    "name": "Known to be wrong",
+    "items": [
+     "The close-in picture shows 2016, in one season. A place that has changed since, or is under snow in winter, is shown as it was that summer (where the shipped field has snow, the snow wins).",
+     "In winter, snow close in comes from the shipped 5 km field and lies in soft patches over the summer picture.",
+     "Its colours go through a table fitted to a different camera's picture, so they are approximate.",
+     "Land and water are still told apart by a 5 km field. Within a few kilometres of a coast the shading of sea and land overlaps a little, and a strip of coastal land can carry a different tint from the land behind it.",
+     "Lakes and rivers narrower than 2.5 km are in the picture but are not water to the atlas: no glint, no ice, and a click answers as land.",
+     "Borders and coast outlines were drawn for a view fifty times further out and are visibly coarse at street scale."
+    ]
+   }
+  ]
+ },
+ {
   "version": "1.4",
   "date": "10 November 2026",
   "title": "Rivers, sharper nights, and quieter skies",

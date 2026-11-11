@@ -17,8 +17,8 @@ Paste this whole file as the first message of a new session.
 
 ## The current task
 
-Kickoff, the first build, a verify round and six build rounds are done, and the atlas is published. The
-contract is `SCOPE.md`; the open work is `Research/MODEL-GAPS.md` (43 items, none at P1). Against NASA's
+Kickoff, the first build, a verify round and seven build rounds are done, and the atlas is published. The
+contract is `SCOPE.md`; the open work is `Research/MODEL-GAPS.md` (46 items, none at P1). Against NASA's
 photographs the Space register is **close, with named exceptions**. Cloud close in now takes its fine
 structure from real cloud and reads as a satellite photograph; it is not the cloud of the place, and it is
 wrong in measured ways over the Amazon, the trades and the Congo (B1). The whole-Earth sheet carries a Europe
@@ -27,6 +27,8 @@ freeze, by a model that knows the air and, since the fifth round, the lake's dep
 A10 mostly, since the sixth round: the wide rivers are water). Over warm wet land a fifth of the cloud's light
 is drawn as small cumulus (B1). Close in, ground and night lights are streamed at 0.5 km and the night
 landscape is lifted so it can be read (declared in the lights card). The suite has a real-GPU check (G7 delivered).
+Since the seventh round the zoom floor is 20 m a pixel and the ground below 0.5 km is Sentinel-2 cloudless (EOX),
+with three declared departures close in: cloud thins away, exposure rises, city light takes the streets' pattern.
 
 ## Reference material and the measurement harness
 
@@ -62,7 +64,7 @@ The comparison is only meaningful at **matched scale**. All of this exists; reus
 
 ## State right now
 
-- Last live deploy: **2026-11-10**, release 1.4 (rivers, 500 m ground and lights close in, quieter aircraft, the GPU audit); the stamps are in `docs/version.json` and must match the live `version.json`
+- Last live deploy: **2026-11-11**, release 1.5 (Sentinel-2 below 0.5 km, zoom floor 20 m); the stamps are in `docs/version.json` and must match the live `version.json`
 - Branch `main` is what is published; `verify-round` was merged into it at release 1.0
 - `data/` holds about 3.6 GB of sources and caches (gitignored); `python build/fetch_sources.py` rebuilds it,
   including 438 MB of NSIDC grids and 581 MB of ISCCP. Three reference sets live under `reference/`
@@ -78,6 +80,28 @@ The comparison is only meaningful at **matched scale**. All of this exists; reus
 - **The earth shader uses 16 of 16 texture units.** See G7. The streamed lights share the imagery texture.
 - **The app streams a third layer when zoomed in on the night side** (NASA GIBS, VIIRS_Black_Marble): same host
   as the imagery, said in the Night lights and Finer ground cards.
+- **A third outside host since 2026-11-11, approved by the owner: `tiles.maps.eox.at`** (Sentinel-2 cloudless 2016,
+  CC BY 4.0), asked only closer in than about 0.6 km a pixel. EOX's attribution is on the map while its tiles are.
+  Only the 2016 layer (`s2cloudless`) is CC BY; the later years are non-commercial and were NOT approved.
+
+## What the seventh round found (2026-11-11)
+
+1. **EOX serves Sentinel-2 cloudless in the atlas's own frame** (EPSG:4326, 256 px, level 13 = 9.5 m), with CORS.
+   Compositing is a copy, as for GIBS.
+2. **Another camera's picture cannot be ADDED to the shipped month.** More contrast: sand past full scale, fields
+   below zero, and a clamp that drew a lime desert. Joined by ratio.
+3. **One tint for the whole screen is wrong where the screen holds two kinds of ground**; a 5 km tint is wrong at
+   a coast. The join is 5 km inland and coarse only near water. A coastal strip still carries the coarse tint.
+4. **The whole-disc exposure is too dark to read a city by.** It rises close in, where cloud has thinned away and
+   the ground is not itself bright. Declared.
+5. **City light can borrow the ground's pattern.** Amount from Black Marble, pattern from the daytime picture,
+   labelled modelled. F11's "no inside to a city" is answered below 300 m a pixel.
+6. **Nothing measures the close-in picture.** No reference at that scale; the frames do not reach it.
+7. **The terrain tiles have pits** (one 1,895 m deep under Manhattan). `detail.despike`, tested.
+8. **`viewBox` read a stale camera basis** and the planner, which plans once per view, could miss a view for good
+   after a fast programmatic zoom. Fixed in `viewBox`.
+9. **My harness shot before the window had faded in**, and the feature looked broken. Wait 450 ms after
+   `detail.busy` clears.
 
 ## What the sixth round found (2026-11-10)
 
@@ -232,8 +256,8 @@ Plus the standing ones:
 
 1. **B1** - bright cloud over the summer Southern Ocean; cumulus along the wind; a daily cycle for convective
    cloud over land; the land-cumulus share from data, not one fitted number.
-2. **A11, F11** - ground finer than 0.5 km and city lights with range. Both need a source the project does not
-   use yet (Sentinel-2 cloudless on EOX; VNP46A4 behind an Earthdata login): ask the owner first.
+2. **A12** - a fine land/water flag inside the close-in window (coasts, small lakes, the coastal tint strip).
+   **A13** - a colour table for Sentinel-2, and winter close in.
 3. **C4, C5** - small lakes' depths, part-frozen great lakes, Issyk-Kul; river ice scored against river records.
 4. **F2** - population by polygon, not by the country raster.
 5. **A10** - the Parana and the Congo; Canada's part-water cells; a width dataset as an independent witness.
