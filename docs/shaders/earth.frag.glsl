@@ -37,10 +37,12 @@ uniform sampler2D uAurora;         // OVATION probability, 360 x 181
 // Both textures cover the same lon/lat rectangle, given in the canonical uv of every other field:
 // uDetWin = (u at the west edge, v at the north edge, width in u, height in v). Row 0 is north.
 uniform sampler2D uDetAlb;         // RGB: Blue Marble at 500 m - 2 km a texel, in its own display values, WITH mipmaps. A: night lights, 0..1, when uDetNightW > 0
-uniform sampler2D uDetElev;        // R: elevation in metres (float), linear-filterable. G: 1 where streamed, 0 where filled from the shipped field
+uniform sampler2D uDetElev;        // R: elevation in metres (float), linear-filterable. G: 1 where streamed, 0 where filled from the shipped field. B: 1 where the texel is water, when uDetWaterW > 0
 uniform vec4 uDetWin;
 uniform float uDetAlbW, uDetElevW; // 0..1: how much of each to use (0 = not loaded; fade in when ready)
 uniform float uDetNightW;          // 0..1: the same for the lights in uDetAlb's alpha (0 when the window was fetched without them)
+uniform float uDetWaterW;          // 0..1: land or water is uDetElev's B channel (detail.js waterFlag), not the shipped 5 km field
+uniform vec3 uDetWaterC;           // the mean colour of the window's water in the streamed picture, display values (detail.js _flag)
 uniform float uDetS2;              // 1 when uDetAlb is Sentinel-2 (joined by ratio, at a coarser scale), 0 when it is Blue Marble
 uniform float uDetAlbLod;          // mip level of uDetAlb whose texel is the shipped albedo's (5 km): log2(5 km / texel km)
 uniform vec2 uDetElevPx;           // one texel of uDetElev in window units (1 / width, 1 / height)
@@ -199,6 +201,7 @@ const float WIND_SPREAD = 4.5;     // m/s, day-to-day spread of the wind about i
 const float LAND_LS = 0.30;        // share of the ground's light that follows Lommel-Seeliger (rough, self-shadowing) rather than Lambert
 const float CLOUD_MU = 0.75;       // the Sun height (cosine) at which the photograph's brightness IS the reflectance
 const float NEAR_EXPOSURE = 1.7;   // exposure gain at the zoom floor, by day (see the end of main). BY EYE: a city reads; white roofs do not clip
+const vec3 OCEAN_FILL = vec3(0.0, 0.010, 0.045);   // Blue Marble's ocean fill in display values: the median of the shipped months over open ocean is (0, 3, 12) of 255
 const float NIGHT_SHIPPED = 0.53;  // the streamed lights' value at which the shipped field is at full scale (js/detail.js, nightLight)
 const vec3 NIGHT_NEAR = vec3(0.085, 0.10, 0.14);   // the lifted night ground, close in (see nearT). BY EYE: the land reads, the lights still lead
 const float NIGHT_GAIN = 3.0;      // faint light (cities, moonlight, stars, aurora) is not scored by a daylit photograph; this keeps it where it was set by eye
@@ -443,6 +446,12 @@ void main() {
   vec2 dw = vec2(fract(uv.x - uDetWin.x), uv.y - uDetWin.y) / uDetWin.zw;
   float inWin = (uDetAlbW + uDetElevW) > 0.0 ? smoothstep(0.0, 0.06, min(min(dw.x, 1.0 - dw.x), min(dw.y, 1.0 - dw.y))) : 0.0;
   float sceneL = luma(bm);          // how bright this ground is in the shipped picture, at 5 km: what the close-in exposure meters on
+  // LAND OR WATER IN THE WINDOW (register A12). The shipped water field is 5 km: close in, a coast drawn from it
+  // shades a strip of sea as land and of land as sea, and a river narrower than that is not water at all. The
+  // window carries its own answer, texel by texel, made from NASA's 250 m mask and the streamed picture's colour
+  // (detail.js, waterFlag). It is 0 or 1 a texel; the filter's ramp between two texels is the shoreline.
+  float fineWt = inWin * uDetWaterW;
+  float fineW = fineWt > 0.0 ? smoothstep(0.3, 0.7, texture(uDetElev, dw).b) : 0.0;
   float nightFine = 0.0, nightTex = 1.0;
   if (inWin * uDetAlbW > 0.0) {
     // Frequency split. The month's colour stays the shipped field's (it is the right SEASON); the fine
@@ -470,9 +479,24 @@ void main() {
       vec2 lod = boost + log2(vec2(float(textureSize(uAlbA, 0).x), float(textureSize(uAlbB, 0).x)) / 8192.0);   // a preview month is a smaller texture
       vec3 shipC = mix(textureLod(uAlbA, uv, max(lod.x, 0.0)).rgb, textureLod(uAlbB, uv, max(lod.y, 0.0)).rgb, uAlbMix);
       vec3 detC = textureLod(uDetAlb, dw, uDetAlbLod + boost).rgb;
-      float nearWater = smoothstep(0.01, 0.12, tex(uWaterNight, uv).r);
-      vec3 ratio = mix(clamp(bm / max(lowDet, vec3(0.03)), 0.3, 3.0), vec3(clamp(luma(shipC) / max(luma(detC), 0.03), 0.5, 2.0)), nearWater);
-      joined = fineT.rgb * ratio;
+      float wsh = tex(uWaterNight, uv).r;                            // the shipped field's share of water in this 5 km cell
+      // WITH THE WINDOW'S OWN WATER FLAG (register A12) the coast needs no coarser join. What spoiled the 5 km ratio
+      // there was the sea inside both 5 km means: the shipped picture's is the ocean FILL, the streamed picture's
+      // is the sea as photographed. Both are known now (the fill is one colour; the window's mean water colour is
+      // counted when the flag is made), so each is taken out by the shipped share of water and the ratio is land
+      // over land, the same rule as inland, right up to the shore. The share itself cancels. Rivers and harbours
+      // the shipped field holds as land are in both means alike and stay in. Only where a cell is nearly all sea
+      // (an islet, a cape's tip) is there too little land to take a colour from: there the old coarse brightness.
+      float flagged = step(0.5, uDetWaterW);
+      float nearWater = mix(smoothstep(0.01, 0.12, wsh), smoothstep(0.60, 0.85, wsh), flagged);
+      vec3 landShip = max(bm - flagged * wsh * OCEAN_FILL, vec3(0.0));
+      vec3 landDet = max(lowDet - flagged * wsh * uDetWaterC, vec3(0.03));
+      vec3 ratio5 = clamp(landShip / landDet, 0.3, 3.0);
+      float lum = mix(clamp(luma(landShip) / max(luma(landDet), 0.03), 0.5, 2.0), clamp(luma(shipC) / max(luma(detC), 0.03), 0.5, 2.0), nearWater);
+      vec3 ratio = mix(ratio5, vec3(lum), nearWater);
+      // water keeps the picture's own hue (a colour ratio made over the land beside it is not the water's month)
+      // and takes the land's change of brightness, so the river is as dark against its banks as it was photographed
+      joined = fineT.rgb * mix(ratio, vec3(lum), fineW * fineWt);
       lowDet = mix(lowDet, detC, nearWater);
     }
     // past full scale, come back along the colour's own line: clamping each channel alone turned pale sand green
@@ -492,10 +516,15 @@ void main() {
     // 0.45: ordinary ground returns under half of the unresolved glow and only the palest roofs and roads all of
     // it, so the picture is points and lines of light on dark, as a city is from above, and nothing clips.
     nightTex = mix(1.0, clamp(0.45 * gRel * gRel, 0.03, 1.0), texT);
+    // and none of it falls on water the window knows is water: the amber over a river in Black Marble is the
+    // sensor's 500 m blur of its banks, not light on the river
+    nightTex *= 1.0 - 0.85 * fineW * fineWt * texT;
   }
   vec3 alb = albedoOf(bm);
   vec3 wn = tex(uWaterNight, uv).rgb;
   float water = uHasWater > 0.5 ? smoothstep(0.35, 0.65, wn.r) : 0.0;
+  float wasWater = water;                                            // by the shipped field: where the picture's water is the ocean fill
+  water = mix(water, fineW, fineWt);
   float night = wn.g * wn.g;
   // In the focus window the lights are the streamed picture's outright: it is the picture the shipped field was
   // made from, at 500 m, so there is no season to keep and nothing to count twice.
@@ -650,9 +679,15 @@ void main() {
     // shelves, lakes: fields/shoal.webp), the light the water sends back is the picture's, read through the
     // same table as the land: the Bahama banks are turquoise and the Amazon's mouth is brown because they
     // are. Not where this month's picture is near white there: that is ice, and the ice field draws ice.
-    float picWater = wn.b * (1.0 - smoothstep(0.38, 0.55, min(bm.r, min(bm.g, bm.b))));
+    // In the window, water the flag found is the picture's too: all of it under Sentinel-2 (a photograph of the
+    // water itself), and under Blue Marble the water the shipped field did not have (a river, a lake: Blue
+    // Marble's land tiles show them; its ocean is a fill).
+    float picFine = fineW * fineWt * uDetAlbW * mix(1.0 - wasWater, 1.0, uDetS2);
+    float picWater = max(wn.b, picFine) * (1.0 - smoothstep(0.38, 0.55, min(bm.r, min(bm.g, bm.b))));
     seaC = mix(seaC, alb, picWater);
-    vec3 sea = seaC * (sunL * shadow * 0.9 + skyL * 1.6 + moonL * 2.0 + nearL * 0.6);
+    // (the sky's 1.6 belongs to the one-colour sea, which stands for the light the deep water sends back; water
+    // whose colour is the streamed picture's already holds it)
+    vec3 sea = seaC * (sunL * shadow * 0.9 + skyL * mix(1.6, 1.0, picFine) + moonL * 2.0 + nearL * 0.6);
     float nv = max(dot(N, V), 0.0);
     float fres = 0.02 + 0.98 * pow(1.0 - nv, 5.0);
     sea += fres * SKY_REF * smoothstep(-0.15, 0.3, mu0) * 0.55;

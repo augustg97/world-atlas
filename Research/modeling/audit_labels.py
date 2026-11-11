@@ -165,7 +165,9 @@ class Ground:
 
     @classmethod
     def natural_earth(cls):
-        fc = json.load(open(os.path.join(ROOT, "data", "ne", "ne_50m_admin_0_countries.geojson")))["features"]
+        sys.path.insert(0, os.path.join(ROOT, "build"))
+        from units import admin_units                 # what the app reads: French Guiana and its like are their own units
+        fc = admin_units(os.path.join(ROOT, "data"))
         units = {}
         for f in fc:
             g = f["geometry"]

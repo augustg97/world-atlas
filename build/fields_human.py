@@ -214,7 +214,8 @@ def step_co2():
 def step_countries():
     print("country identity raster (Natural Earth 5.1.2, de facto)")
     W, H = 8192, 4096
-    fc = json.load(open(os.path.join(DATA, "ne", "ne_50m_admin_0_countries.geojson")))["features"]
+    from units import admin_units
+    fc = admin_units(DATA)
     fc.sort(key=lambda f: f["properties"]["ADM0_A3"])            # id = 1 + index in ADM0_A3 order; vectors.py uses the same order
     ids = Image.new("L", (W, H), 0)
     dr = ImageDraw.Draw(ids)

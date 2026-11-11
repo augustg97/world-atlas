@@ -17,8 +17,8 @@ Paste this whole file as the first message of a new session.
 
 ## The current task
 
-Kickoff, the first build, a verify round and seven build rounds are done, and the atlas is published. The
-contract is `SCOPE.md`; the open work is `Research/MODEL-GAPS.md` (46 items, none at P1). Against NASA's
+Kickoff, the first build, a verify round and eight build rounds are done, and the atlas is published. The
+contract is `SCOPE.md`; the open work is `Research/MODEL-GAPS.md` (48 items, none at P1). Against NASA's
 photographs the Space register is **close, with named exceptions**. Cloud close in now takes its fine
 structure from real cloud and reads as a satellite photograph; it is not the cloud of the place, and it is
 wrong in measured ways over the Amazon, the trades and the Congo (B1). The whole-Earth sheet carries a Europe
@@ -29,6 +29,9 @@ is drawn as small cumulus (B1). Close in, ground and night lights are streamed a
 landscape is lifted so it can be read (declared in the lights card). The suite has a real-GPU check (G7 delivered).
 Since the seventh round the zoom floor is 20 m a pixel and the ground below 0.5 km is Sentinel-2 cloudless (EOX),
 with three declared departures close in: cloud thins away, exposure rises, city light takes the streets' pattern.
+Since the eighth round land and water close in are told apart texel by texel (A12 mostly delivered: 2.5% of
+texels wrong at 23 places against a 30 m witness, 10.2% before), and French Guiana and France's four island
+departments are units of their own.
 
 ## Reference material and the measurement harness
 
@@ -64,7 +67,7 @@ The comparison is only meaningful at **matched scale**. All of this exists; reus
 
 ## State right now
 
-- Last live deploy: **2026-11-11**, release 1.5 (Sentinel-2 below 0.5 km, zoom floor 20 m); the stamps are in `docs/version.json` and must match the live `version.json`
+- Last live deploy: **2026-11-11**, release 1.6 (land and water told apart close in; French Guiana named); the stamps are in `docs/version.json` and must match the live `version.json`
 - Branch `main` is what is published; `verify-round` was merged into it at release 1.0
 - `data/` holds about 3.6 GB of sources and caches (gitignored); `python build/fetch_sources.py` rebuilds it,
   including 438 MB of NSIDC grids and 581 MB of ISCCP. Three reference sets live under `reference/`
@@ -73,16 +76,40 @@ The comparison is only meaningful at **matched scale**. All of this exists; reus
   records (`fetch_sources.py lakeice`); `data/hydrolakes/` lake depths (`fetch_sources.py hydrolakes`, then
   unzip it there); `data/ne/` now also Natural Earth's 1:10m land, lakes and river centrelines;
   `data/modiswater/` NASA's MODIS water mask in 128 pieces (`fetch_sources.py modiswater`, 20 MB).
-- `./venv/bin/python Research/modeling/audit_all.py` passes: fourteen checks, about 5 min. The fourteenth
-  (`gpu`) needs this machine's GPU and exits 3 without one.
+- `./venv/bin/python Research/modeling/audit_all.py` passes: fifteen checks, about 6 min. `gpu` needs this
+  machine's GPU and exits 3 without one. `close-water` needs `reference/closewater` (23 places, 112 MB) and
+  `reference/gsw` (eight 10-degree tiles of JRC Global Surface Water, 410 MB): `closewater_fetch.py` fetches both.
 - **The app now talks to two outside hosts when zoomed in** (NASA GIBS, AWS Terrain Tiles), by default, and
   says so in About. Read register A2 before publishing: one line of the tile documentation needs the owner's eye.
-- **The earth shader uses 16 of 16 texture units.** See G7. The streamed lights share the imagery texture.
+- **The earth shader uses 16 of 16 texture units.** See G7. The streamed lights share the imagery texture; the
+  window's water flag is the elevation texture's third channel.
+- **A fourth fetch per window since the eighth round: NASA's MODIS water mask** (GIBS, `MODIS_Water_Mask`, 250 m).
+  Same host as the imagery. Said in the Finer ground card and in About.
 - **The app streams a third layer when zoomed in on the night side** (NASA GIBS, VIIRS_Black_Marble): same host
   as the imagery, said in the Night lights and Finer ground cards.
 - **A third outside host since 2026-11-11, approved by the owner: `tiles.maps.eox.at`** (Sentinel-2 cloudless 2016,
   CC BY 4.0), asked only closer in than about 0.6 km a pixel. EOX's attribution is on the map while its tiles are.
   Only the 2016 layer (`s2cloudless`) is CC BY; the later years are non-commercial and were NOT approved.
+
+## What the eighth round found (2026-11-11)
+
+1. **No host the page may ask has a fine water map.** NASA's 250 m MODIS mask is the best there, and it holds
+   most of Manhattan as water. GIBS's OSM layer is the sea only; the terrain tiles' flatness tells nothing.
+2. **Colour alone cannot find a river** with one set of weights for the Earth (0.15 of the Seine). **Each window
+   can learn its own water's colour** from the mask's water, and that works: 2.5% of texels wrong at 23 places.
+3. **The mask must be doubted where it has far more water than the shipped field over 8 km.** That, and asking
+   doubted water to be a body, is what makes Manhattan land. Texture and height were tried and dropped (measured).
+4. **A rule can lose its worst case when a feature is dropped for a good reason.** Taking texture out improved
+   the mean and put Manhattan back under water. The per-place table showed it; the mean did not.
+5. **The self-test scene has to contain the mechanism.** Roofs are land to the rule only because it has seen
+   roofs elsewhere; a made scene with one roof district failed, correctly.
+6. **With water known, the coast needs no special join.** Take the sea out of both 5 km means (the fill's colour
+   is one number; the window's water colour is counted) and the inland rule holds to the shore.
+7. **The rule's first run in a session costs 0.7 s** (cold code). It runs in a worker.
+8. **Natural Earth's countries hold France's overseas departments inside France.** Its map-units file holds them
+   apart. `build/units.py` is now the one list of units; three readers share it because ids are indices.
+9. **A white frame in my harness** came from the pane showing another tab while the shot was taken. Shoot again
+   before believing a blank.
 
 ## What the seventh round found (2026-11-11)
 
@@ -254,14 +281,17 @@ Plus the standing ones:
 
 ## The work queue
 
-1. **B1** - bright cloud over the summer Southern Ocean; cumulus along the wind; a daily cycle for convective
+1. **A13** - a colour table for Sentinel-2 (a city close in is too yellow, and now uniformly so), and winter
+   close in.
+2. **B1** - bright cloud over the summer Southern Ocean; cumulus along the wind; a daily cycle for convective
    cloud over land; the land-cumulus share from data, not one fitted number.
-2. **A12** - a fine land/water flag inside the close-in window (coasts, small lakes, the coastal tint strip).
-   **A13** - a colour table for Sentinel-2, and winter close in.
-3. **C4, C5** - small lakes' depths, part-frozen great lakes, Issyk-Kul; river ice scored against river records.
-4. **F2** - population by polygon, not by the country raster.
-5. **A10** - the Parana and the Congo; Canada's part-water cells; a width dataset as an independent witness.
-6. **F12** - no ships on ice-bound lanes. **F1** - what the label round left open.
+3. **A15** - the owner's call: JRC Global Surface Water as a streamed 30 m water source (a new host). It would
+   find the rivers the MODIS mask lacks. **A12**'s remainder (tower shadows, Blue Marble windows unscored).
+4. **C4, C5** - small lakes' depths, part-frozen great lakes, Issyk-Kul; river ice scored against river records.
+5. **F2** - population by polygon, not by the country raster.
+6. **A10** - the Parana and the Congo; Canada's part-water cells; a width dataset as an independent witness.
+7. **F12** - no ships on ice-bound lanes. **F1** - what the label round left open. **F14** - Svalbard, the
+   Azores and their like are still named for their states.
 
 **If you touch the light model** (`earth.frag.glsl`, Space branch): the order is `epic_anchors.py` (refit
 exposure and gamma), then `land_transfer.py --fit` (refit the albedo table, paste the printed line), then

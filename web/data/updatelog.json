@@ -1,5 +1,41 @@
 [
  {
+  "version": "1.6",
+  "date": "11 November 2026",
+  "title": "Rivers, harbours and shores, close in",
+  "summary": "Close in, the atlas now knows where the water is to about 30 m. Rivers, lakes and harbours are water, with a sharp shore, and the land beside the sea keeps the same colour as the land behind it. French Guiana carries its own name.",
+  "sections": [
+   {
+    "name": "Land and water",
+    "items": [
+     "Inside the streamed view, land and water are told apart texel by texel, to about 30 m at the closest. Before, they came from the 5 km field: the Hudson was shaded as land and the first kilometres of sea and shore were shaded as each other.",
+     "How it is decided: NASA's 250 m water mask says roughly where the water is, and the picture's own colour says exactly where. Checked at 23 places against a 30 m record of surface water, it gets 2.5% of the ground wrong. NASA's mask alone gets 4.5%, and the 5 km field got 10%.",
+     "NASA's mask holds most of Manhattan as water. The atlas does not believe the mask where it claims far more water than the atlas's own coastline has, so the island is land and its rivers are water.",
+     "Water close in takes the picture's own colour: the brown Amazon, Lake Geneva's blue, the green shallows of the Venice lagoon. Sun glint falls on rivers as it does on the sea.",
+     "At night, close in, city light no longer spills onto rivers and harbours.",
+     "Coastal land no longer carries a different tint from the land behind it. The sea is now taken out of both pictures before their colours are compared, so one rule holds right up to the shore."
+    ]
+   },
+   {
+    "name": "Names",
+    "items": [
+     "French Guiana is named French Guiana. It was labelled France, because the source holds it as part of France's outline. Guadeloupe, Martinique, Réunion and Mayotte had the same fault and are also their own units now, each with its own card that says it is an overseas department of France.",
+     "Cayenne and the other towns there are listed under their department."
+    ]
+   },
+   {
+    "name": "Known to be wrong",
+    "items": [
+     "A river NASA's mask does not hold stays land: the Seine through Paris, the Rhône above Lake Geneva, most rivers under about 250 m wide.",
+     "Shadows between tall buildings can read as water (midtown Manhattan has a few).",
+     "Tidal flats, salt pans and reservoirs are water or land as the 2016 picture caught them.",
+     "The close-in colours still go through a table fitted to another camera, and a city can look too yellow. That is next.",
+     "Svalbard, the Azores, Madeira and Alaska are still named for their states when the mainland is out of view."
+    ]
+   }
+  ]
+ },
+ {
   "version": "1.5",
   "date": "11 November 2026",
   "title": "Down to the streets",

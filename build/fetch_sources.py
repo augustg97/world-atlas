@@ -159,7 +159,7 @@ for hemi, H in (("north", "N"), ("south", "S")):
                 f"{NSIDC}/{hemi}/monthly/geotiff/{i:02d}_{m3}/{H}_{yr}{i:02d}_concentration_v4.0.tif", NSIDC_LIC)
 
 # --- vectors (Natural Earth 5.1.2, public domain) -------------------------------------
-for f in ["ne_50m_admin_0_countries", "ne_50m_admin_0_boundary_lines_land",
+for f in ["ne_50m_admin_0_countries", "ne_50m_admin_0_map_units", "ne_50m_admin_0_boundary_lines_land",
           "ne_50m_admin_0_boundary_lines_disputed_areas", "ne_50m_admin_0_breakaway_disputed_areas",
           "ne_10m_populated_places_simple", "ne_50m_rivers_lake_centerlines", "ne_10m_rivers_lake_centerlines", "ne_50m_lakes",
           "ne_50m_geography_regions_polys", "ne_50m_geography_marine_polys",

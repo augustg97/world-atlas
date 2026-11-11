@@ -74,6 +74,8 @@ The general protocol lives in `~/Modeling Studio`. Its skills apply here:
     owner beyond what is already in the tree is the owner's call first. Hosts the page talks to, each approved:
     NASA GIBS, AWS Terrain Tiles, the live feeds, and since 2026-11-11 EOX (`tiles.maps.eox.at`, layer
     `s2cloudless` ONLY: the 2016 mosaic is CC BY 4.0; the later years are non-commercial and not approved).
+    `storage.googleapis.com` (JRC Global Surface Water) is asked by `closewater_fetch.py` for the audit's witness
+    only; the PAGE asking it for water tiles is register A15 and is not approved.
 
 ---
 
@@ -111,8 +113,10 @@ node build/test_app_math.mjs                     # ephemeris vs almanac, project
 ./venv/bin/python build/fields_climate.py       # atmo ocean currents
 ./venv/bin/python build/fields_human.py         # pop ships lanes co2 countries
 ./venv/bin/python build/vectors.py              # political places physical plates quakes volcanoes power stats air
+# the list of political units is build/units.py (France's overseas departments are their own): `political`, `places`
+# and fields_human.py `countries` must be rebuilt TOGETHER when it changes, because a unit's id is its index
 
-# the whole audit suite against its baselines (fourteen checks, about 5 min; --quick skips the browser checks)
+# the whole audit suite against its baselines (fifteen checks, about 6 min; --quick skips the browser checks)
 ./venv/bin/python Research/modeling/audit_all.py
 # score against NASA EPIC by hand: render (headless), then compare
 "$HOME/Modeling Studio/.venv/bin/python" Research/modeling/epic_render.py cur
@@ -127,6 +131,9 @@ node build/test_app_math.mjs                     # ephemeris vs almanac, project
 ./venv/bin/python Research/modeling/cloud_texture.py --tag cur    # pairs land in Research/figures/clouds/
 # the page on this machine's own GPU against the accepted software frames (needs the dev server; exit 3 = no GPU)
 "$HOME/Modeling Studio/.venv/bin/python" Research/modeling/audit_gpu.py
+# land or water close in: the app's own rule (web/js/water.js, under node) at 23 places against a 30 m witness
+./venv/bin/python Research/modeling/closewater_fetch.py         # once: 23 places and eight witness tiles (520 MB, reference/)
+./venv/bin/python Research/modeling/audit_closewater.py --register
 # build the published site (audits first; stamps code and data; never pushes)
 ./venv/bin/python build/build_site.py
 # the visual ratchet alone; accept a moved frame only with a reason
@@ -137,6 +144,18 @@ node build/test_app_math.mjs                     # ephemeris vs almanac, project
 ```
 
 ## Traps that have each cost real time here
+
+- **NASA's MODIS water mask holds most of Manhattan as water.** As a seed for learning a window's water colour it
+  taught the rule that roofs are water. The mask is doubted wherever it has far more water than the shipped field
+  over 8 km (`water.js`). Any new use of that mask needs the same doubt.
+- **A mean hid the worst case.** Dropping local texture from the water rule improved the 23-place mean and put
+  Manhattan back under water. `audit_closewater.py` gates `manhattan_false_pct` by name; read
+  `REGISTER-closewater.md` by place before changing the rule.
+- **A unit's id is its index in ADM0_A3 order**, in `political.json` and in `countries.png` alike. Adding five
+  units (French Guiana and its like) moved every id after them: rebuild both from `build/units.py`, or a click
+  on a country opens the card of another one.
+- **The water rule's first run in a session takes 0.7 s** (cold code); it is in a worker. Anything else that
+  walks the window's grid on the main thread will stall the view the same way.
 
 - **NOAA PSL's file server truncates large files and still answers 200**, and answers 429 to bursts. The fetcher checks
   Content-Length; the two OISST fields are read month by month over OPeNDAP with backoff.

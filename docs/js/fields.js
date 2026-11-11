@@ -5,8 +5,8 @@
 // Binding tolerates absence: every sampler always has a valid texture (a placeholder until the
 // real one lands) and `has.*` says which are real, so the first frame does not wait for 70 MB.
 
-import { loadBitmap, texFromImage, texFromData, texSolid, packRG, texArrayFromPixels, pixelsOf, getJSON, stamped } from './gl.js?v=20261111T203826Z';
-import { monthState } from './astro.js?v=20261111T203826Z';
+import { loadBitmap, texFromImage, texFromData, texSolid, packRG, texArrayFromPixels, pixelsOf, getJSON, stamped } from './gl.js?v=20261111T235202Z';
+import { monthState } from './astro.js?v=20261111T235202Z';
 
 export const UNIT = { albA: 0, albB: 1, relief: 2, waterNight: 3, elev: 4, clouds: 5, atmoA: 6, atmoB: 7, oceanA: 8, countries: 9, lens2D: 10, lut: 11, live: 12, aurora: 13,
   detAlb: 14, detElev: 15 };     // the focus window's streamed imagery and elevation (js/detail.js)

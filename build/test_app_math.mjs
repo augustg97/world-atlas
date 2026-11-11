@@ -4,7 +4,7 @@
 import { sun, moon, dayLength, monthState, gmstDeg } from '../web/js/astro.js';
 import { wtForward, wtInverse, Camera } from '../web/js/camera.js';
 import { GIBS, gibsTileDeg, gibsTexelDeg, gibsMatrix, gibsPixel, gibsLonLat, gibsTile, gibsTileBounds, TERRAIN, mercY, mercLat, terrPixel, terrLonLat, terrTile,
-  terrTileBounds, terrDecode, terrTexelDeg, terrTexelKm, tentTaps, compositeElevation, shippedElevation, planDetail, viewBox, windowHolds, windowUniforms, PLAN, KM_PER_DEG, nightLight, NIGHT_SHIPPED, despike, S2, s2TileDeg, s2TexelDeg, s2Matrix, s2Tile, s2TileBounds } from '../web/js/detail.js';
+  terrTileBounds, terrDecode, terrTexelDeg, terrTexelKm, tentTaps, compositeElevation, shippedElevation, planDetail, viewBox, windowHolds, windowUniforms, PLAN, KM_PER_DEG, nightLight, NIGHT_SHIPPED, despike, S2, s2TileDeg, s2TexelDeg, s2Matrix, s2Tile, s2TileBounds, maskPlan, sampleMask, boxMean, waterFlag } from '../web/js/detail.js';
 import { INSETS, Inset, freeRect, fitInset, insetAlpha, INSET_FULL, INSET_GONE, INSET_PAD, MIN_GAIN } from '../web/js/insets.js';
 import { inflateSync } from 'node:zlib';
 import { readFileSync, existsSync } from 'node:fs';
@@ -405,6 +405,37 @@ if (online) {
   const n = despike(g, w, h, 40);
   let worst = 0; for (let i = 0; i < g.length; i++) worst = Math.max(worst, Math.abs(g[i] - clean[i]));
   ok('despike: a 1900 m pit, a pit two texels wide and a spike are taken out, to within the slope across a texel', n >= 4 && n <= 8 && worst <= 30, `${n} texels changed, worst left ${worst.toFixed(0)} m`);
+}
+
+// land or water in the window: the mask's tiles, its sampling, and the rule (scored on real places by audit_closewater.py)
+{
+  ok('water mask: the tiles are the "250m" set, one level past Blue Marble', GIBS.waterUrl(8, 44, 96).endsWith('/MODIS_Water_Mask/default/250m/8/44/96.png') && Math.abs(gibsTexelDeg(8) * KM_PER_DEG - 0.2443) < 1e-3);
+  const cam = new Camera(); cam.resize(1440, 900); cam.setView('globe'); cam.lookAt(-73.99, 40.75); cam.setKmPerPx(0.05);
+  const plan = planDetail(viewBox(cam), 0.05), mp = maskPlan(plan.win, plan.elev);
+  const holds = mp.win.west <= plan.win.west + 1e-9 && mp.win.north >= plan.win.north - 1e-9 && mp.win.west + mp.win.lonSpan >= plan.win.west + plan.win.lonSpan - 1e-9 && mp.win.north - mp.win.latSpan <= plan.win.north - plan.win.latSpan + 1e-9;
+  ok('water mask: at 50 m a pixel it is level 8, a handful of tiles, and holds the window', mp.L === 8 && mp.count <= 4 && mp.tiles.length === mp.count && holds, `level ${mp.L}, ${mp.count} tiles, ${mp.w} x ${mp.h}`);
+  cam.setKmPerPx(3); const far = planDetail(viewBox(cam), 3), mf = maskPlan(far.win, far.elev);
+  ok('water mask: at 3 km a pixel its texel is no coarser than the grid it is sampled to, within the request budget', mf.texelDeg <= far.elev.texelDeg[1] * 1.0001 || mf.count === PLAN.maxTiles ? mf.count <= PLAN.maxTiles : false, `level ${mf.L}, ${mf.count} tiles`);
+  // sampling: a mosaic whose west half is water, read at the centres of a finer grid over a window inside it
+  const m = { w: 8, h: 4, texelDeg: 0.5, win: { west: 10, north: 50, lonSpan: 4, latSpan: 2 } }, px = new Uint8ClampedArray(8 * 4 * 4);
+  for (let y = 0; y < 4; y++) for (let x = 0; x < 4; x++) px[(y * 8 + x) * 4 + 3] = 255;
+  const sm = sampleMask(px, m, { west: 11, north: 49.5, lonSpan: 2, latSpan: 1 }, 20, 10);
+  ok('water mask: sampled where it is, the shore at the right longitude', sm.every((v, i) => v === ((i % 20) < 10 ? 1 : 0)));
+  const bm = boxMean(Uint8Array.from({ length: 100 }, (_, i) => ((i % 10) < 5 ? 1 : 0)), 10, 10, 3);
+  ok('boxMean: a 3 x 3 mean, edges repeated', Math.abs(bm[0] - 1) < 1e-6 && Math.abs(bm[4] - 2 / 3) < 1e-6 && Math.abs(bm[5] - 1 / 3) < 1e-6 && Math.abs(bm[99]) < 1e-6);
+  // the rule: sea west of column 60; the mask puts the shore at column 66; land is green fields
+  const w = 160, h = 120, rgba = new Uint8ClampedArray(w * h * 4), mask = new Uint8Array(w * h), elev = new Float32Array(w * h);
+  let seed = 7; const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff - 0.5; };
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const o = y * w + x, sea = x < 60, c = sea ? [22, 40, 62] : [120, 125, 90], a = sea ? 8 : 28;
+    for (let k = 0; k < 3; k++) rgba[o * 4 + k] = c[k] + a * rnd();
+    rgba[o * 4 + 3] = 255; mask[o] = x < 66 ? 1 : 0; elev[o] = sea ? 0 : 10 + 3 * rnd();
+  }
+  const info = {}, f = waterFlag({ w, h, rgba, elev, mask, ship: null, mx: 19, my: 19, cell: 13 }, info);
+  let wrong = 0; for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) if (f[y * w + x] !== (x < 60 ? 1 : 0)) wrong++;
+  ok('waterFlag: the shore is where the picture has it, six texels from where the mask has it', wrong <= 0.002 * w * h && info.seedWater > 1000 && info.seedLand > 1000, `${wrong} texels of ${w * h} wrong`);
+  ok('waterFlag: with no picture the mask is the answer', waterFlag({ w, h, rgba: null, elev, mask, mx: 19, my: 19, cell: 13 }).every((v, i) => v === mask[i]));
+  ok('waterFlag: a window the mask has no water in has none', waterFlag({ w, h, rgba, elev, mask: new Uint8Array(w * h), mx: 19, my: 19, cell: 13 }).every((v) => v === 0));
 }
 
 console.log(bad ? `\napp math: ${bad} FAILURES` : '\napp math: ALL PASS');

@@ -44,7 +44,8 @@ CHECKS = [
      "a shader that does not compile (the black canvas with working panels)"),
     ("selftests", [[PY, "-W", "ignore", M("epic_compare.py"), "--selftest"], [PY, "-W", "ignore", M("epic_clearsky.py"), "--selftest"], [PY, "-W", "ignore", M("cloud_texture.py"), "--selftest"],
                    [PY, M("audit_ice.py"), "--selftest"], [PY, M("audit_population.py"), "--selftest"], [PY, "-W", "ignore", B("cloud_grain.py"), "--selftest"],
-                   [PY, M("audit_water.py"), "--selftest"], [PY, M("audit_lakeice.py"), "--selftest"], [SPY, M("audit_gpu.py"), "--selftest"]],
+                   [PY, M("audit_water.py"), "--selftest"], [PY, M("audit_lakeice.py"), "--selftest"], [SPY, M("audit_gpu.py"), "--selftest"],
+                   [PY, "-W", "ignore", M("audit_closewater.py"), "--selftest"], [PY, B("units.py")]],
      {"failures": 0}, False, "an audit that has stopped measuring what it says it measures"),
     # The water mask against ETOPO 2022's ocean-connected sea, north of 60 S (register A5). Before the mask was
     # rebuilt from a coastline (2026-11-10) these were 5.27, 0.11 and 460: Blue Marble paints every shelf sea in a
@@ -92,6 +93,13 @@ CHECKS = [
     # not unnamed. By the old count the whole-Earth sheet named 129, 22 of them under the dashboard where no
     # one could read them. By the new one it named 106 of 176 in view and now names 125 of 177 (107 on the map,
     # 18 more in the insets). Of all 198: 73 unnamed, 21 of those hidden.
+    # Land or water inside the streamed window (register A12): the app's own rule (web/js/water.js, under node) at
+    # 23 places against JRC Global Surface Water, a 30 m Landsat record none of its inputs come from. Needs
+    # reference/closewater (closewater_fetch.py). For scale: NASA's 250 m mask alone gets 4.48% of texels wrong
+    # and the shipped 5 km field 10.2%. worse_than_mask is 1 and known: Venice's tidal flats at a 494 m texel.
+    ("close-water", [[PY, "-W", "ignore", M("audit_closewater.py"), "--json", "--register"]],
+     {"wrong_pct": 2.5, "iou_short_pct": 24.9, "worse_than_mask": 1, "manhattan_false_pct": 2.1}, False,
+     "close in, water drawn where the land is or land where the water is; the MODIS mask's flooded Manhattan coming back"),
     ("labels", [[SPY, M("audit_labels.py"), "--selftest"], [SPY, M("audit_labels.py"), "--json"]],
      {"sheet_states198_unnamed": 52, "globe_states198_unnamed": 59, "regional12_states198_unnamed": 300, "regional6_states198_unnamed": 38,
       "overlaps": 0, "under_9px": 0, "misplaced": 0, "hit_wrong": 0, "under_panel": 0, "sheet_drag_flips": 0, "sheet_zoom_in_losses": 4}, True,

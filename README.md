@@ -86,11 +86,13 @@ build/        the offline pipeline (Python) and the tests
   fields_climate.py  atmosphere and ocean climatologies -> month-stacked atlases + climate.json
   fields_human.py    population, shipping density and lane ridges, CO2, country raster
   vectors.py         political geometry, places, names, plates, quakes, volcanoes, power, air model, statistics
-  check_shaders.py   test_app_math.mjs   stamp.py   serve.py
+  units.py           the list of political units: Natural Earth's countries, France's overseas departments apart
+  check_shaders.py   test_app_math.mjs   closewater_flags.mjs (the app's water rule, for the audit)   stamp.py   serve.py
 web/          the app: no build step, ES modules
   shaders/    common.glsl (the two cameras)  earth.frag.glsl (the substrate)  lines.*  points.*
   js/         main (loop, state)  fields (the field store)  earth  camera  astro  overlays  particles
               catalog (every layer, tier, source, limit)  cards  data  dash  live  ui
+              detail (the focus window)  water + water.worker (land or water in it)  insets
   fields/     69 MB of rasters      data/  4 MB of features      version.json
 data/         about 3.6 GB of sources and caches - gitignored
 Research/     SOURCE-SURVEY.md  MODEL-GAPS.md  modeling/ (audits, the EPIC harness)  baselines/ (six frozen frames)  figures/epic/ - never imported by build/
@@ -127,6 +129,12 @@ docs/         empty until the owner decides to publish
   Sentinel-2 cloudless below that, to 19 m; relief to 32 m; the zoom floor is 20 m a pixel. Blue Marble's fine
   structure is added to the shipped month; Sentinel-2 is joined to it by ratio. The lights ride in the imagery
   texture's alpha: the shader has no spare sampler.
+- **Land or water, close in** (`js/water.js`, in a worker) - inside the window each texel is called land or water,
+  to about 30 m: NASA's 250 m mask says roughly where, the picture's colour says exactly where, and the mask is
+  doubted where it has far more water than the shipped field (it holds Manhattan as water). The answer is the
+  elevation texture's third channel. Scored by `audit_closewater.py` at 23 places against a 30 m witness.
+- **The political units** (`build/units.py`) - Natural Earth's countries with France's five overseas departments
+  taken out as units of their own. The names, the identity raster and the label audit all read this one list.
 - **The probe and cards** (`js/cards.js`) - click any pixel for every field's value there and then, each with its tier.
 - **Planet now** (`js/dash.js`) - integrals of the shown fields: people in daylight, sea-ice extent, global mean temperature.
 
@@ -254,11 +262,12 @@ and what the model cannot know.
 - **Close in, the night ground is brighter than it is**, about ten times moonlight and shaded from the north-west, so that the lights have a landscape under them. The Night lights card says so. Seen whole, the night is the real one.
 - **A large city at night is one even field of gold between 300 m and 2 km a pixel.** Every public 500 m night picture is at full brightness there.
 - **Close in, three things are not the real view, and each card says so**: cloud thins and is gone by 150 m a pixel; the exposure rises by up to 1.7 times; a city's light at night takes the pattern of the daytime ground (the amount is measured, the pattern modelled).
-- **The close-in ground is 2016, one season, another camera.** Its colours go through a table fitted to Blue Marble. Winter snow close in is the shipped field's 5 km patches. Land and water are still told apart at 5 km, so shading overlaps a little at a coast and coastal land can be tinted differently from the land behind it.
-- **Nothing measures the close-in picture.** It is checked by eye; no audit reaches it.
+- **The close-in ground is 2016, one season, another camera.** Its colours go through a table fitted to Blue Marble (a city reads too yellow). Winter snow close in is the shipped field's 5 km patches.
+- **Where the water is, close in, is the atlas's own reading**: 2.5% of the ground wrong at 23 places against a 30 m record (NASA's mask alone 4.5%, the 5 km field 10.2%). A river NASA's 250 m mask lacks stays land (the Seine in Paris); shadows between towers can read as water; tidal flats and reservoirs are as the 2016 picture caught them (A12, A15).
+- **The close-in picture's colours and relief are not measured.** They are checked by eye; only its water is audited, from fetched reference tiles.
 - **Vintages differ**: land surface 2004, night lights 2016, borders 2022, emissions 2022, population 2025.
 - **At whole-Earth framing 125 of the 177 states in view are named**, 18 of them only in the Europe and Lesser Antilles insets. Sixteen European states, the Levant and the Caucasus still are not; the insets need open sea between the panels and are left out in a small window (F1).
-- **Against NASA EPIC the Space style is close, with named exceptions**: cloud over land above the median, the outermost 2% of the disc, snow at a low Sun (A1, A8, A9). The full list is `Research/MODEL-GAPS.md`: 38 items, none at P1
+- **Against NASA EPIC the Space style is close, with named exceptions**: cloud over land above the median, the outermost 2% of the disc, snow at a low Sun (A1, A8, A9). The full list is `Research/MODEL-GAPS.md`: 48 items, none at P1
 
 ---
 

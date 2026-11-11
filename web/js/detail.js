@@ -24,6 +24,7 @@
 import { UNIT } from './fields.js';
 import { stamped } from './gl.js';
 import { R_KM } from './camera.js';
+import { WATER_RULE, boxMean, waterFlag, runRule } from './water.js';
 
 const D2R = Math.PI / 180, R2D = 180 / Math.PI;
 export const KM_PER_DEG = R_KM * D2R;                       // 111.195 km on the atlas's sphere
@@ -37,6 +38,10 @@ export const GIBS = {
   layer: 'BlueMarble_NextGeneration', tms: '500m', tilePx: 512, level0Deg: 288, maxLevel: 7,
   url: (L, row, col) => `https://gibs.earthdata.nasa.gov/wmts/epsg4326/best/BlueMarble_NextGeneration/default/500m/${L}/${row}/${col}.jpeg`,
   nightUrl: (L, row, col) => `https://gibs.earthdata.nasa.gov/wmts/epsg4326/best/VIIRS_Black_Marble/default/2016-01-01/500m/${L}/${row}/${col}.png`,
+  // NASA's MODIS land/water mask (MOD44W), tile matrix set "250m": the same tiling one level deeper (level 8 is
+  // 244 m). A PNG whose water is opaque and whose land is transparent. See waterFlag below for what it is used for.
+  waterMaxLevel: 8,
+  waterUrl: (L, row, col) => `https://gibs.earthdata.nasa.gov/wmts/epsg4326/best/MODIS_Water_Mask/default/250m/${L}/${row}/${col}.png`,
 };
 /**
  * Black Marble's display values (0..255) to the brightness of its lights, 0..1.
@@ -266,6 +271,10 @@ export function compositeElevation(win, z, w, h, getTile, shipped, water, own) {
   return out;
 }
 
+// ============================================================================ land or water, close in
+// The rule itself is water.js (it runs in a worker); what it needs fetched and what is done with its answer are below.
+export { WATER_RULE, boxMean, waterFlag };
+
 // ================================================================================ the window planner
 export const PLAN = {
   activeKm: 5,          // closer than this many km a pixel, the window is on
@@ -369,6 +378,30 @@ function finish(p, want) {
   p.wantKm = want;
   p.key = `${p.win.west.toFixed(5)},${p.win.north.toFixed(5)},${p.win.lonSpan.toFixed(5)},${p.win.latSpan.toFixed(5)},${p.alb ? p.alb.src + p.alb.L : '-'},${p.elev ? p.elev.z : '-'},${p.night ? 'n' : '-'}`;
   return p;
+}
+
+/**
+ * The MODIS mask's tiles for a window whose elevation plan is `elev`: the coarsest level of the "250m" set whose
+ * texel is no coarser than the grid's rows (level 8, 244 m, at most), one level coarser at a time while the tiles
+ * are more than `max`. The window is snapped outwards to that level's own grid.
+ */
+export function maskPlan(win, elev, max = PLAN.maxTiles) {
+  let L = GIBS.waterMaxLevel; while (L > 0 && gibsTexelDeg(L - 1) <= elev.texelDeg[1]) L--;
+  const box = { west: win.west, east: win.west + win.lonSpan, north: win.north, south: win.north - win.latSpan };
+  let p = null;
+  for (; L >= 0; L--) { const sn = snap(box, gibsTexelDeg(L)); p = albPlan(sn, L); p.win = sn; if (p.count <= max) break; }
+  return p;
+}
+/** The mask's mosaic (RGBA bytes, `mp` from maskPlan; water is opaque) at the centres of a w x h grid over `win`: Uint8Array, 1 = water. */
+export function sampleMask(px, mp, win, w, h) {
+  const out = new Uint8Array(w * h), t = mp.texelDeg, dLon = win.lonSpan / w, dLat = win.latSpan / h;
+  const xs = new Int32Array(w);
+  for (let i = 0; i < w; i++) xs[i] = Math.max(0, Math.min(mp.w - 1, Math.floor((win.west + (i + 0.5) * dLon - mp.win.west) / t)));
+  for (let j = 0; j < h; j++) {
+    const y = Math.max(0, Math.min(mp.h - 1, Math.floor((mp.win.north - (win.north - (j + 0.5) * dLat)) / t))), o = y * mp.w;
+    for (let i = 0; i < w; i++) out[j * w + i] = px[(o + xs[i]) * 4 + 3] > 127 ? 1 : 0;
+  }
+  return out;
 }
 
 /** Does the window hold the view box grown by `m` of its size? Longitude wraps; a window cannot pass a pole, so a pole edge always holds. */
@@ -492,25 +525,39 @@ export class Detail {
     this.job = job;
     this._set('loading', 'Fetching finer tiles…');
     const errs = [];
-    const [alb, elev] = await Promise.all([
+    const [alb, grid, mask] = await Promise.all([
       plan.alb ? this._imagery(job).catch((e) => { errs.push(`imagery: ${e.message || e}`); return null; }) : null,
       plan.elev ? this._elevation(job).catch((e) => { errs.push(`elevation: ${e.message || e}`); return null; }) : null,
+      plan.elev ? this._mask(job).catch((e) => { if (e.name !== 'AbortError') errs.push(`water mask: ${e.message || e}`); return null; }) : null,
     ]);
+    // land or water, texel by texel, on the elevation's grid (water.js, in a worker); then the elevation texture, which carries it
+    let flag = null;
+    if (this.job === job && grid && mask) {
+      try { flag = await this._flag(plan, grid, mask, alb ? alb.canvas : null); } catch (e) { errs.push(`water: ${e.message || e}`); }
+    }
     if (this.job !== job) {                                                // the view moved on: nothing here is wanted
-      if (alb) this.gl.deleteTexture(alb.tex); if (elev) this.gl.deleteTexture(elev.tex);
+      if (alb) this.gl.deleteTexture(alb.tex);
       return;
     }
     this.job = null;
+    let elev = null;
+    if (grid) {
+      const t0 = performance.now();
+      elev = this._elevTexture(plan.elev, grid, flag ? flag.d : null);
+      elev.water = !!flag; elev.flag = flag ? flag.d : null; elev.waterC = flag ? flag.waterC : null;
+      job.flagMs = flag ? flag.ms : null;
+      job.compositeMs = (job.compositeMs || 0) + Math.round(performance.now() - t0);
+    }
     // a layer whose tiles did not all arrive is left out whole (weight 0): the shipped field shows there, and says so
     const now = performance.now(), keepFade = this.cur && windowHolds(this.cur.plan.win, view, -0.45);     // the old window was on screen: no second fade
     const at = (had) => (this.frozen || (keepFade && had) ? -1e9 : now);
-    const next = { plan, alb: alb ? { tex: alb.tex, at: at(this.cur && this.cur.alb), night: alb.night } : null, elev: elev ? { tex: elev.tex, at: at(this.cur && this.cur.elev) } : null };
+    const next = { plan, alb: alb ? { tex: alb.tex, at: at(this.cur && this.cur.alb), night: alb.night } : null, elev: elev ? { tex: elev.tex, at: at(this.cur && this.cur.elev), water: elev.water, waterC: elev.waterC } : null };
     if (alb && plan.night && !alb.night) errs.push(`lights: ${job.nightError || 'not fetched'}`);
     this._drop();
     this.cur = next;
     if (alb) this.fields.tex.detAlb = alb.tex; if (elev) this.fields.tex.detElev = elev.tex;
-    if (this.keep) { this.canvas = alb ? alb.canvas : null; this.cpu = elev ? { w: plan.elev.w, h: plan.elev.h, d: elev.data, win: plan.win } : null; }
-    this.stats = { requests: job.requests, cached: job.hits, bytes: job.bytes, ms: Math.round(now - job.t0), compositeMs: job.compositeMs || 0, albTiles: plan.alb ? plan.alb.tiles.length : 0, elevTiles: plan.elev ? plan.elev.tiles.length : 0 };
+    if (this.keep) { this.canvas = alb ? alb.canvas : null; this.cpu = elev ? { w: plan.elev.w, h: plan.elev.h, d: elev.data, water: elev.flag, win: plan.win } : null; }
+    this.stats = { requests: job.requests, cached: job.hits, bytes: job.bytes, ms: Math.round(now - job.t0), compositeMs: job.compositeMs || 0, flagMs: job.flagMs || null, albTiles: plan.alb ? plan.alb.tiles.length : 0, elevTiles: plan.elev ? plan.elev.tiles.length : 0 };
     this.error = errs.length ? errs.join('; ') : null;
     this.failedKey = errs.length ? plan.key : '';
     const km = (v) => (v < 0.095 ? `${Math.round(v * 1000)} m` : `${v.toFixed(v < 0.95 ? 2 : 1)} km`);
@@ -614,7 +661,7 @@ export class Detail {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     const ext = gl.getExtension('EXT_texture_filter_anisotropic');
     if (ext) gl.texParameterf(gl.TEXTURE_2D, ext.TEXTURE_MAX_ANISOTROPY_EXT, Math.min(8, gl.getParameter(ext.MAX_TEXTURE_MAX_ANISOTROPY_EXT)));
-    return { tex, canvas: this.keep ? c : null, night: !!nbmp };
+    return { tex, canvas: c, night: !!nbmp };                              // the canvas is read once more, for the water flag, then let go
   }
 
   /**
@@ -685,18 +732,94 @@ export class Detail {
     const t0 = performance.now();
     const own = new Float32Array(p.w * p.h);
     const data = compositeElevation(job.plan.win, p.z, p.w, p.h, (x, y) => tiles.get(`${x}/${y}`), ship ? (lon, lat) => shippedElevation(ship, lon, lat) : null, ship ? water : null, own);
-    // R: metres. G: the share of the texel that is the tiles' (0 under the sea and beyond 85 degrees, where R holds the shipped field).
-    const rg = new Float32Array(p.w * p.h * 2);
-    for (let i = 0; i < own.length; i++) { rg[i * 2] = data[i]; rg[i * 2 + 1] = own[i]; }
     job.compositeMs = Math.round(performance.now() - t0);
+    return { data, own, shipWater: water };
+  }
+
+  /** The elevation texture. R: metres. G: the share of the texel that is the tiles' (0 under the sea and beyond 85
+   *  degrees, where R holds the shipped field). B: 1 where the texel is water (waterFlag), when `flag` is given. */
+  _elevTexture(p, grid, flag) {
+    const gl = this.gl, n = p.w * p.h, rgb = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) { rgb[i * 3] = grid.data[i]; rgb[i * 3 + 1] = grid.own[i]; rgb[i * 3 + 2] = flag ? flag[i] : 0; }
     const tex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, tex);
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
     // metres as floats. Without linear filtering of 32-bit floats, half floats: 8 m steps above 8192 m, finer below.
-    gl.texImage2D(gl.TEXTURE_2D, 0, this.floatLinear ? gl.RG32F : gl.RG16F, p.w, p.h, 0, gl.RG, gl.FLOAT, rg);
+    gl.texImage2D(gl.TEXTURE_2D, 0, this.floatLinear ? gl.RGB32F : gl.RGB16F, p.w, p.h, 0, gl.RGB, gl.FLOAT, rgb);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    return { tex, data: this.keep ? data : null };
+    return { tex, data: this.keep ? grid.data : null };
+  }
+
+  /** NASA's MODIS water mask over the window, on the elevation's grid: {d: Uint8Array (1 = water), cell: the mask's cell in texels}. */
+  async _mask(job) {
+    const W = job.plan.win, e = job.plan.elev, mp = maskPlan(W, e);
+    const bmp = new Map();
+    await this._each(mp.tiles, job, async (t) => {
+      const key = `w/${mp.L}/${t.row}/${t.col}`;
+      let b = this.nightCache.get(key);
+      if (b) job.hits++;
+      else {
+        b = await createImageBitmap(await this._fetch(GIBS.waterUrl(mp.L, t.row, t.col), job), { colorSpaceConversion: 'none', premultiplyAlpha: 'none' });
+        if (b.width !== GIBS.tilePx || b.height !== GIBS.tilePx) throw new Error(`water mask tile ${key} is ${b.width} x ${b.height}`);
+        this.nightCache.set(key, b);
+      }
+      bmp.set(key, b);
+    });
+    const c = new OffscreenCanvas(mp.w, mp.h), g = c.getContext('2d', { willReadFrequently: true, colorSpace: 'srgb' });
+    g.imageSmoothingEnabled = false;
+    for (const t of mp.tiles) g.drawImage(bmp.get(`w/${mp.L}/${t.row}/${t.col}`), t.dx, t.dy);
+    const px = g.getImageData(0, 0, mp.w, mp.h).data;                     // water is opaque, land transparent
+    return { d: sampleMask(px, mp, W, e.w, e.h), cell: Math.max(1, mp.texelDeg / e.texelDeg[1]) };
+  }
+
+  /** Run the rule in the worker; on this thread if there is no worker to be had. Resolves {d, waterC}. */
+  _rule(g) {
+    if (this._worker === undefined) {
+      try {
+        const u = new URL('./water.worker.js', import.meta.url); u.search = new URL(import.meta.url).search;   // the build's code stamp, if any
+        this._worker = new Worker(u, { type: 'module' });
+        this._calls = new Map(); this._callId = 0;
+        this._worker.onmessage = (ev) => { const c = this._calls.get(ev.data.id); if (!c) return; this._calls.delete(ev.data.id); if (ev.data.error) c.reject(new Error(ev.data.error)); else c.resolve(ev.data); };
+        this._worker.onerror = () => { const cs = [...this._calls.values()]; this._calls.clear(); this._worker = null; for (const c of cs) c.reject(new Error('the water worker failed')); };
+      } catch (e) { this._worker = null; }
+    }
+    if (!this._worker) return Promise.resolve(runRule(g));
+    return new Promise((resolve, reject) => {
+      const id = ++this._callId;
+      this._calls.set(id, { resolve, reject });
+      this._worker.postMessage({ id, g });                                 // copied, not transferred: the elevation grid is still wanted here
+    }).catch(() => runRule(g));
+  }
+
+  /** The water flag for a window: the picture drawn down onto the elevation's grid, the shipped water fraction on it, and the rule. */
+  async _flag(plan, grid, mask, canvas) {
+    const e = plan.elev, W = plan.win, tm = [performance.now()];
+    let rgba = null;
+    if (canvas) {
+      const c = new OffscreenCanvas(e.w, e.h), g = c.getContext('2d', { alpha: false, willReadFrequently: true, colorSpace: 'srgb' });
+      g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high';
+      g.drawImage(canvas, 0, 0, canvas.width, canvas.height, 0, 0, e.w, e.h);
+      rgba = g.getImageData(0, 0, e.w, e.h).data;
+    }
+    tm.push(performance.now());
+    let ship = null;
+    if (grid.shipWater) {
+      ship = new Float32Array(e.w * e.h);
+      const dLon = W.lonSpan / e.w, dLat = W.latSpan / e.h;
+      // the shipped field is 5 km: sampled every few texels and repeated, it is the same field
+      const st = Math.max(1, Math.floor(1.2 / (e.texelDeg[1] * KM_PER_DEG)));
+      for (let j = 0; j < e.h; j += st) for (let i = 0; i < e.w; i += st) {
+        const v = grid.shipWater(W.west + (Math.min(e.w - 1, i + (st >> 1)) + 0.5) * dLon, W.north - (Math.min(e.h - 1, j + (st >> 1)) + 0.5) * dLat);
+        for (let jj = j; jj < Math.min(e.h, j + st); jj++) ship.fill(v, jj * e.w + i, jj * e.w + Math.min(e.w, i + st));
+      }
+    }
+    tm.push(performance.now());
+    const midLat = W.north - W.latSpan / 2;
+    const r = await this._rule({ w: e.w, h: e.h, rgba, elev: grid.data, mask: mask.d, ship, cell: mask.cell,
+      mx: e.texelDeg[0] * KM_PER_DEG * 1000 * Math.max(0.05, Math.cos(midLat * D2R)), my: e.texelDeg[1] * KM_PER_DEG * 1000 });
+    tm.push(performance.now());
+    return { d: r.d, waterC: r.waterC, ms: { draw: Math.round(tm[1] - tm[0]), ship: Math.round(tm[2] - tm[1]), rule: Math.round(tm[3] - tm[2]), worker: !!this._worker } };
   }
 
   /**
@@ -729,10 +852,10 @@ export class Detail {
 
   /** The shader's uniforms for this instant. With the layer off, or nothing loaded, both weights are 0. */
   uniforms(now) {
-    const u = { uDetAlb: UNIT.detAlb, uDetElev: UNIT.detElev, uDetWin: [0, 0, 1, 1], uDetAlbW: 0, uDetElevW: 0, uDetNightW: 0, uDetS2: 0, uDetAlbLod: 0, uDetElevPx: [1, 1], uDetElevM: [1000, 1000] };
+    const u = { uDetAlb: UNIT.detAlb, uDetElev: UNIT.detElev, uDetWin: [0, 0, 1, 1], uDetAlbW: 0, uDetElevW: 0, uDetNightW: 0, uDetWaterW: 0, uDetWaterC: [0.10, 0.15, 0.20], uDetS2: 0, uDetAlbLod: 0, uDetElevPx: [1, 1], uDetElevM: [1000, 1000] };
     const c = this.cur;
     if (!this.enabled || !c) return u;
     const wgt = (l) => { if (!l) return 0; const x = Math.max(0, Math.min(1, (now - l.at) / FADE_MS)); return x * x * (3 - 2 * x); };
-    return { ...u, ...windowUniforms(c.plan), uDetAlbW: wgt(c.alb), uDetElevW: wgt(c.elev), uDetNightW: c.alb && c.alb.night ? wgt(c.alb) : 0 };
+    return { ...u, ...windowUniforms(c.plan), uDetAlbW: wgt(c.alb), uDetElevW: wgt(c.elev), uDetNightW: c.alb && c.alb.night ? wgt(c.alb) : 0, uDetWaterW: c.elev && c.elev.water ? wgt(c.elev) : 0, uDetWaterC: (c.elev && c.elev.waterC) || u.uDetWaterC };
   }
 }

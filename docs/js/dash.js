@@ -2,8 +2,8 @@
 // already shows - the population field under the terminator, the ice field over the sea -
 // so the panel cannot disagree with the globe.
 
-import { D2R } from './astro.js?v=20261111T203826Z';
-import { R_KM } from './camera.js?v=20261111T203826Z';
+import { D2R } from './astro.js?v=20261111T235202Z';
+import { R_KM } from './camera.js?v=20261111T235202Z';
 
 /** People in daylight / twilight / night, and in waking hours, from 1-degree population counts. */
 export function peopleBySun(pop1, sunNow) {

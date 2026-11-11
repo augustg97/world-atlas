@@ -24,6 +24,88 @@ IDs are referenced from code comments and commit messages. **Never recycle one.*
 | stale-data guard | `web/version.json` stamp on every fetch | a cached two-key `climate.json` had crashed the tracers once |
 | ephemeris check | `build/test_app_math.mjs` | Sun declination within 0.004° at the four 2026 seasonal instants |
 
+## APPLIED (eighth round, 2026-11-11)
+
+**A12, land or water close in: mostly DELIVERED.** Release 1.6. The owner asked for the round ("Yes, next round")
+and, during it, for one more thing: "French Guiana is labeled France - this should be labeled French Guiana".
+
+**What was looked for first: a fine water map on a host the page may already ask.** There is none.
+- NASA's MODIS mask (MOD44W, GIBS layer `MODIS_Water_Mask`, 250 m) has rivers and lakes down to its cell and is
+  grossly wrong in places: **it holds most of Manhattan as water.**
+- GIBS's `OSM_Land_Water_Map` is the sea only. Its 15 m `Coastlines` are lines, not a mask.
+- The terrain tiles' sign tells the sea, and polders and the Dead Sea shore are below it. Their flatness tells
+  nothing: Paris has no flat Seine in them and a fifth of New York is "flat".
+- The picture's colour alone, with one set of weights for the whole Earth, finds 0.15 of the Seine at best: a
+  park has a river's colour.
+
+**The witness.** JRC Global Surface Water v1.4 (Landsat, 30 m, 1984-2021; water = water at least half the time),
+at 23 places chosen before any rule was scored. Measure-against only: `reference/gsw`, `reference/closewater`,
+never shipped, its host never asked by the page. Recorded in SOURCE-SURVEY.
+
+**The rule** (`web/js/water.js :: waterFlag`; the comment there is the full account). The mask says roughly
+where, the picture says exactly where: each window learns its own water's colours from the mask's water and its
+land's colours from ground clear of the mask, and a texel is water if its colour is likelier water than land by
+more than its distance from the mask argues against. Two things had to be added, both found by looking at
+Manhattan:
+- *The mask is not believed where it has far more water than the shipped field over 8 km* (a fifth to two
+  fifths more). There it stops counting as a vote and as a place to learn colours from. The Hudson is water for
+  its colour, learned from the bay; the island is land.
+- *Where the mask is doubted, water must be a body*: most texels within 55 m water too. The shadow between two
+  towers has a river's colour.
+
+| at 23 places, 19 m a texel | wrong texels | water found and right (IoU) |
+|---|---|---|
+| the shipped 5 km field (release 1.5) | 10.2% | 0.39 |
+| NASA's 250 m mask alone | 4.48% | 0.66 |
+| the rule | **2.50%** | **0.75** |
+
+By texel size (the picture pooled, as a wider view streams it): 2.50, 2.50, 2.57, 2.83, 2.82% at 19, 76, 152,
+304, 494 m. Worse than the mask alone at one place and size (Venice's tidal flats at 494 m: 6.1% against 5.3%).
+Manhattan: land called water 1.6% of the box at 19 m (the mask: 15%), 2.1% at the worst size. The per-place
+table is `REGISTER-closewater.md`. The first guess's six weights were fitted to these places; with each half
+scored by the other half's weights the result was 2.80% against 2.77% with all, so the number does not rest on
+the fit.
+
+**Three things tried and dropped, each measured:** local texture in the first guess (fixes Manhattan at 19 m,
+2.46%, and with 19 m weights makes 16 places worse than the mask at 300 m); learning the window's water level
+from its elevations (2.79 to 2.66% at 76 m, Manhattan unchanged); taking the land's colours out of the mask's
+water before learning (Manhattan 8.9 to 4.7%, nothing above 300 m).
+
+**In the app.** A fourth fetch per window (the mask, at the level matching the elevation grid, at most 64
+tiles). The flag rides in the elevation texture's third channel (16 units are full). The rule runs in a worker
+(`water.worker.js`): its first run in a session takes 0.7 s cold, 0.1 to 0.2 s after. The shader takes land or
+water from the flag inside the window; water it finds takes the picture's own colour (all of it under
+Sentinel-2; under Blue Marble the water the shipped field did not have); city light does not fall on it close in.
+
+**The coastal tint, answered the same round.** The 5 km ratio was unusable near the sea because both 5 km means
+held sea: Blue Marble's ocean fill in one, the photographed sea in the other. Both colours are now known (the
+fill's median over open ocean is (0, 3, 12) of 255; the window's mean water colour is counted when the flag is
+made) and are taken out by the shipped share of water, which then cancels: land over land, the same rule as
+inland, to the shore. The coarse brightness-only join remains only where a cell is over 60 to 85% sea.
+
+**Looked at** (day, and Manhattan at night): Manhattan and its harbour, Los Angeles's port, Cairo, Lake Geneva's
+east end, Venice, Amsterdam at 76 m, New York at 0.3 km and at 1 km a pixel. Rivers and basins are water with a
+sharp shore; the land is one tint across each view; the lagoon keeps its green shallows; polders are land.
+
+**French Guiana (F1).** Natural Earth's 1:50m countries hold France as one unit, the five overseas departments
+included, so the name placed on Guiana was France's. `build/units.py` takes French Guiana, Guadeloupe,
+Martinique, Reunion and Mayotte from Natural Earth's map-units file as units of their own (name, population,
+label rank, "Overseas department of France", sovereignty France) and removes their polygons from France. 247
+units; every reader of the country file goes through it (`vectors.py`, `fields_human.py`, `audit_labels.py`),
+because a unit's id is its index. Towns there belong to their department. France's own figures (World Bank)
+include them and its card is unchanged.
+
+**Not done, and known:**
+- Rivers the mask lacks stay land: the Seine in Paris (0.13 found), the Saone and Rhone at Lyon, the Po, Dhaka's
+  rivers. A 30 m water record streamed as tiles would find them: **A15, the owner's call** (a new host).
+- Tower shadows read as water in midtown Manhattan (a few blobs). Tidal flats, salt pans and a fallen reservoir
+  (Lake Mead) are counted against the rule where it follows the 2016 picture.
+- The Blue Marble windows (0.5 km and coarser) are not scored: the audit's coarse grids are Sentinel-2's
+  colours pooled. Looked at only (New York at 1 km).
+- The audit builds its own grids from the same tiles; the app's compositor and the browser's downscale are not
+  in it.
+- The yellow cast of the close-in picture is now uniform, and plainer for it: A13.
+
 ## APPLIED (seventh round, 2026-11-11)
 
 Scope, the owner's: Sentinel-2 cloudless (EOX, CC BY 4.0) as a streamed source for ground finer than 0.5 km (A11).
@@ -629,9 +711,10 @@ texture is a magnified photograph, and vegetated land still reads darker than EP
 | A9 | P3 | **The outermost ring of the disc is 5-10 levels too bright and too green** (cos 0.1-0.2: atlas 85, 94, 100; EPIC 80, 84, 95). Rayleigh scattering saturates there in the model as in a plane atmosphere; the real loss is probably ozone, which EPIC's product does not show elsewhere on the disc, so it was not added. Would need a spherical-shell treatment of the last 2% of the radius | shader air block | EPIC |
 | A10 | P3 | **Mostly DELIVERED 2026-11-10 (sixth round): wide rivers are water.** MODIS water (MOD44W) along Natural Earth's 1:10m river lines; nine wide reaches are drawn for 87% of their length on average (under 1% before). **Open:** the Parana (50%) and the Congo (71%), whose channels between islands are narrower than half a cell; Canada's inland water is now above the lake inventory (0.76 against 0.66 M km2 in lakes), because the mask takes the larger of three sources cell by cell; the river check is not independent of MODIS, and a width dataset (GRWL, Allen & Pavelsky 2018, CC BY 4.0, a new host) would make it so | `fields_surface.rivers8`, `audit_water.reaches` | fourth round |
 | A11 | — | **DELIVERED 2026-11-11 (seventh round).** Sentinel-2 cloudless 2016 (EOX, CC BY 4.0; the owner approved the host) is streamed where the view wants a texel finer than 0.45 km, down to 19 m, and the zoom floor is 20 m a pixel | `detail.js` S2, `camera.MIN_KM_PER_PX` | sixth round |
-| A12 | P3 | **Close in, land and water are still the shipped 5 km field.** The colour is the picture's own, but within a few kilometres of a coast sea is partly shaded as land and land as sea; coastal land carries a different tint from the land behind it (the join goes coarse near water); lakes and rivers under 2.5 km are in the picture and are not water to the atlas. A fine water flag in the window (the terrain tiles' sign, guarded against polders and depressions) would answer most of it | `earth.frag.glsl` join, `detail.compositeElevation` | seventh round |
+| A12 | P3 | **Mostly DELIVERED 2026-11-11 (eighth round): close in, land and water are told apart texel by texel** (`water.js`), 2.5% of texels wrong at 23 places against 10.2% before; the coastal tint strip is gone with it. Open: rivers NASA's 250 m mask lacks stay land (see A15); tower shadows as water; tidal flats and reservoirs as the 2016 picture caught them; Blue Marble windows unscored; the audit's grids are not the app's compositor's | `water.js`, `detail.js _flag`, `earth.frag.glsl` join, `audit_closewater.py` | seventh round |
 | A13 | P3 | **Sentinel-2's colours go through a table fitted to Blue Marble** (`ALB_LUT`), and the picture is 2016 in one season: winter snow close in is the shipped field's 5 km patches over summer ground, and the Alps in January look it. A second table, or EOX's later mosaics (non-commercial licence: the owner's call), would be the routes | `earth.frag.glsl` albedoOf | seventh round |
 | A14 | P4 | Borders (Natural Earth 1:50m) and the coast outline are drawn for a view fifty times further out and are visibly coarse at 20 m a pixel; place names stop at Natural Earth's 1:10m populated places | `vectors.py`, `overlays.Labels` | seventh round |
+| A15 | P3 | **A 30 m water record as a streamed source.** JRC Global Surface Water (EC JRC/Google; free with attribution) is served as map tiles from Google's storage. It is this round's WITNESS, and as a source it would find what the rule cannot (the Seine: 0.13 found now) and end the guessing. It is a NEW HOST for the page: the owner's call. If taken, a different witness is needed (ESA WorldCover's water class, or OSM water polygons) | `detail.js _mask`, `water.js` | eighth round |
 
 ## B. Atmosphere
 
@@ -683,6 +766,7 @@ texture is a magnified photograph, and vegetated land still reads darker than EP
 | F11 | P4 | **Mostly answered 2026-11-11 by modelling.** Every 500 m night product on GIBS is at full scale across a metropolis, so the light's street pattern is taken from the daytime picture below about 300 m a pixel (amount measured, pattern modelled, labelled so). Between 300 m and 2 km a pixel a large city is still one even field of gold. Radiance with range exists (VNP46A4) behind an Earthdata login | `earth.frag.glsl` nightTex, ramp | sixth round |
 | F12 | P3 | Ship tracers run on lanes that are under ice in that month (the Kara Sea in February): the shipping field is one average year. Gate lane tracers on the month's ice | `particles.laneAccept`, `fields.climate` | sixth round |
 | F13 | P4 | Aircraft and tracer styling is by eye; nothing measures clutter. The ocean-current streaks are long white arcs at 3 to 5 km a pixel (seen off the Amazon's mouth) and may want the same treatment the aircraft got | `main.buildTracers` | sixth round |
+| F14 | P4 | Other far parts are still named for their state when the mainland is out of view: Svalbard and Jan Mayen (Norway), the Azores and Madeira (Portugal), the Caribbean Netherlands; Alaska and Hawaii, which Natural Earth does not hold as map units. `build/units.py` SPLIT is the one place to add them; whether to is a naming decision | `build/units.py` | eighth round |
 
 ## G. Engine, delivery and verification
 
@@ -695,15 +779,15 @@ texture is a magnified photograph, and vegetated land still reads darker than EP
 | G5 | P3 | **Mostly RESOLVED 2026-11-09.** Driven with real pointer and key events at 1440 x 900: drag turns the globe, wheel zooms both ways, G, A, space, N, / and Esc do what About says, a typed search flies to the place and opens its card (globe and sheet), both time sliders move the clock. One fault found and fixed (the fly-to clamp). **Still not done:** panel scrolling at small window sizes; satellites picked out by eye | `ui.js`, `main.js` | this session |
 | G6 | P3 | Headless Chromium under software GL loses its first WebGL context at boot nearly every time. The app now reloads itself (three tries) and the second boot renders; cause not investigated. A frozen frame takes about 18 s there **Seen again 2026-11-10 (fourth round):** one of about eight runs of the visual check timed out on `sheet-atlas` (the frame never reported ready in 240 s) inside `build_site.py`, and passed when run again at once with no change. The build refused, as it should; the cost is a five-minute re-run | `main.js` | this session |
 | G7 | — | **DELIVERED 2026-11-10 (sixth round).** `audit_gpu.py`: the six canonical frames on the machine's GPU (ANGLE Metal, 16 texture units) against the accepted software frames, worst 0.73 levels; and the lights-into-alpha write. The earth shader still uses 16 of 16 units: the next field that needs a sampler must share one (the streamed lights went into the imagery texture's alpha for that reason). The audit runs only where there is a GPU | `audit_gpu.py`, `fields.js` UNIT, `check_shaders.py` | fifth round |
-| G8 | P3 | The GPU audit covers the frozen frames and one GL path. The streamed window itself (tiles, fades, a failed fetch) is checked by hand on the live page, not by any audit: it needs the network | `audit_gpu.py`, `detail.js` | sixth round |
+| G8 | P3 | The GPU audit covers the frozen frames and one GL path. The streamed window itself (tiles, fades, a failed fetch) is checked by hand on the live page, not by any audit: it needs the network. Since the eighth round one part of it is audited offline, from fetched reference tiles: where its water is (`audit_closewater.py`). Its colours and its relief are not | `audit_gpu.py`, `detail.js` | sixth round |
 
 ---
 
-**Count: 46 items; none open at P1** (A11 delivered and F11 mostly answered in the seventh round, 2026-11-11; A12 to A14 added). In order:
+**Count: 48 items; none open at P1** (A12 mostly delivered in the eighth round, 2026-11-11; A15 and F14 added). In order:
 
-1. **B1** - bright cloud over the summer Southern Ocean; cumulus that lines up along the wind; a daily cycle for convective cloud over land; average the texture audit over several tile layouts.
-2. **A12** - a fine land/water flag inside the close-in window.
-3. **F2** - population by polygon.
-4. **A10** - what is left: the Parana and the Congo, Canada's part-water cells, an independent width dataset.
-5. **A13** - a colour table for Sentinel-2; winter close in.
-6. **F12** - no ships on ice-bound lanes. **F1** - the sixteen European states the sheet still cannot name.
+1. **A13** - a colour table for Sentinel-2. With the coast's tint gone the close-in picture is one colour across a view, and that colour is too yellow over a city: now the most visible fault close in. Winter close in.
+2. **B1** - bright cloud over the summer Southern Ocean; cumulus that lines up along the wind; a daily cycle for convective cloud over land; average the texture audit over several tile layouts.
+3. **A15** - the owner's call: a 30 m water record as a streamed source (a new host). Without it, A12's remainder stands.
+4. **F2** - population by polygon.
+5. **A10** - what is left: the Parana and the Congo, Canada's part-water cells, an independent width dataset.
+6. **F12** - no ships on ice-bound lanes. **F1** - the sixteen European states the sheet still cannot name. **F14** - far parts named for their state.

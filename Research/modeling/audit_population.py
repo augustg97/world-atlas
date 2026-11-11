@@ -6,6 +6,10 @@ web/data/stats.json (World Bank SP.POP.TOTL, most recent year), joined on the Wo
 app itself uses. GHSL is the 2025 epoch, so a few percent of drift from vintage alone is expected;
 the audit lists every unit of more than 100,000 people that is off by more than 10%.
 
+A unit the atlas names on its own but the Bank counts inside its state (French Guiana and France's other
+overseas departments: build/units.py) is added back to that state before the comparison. Without that the
+field's France is 2.2 million short of the Bank's and the total moved from 0.37% to 0.40% on a change of names.
+
     ./venv/bin/python Research/modeling/audit_population.py [--json] [--selftest]
 """
 import json, os, sys
@@ -26,7 +30,17 @@ def compare(field, witness, tol=TOL, floor=1e5):
     return rows, [r for r in rows if r[0] > tol]
 
 
+def with_parts(sums, split):
+    """The per-unit sums with every unit in `split` ({state: [parts]}) counted in its state as well."""
+    out = dict(sums)
+    for state, parts in split.items():
+        if state in out:
+            out[state] = out[state] + sum(sums.get(p, 0) for p in parts)
+    return out
+
+
 def selftest():
+    assert with_parts({"FRA": 10.0, "GUF": 1.0, "REU": 2.0, "DEU": 5.0}, {"FRA": ["GUF", "REU", "MYT"]}) == {"FRA": 13.0, "GUF": 1.0, "REU": 2.0, "DEU": 5.0}
     f = {"AAA": ("AAA", "A", 1.0e6), "BBB": ("BBB", "B", 2.5e6), "CCC": ("CCC", "tiny", 9e4), "DDD": ("XXX", "no witness", 5e6)}
     w = {"AAA": 1.02e6, "BBB": 2.0e6, "CCC": 5e4}
     rows, off = compare(f, w)
@@ -40,7 +54,9 @@ def main():
     cache = os.path.join(ROOT, "data", "_cache", "pop_by_country.json")
     if not os.path.exists(cache):
         raise SystemExit(f"cannot run: {cache} is missing. Rebuild it with ./venv/bin/python build/fields_human.py countries")
-    sums = json.load(open(cache))
+    sys.path.insert(0, os.path.join(ROOT, "build"))
+    from units import SPLIT
+    sums = with_parts(json.load(open(cache)), SPLIT)
     pol = json.load(open(os.path.join(ROOT, "web", "data", "political.json")))["countries"]
     stats = json.load(open(os.path.join(ROOT, "web", "data", "stats.json")))["by_code"]
     witness = {k: v["SP.POP.TOTL"][0] for k, v in stats.items() if v.get("SP.POP.TOTL")}

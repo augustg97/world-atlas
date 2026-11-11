@@ -21,6 +21,7 @@ import urllib.request
 import numpy as np
 
 import frames as F
+from units import admin_units, SPLIT
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA = os.path.join(HERE, "..", "data")
@@ -213,7 +214,7 @@ def sea_distances(all_polys, points):
 
 def step_political():
     print("political")
-    fc = ne("ne_50m_admin_0_countries")
+    fc = admin_units(DATA)                                           # French Guiana and its like are their own units (units.py)
     fc.sort(key=lambda f: f["properties"]["ADM0_A3"])
     from shapely.geometry import Point, shape
     countries, geoms = [], []
@@ -261,6 +262,8 @@ def step_political():
     assert by["VAT"]["area"] < 2 and by["CHE"]["abbr"] == "Switz." and by["USA"]["home"] and not by["GRL"]["home"]
     assert -125 < by["USA"]["lp"][0] < -67 and 25 < by["USA"]["lp"][1] < 49, by["USA"]["lp"]         # the conterminous states, not Alaska
     assert -5 < by["FRA"]["lp"][0] < 8 and 42 < by["FRA"]["lp"][1] < 51, by["FRA"]["lp"]               # France, not Guiana
+    assert by["GUF"]["name"] == "French Guiana" and by["GUF"]["sov"] == "France" and not by["GUF"]["home"] and -55 < by["GUF"]["lp"][0] < -51, by["GUF"]["lp"]
+    assert by["FRA"]["bbox"][0] > -6 and not by["FRA"]["pts"], (by["FRA"]["bbox"], by["FRA"]["pts"])                 # no part of France is left in America
     assert by["RUS"]["inner"][2][0] > 60, by["RUS"]["inner"]                                            # a name's box fits in Siberia
     assert 120 < by["CHE"]["sea"] < 350 and by["MNG"]["sea"] > 500 and by["NRU"]["sea"] < 10, (by["CHE"]["sea"], by["MNG"]["sea"], by["NRU"]["sea"])
     assert by["CHL"]["lp"][2] < 150 < by["BRA"]["lp"][2], (by["CHL"]["lp"], by["BRA"]["lp"])           # Chile is narrow, Brazil is not
@@ -302,10 +305,14 @@ def step_political():
 def step_places():
     print("places")
     rows = []
+    # a town in a unit taken out of its state (units.py) belongs to that unit: Cayenne is in French Guiana
+    own = {f["properties"]["ISO_A2_EH"]: f["properties"]["ADM0_A3"] for f in admin_units(DATA) if f["properties"]["ADM0_A3"] in sum(SPLIT.values(), [])}
     for f in ne("ne_10m_populated_places_simple"):
         p = f["properties"]
+        a3 = own.get(p.get("iso_a2"), p["adm0_a3"]) if p["adm0_a3"] in SPLIT else p["adm0_a3"]
         rows.append([p["name"], round(p["longitude"], 3), round(p["latitude"], 3), int(p["pop_max"] or 0), p["scalerank"],
-                     1 if p["adm0cap"] else 0, p["adm0_a3"], p["adm1name"] or "", p["namealt"] or "", 1 if p["megacity"] else 0])
+                     1 if p["adm0cap"] else 0, a3, p["adm1name"] or "", p["namealt"] or "", 1 if p["megacity"] else 0])
+    assert next(r for r in rows if r[0] == "Cayenne")[6] == "GUF" and next(r for r in rows if r[0] == "Paris")[6] == "FRA"
     rows.sort(key=lambda r: (r[4], -r[3]))
     dump("places.json", {"source": "Natural Earth 5.1.2 populated places (public domain)",
                          "columns": ["name", "lon", "lat", "pop_max", "scalerank", "capital", "a3", "adm1", "altname", "megacity"], "rows": rows})
@@ -441,7 +448,7 @@ def step_air():
     coarse = pop.reshape(H // 4, 4, W // 4, 4).sum(axis=(1, 3))      # 1024 x 512 cells of 0.35 deg
     stats = json.load(open(os.path.join(OUT, "stats.json")))["by_code"]
     iso2to3 = {}
-    for f in ne("ne_50m_admin_0_countries"):                          # sovereign states win a shared ISO-2 code
+    for f in admin_units(DATA):                                       # sovereign states win a shared ISO-2 code
         pr = f["properties"]
         if pr["ISO_A2_EH"] not in iso2to3 or pr["TYPE"] in ("Sovereign country", "Country"):
             iso2to3[pr["ISO_A2_EH"]] = pr["ADM0_A3"]
