@@ -17,8 +17,8 @@ Paste this whole file as the first message of a new session.
 
 ## The current task
 
-Kickoff, the first build, a verify round and nine build rounds are done, and the atlas is published. The
-contract is `SCOPE.md`; the open work is `Research/MODEL-GAPS.md` (50 items, none at P1). Against NASA's
+Kickoff, the first build, a verify round and ten build rounds are done, and the atlas is published. The
+contract is `SCOPE.md`; the open work is `Research/MODEL-GAPS.md` (57 items, none at P1). Against NASA's
 photographs the Space register is **close, with named exceptions**. Cloud close in now takes its fine
 structure from real cloud and reads as a satellite photograph; it is not the cloud of the place, and it is
 wrong in measured ways over the Amazon, the trades and the Congo (B1). The whole-Earth sheet carries a Europe
@@ -37,6 +37,12 @@ let's find a way to improve the loading time when zooming in"): Sentinel-2 is re
 close in is grey (A13 delivered: 5% off grey where it was 48%); land and water close in are JRC Global Surface
 Water's record, streamed (A15 delivered: 2.2% wrong against a NEW witness, ESA WorldCover); and a view arrives in
 two passes, the first in 0.3-1.3 s, the full one painted in from the middle of the screen.
+Since the tenth round (release 1.8, the owner's five asks: clouds, seasons, a description on every card, better
+cities with roads and buildings, and a night that shows a city as it is): the zoom floor is 5 m a pixel with
+OpenStreetMap's streets and buildings drawn over Sentinel-2 (F15); at night the measured light sits along the
+streets as lamps (F11); the month's colour reaches the close view whole (A16: 0.4% short at 23 places, 39% before);
+the Southern Ocean's sheets are weather and cumulus lies along the wind (B1, two parts); and every place's card
+opens with its Wikipedia article's lead, fetched live, and the atlas's own year at the place (F8).
 
 ## Reference material and the measurement harness
 
@@ -72,7 +78,7 @@ The comparison is only meaningful at **matched scale**. All of this exists; reus
 
 ## State right now
 
-- Last live deploy: **2026-11-11**, release 1.7 (Sentinel-2's own colour table; JRC water streamed; two-pass loading); the stamps are in `docs/version.json` and must match the live `version.json`
+- Last live deploy: **2026-11-11**, release 1.8 (streets and buildings to 5 m; night light along the streets; the season close in; clouds; a description on every card); the stamps are in `docs/version.json` and must match the live `version.json`
 - Branch `main` is what is published; `verify-round` was merged into it at release 1.0
 - `data/` holds about 3.6 GB of sources and caches (gitignored); `python build/fetch_sources.py` rebuilds it,
   including 438 MB of NSIDC grids and 581 MB of ISCCP. Three reference sets live under `reference/`
@@ -81,7 +87,7 @@ The comparison is only meaningful at **matched scale**. All of this exists; reus
   records (`fetch_sources.py lakeice`); `data/hydrolakes/` lake depths (`fetch_sources.py hydrolakes`, then
   unzip it there); `data/ne/` now also Natural Earth's 1:10m land, lakes and river centrelines;
   `data/modiswater/` NASA's MODIS water mask in 128 pieces (`fetch_sources.py modiswater`, 20 MB).
-- `./venv/bin/python Research/modeling/audit_all.py` passes: sixteen checks, about 7 min. `gpu` needs this
+- `./venv/bin/python Research/modeling/audit_all.py` passes: nineteen checks, about 10 min (`streets`, `cloud-light` and `card-text` are new; a second checkout runs it with `ATLAS_PORT`). `gpu` needs this
   machine's GPU and exits 3 without one. `close-water` needs `reference/closewater` (23 places) and `reference/gsw`
   (eight 10-degree files of JRC, 410 MB) from `closewater_fetch.py`, the record's TILES per place from
   `closewater_fetch.py --jrc`, and the witness from `closewater_witness.py` (ESA WorldCover by range requests,
@@ -151,6 +157,18 @@ Clouds (a helper session, branch `clouds-b1`, merged):
     pieces are five times a street's cells. A real street scene in a spare grain channel is next.
 18. **The audits hard-coded port 8150**, so a second checkout's audit would have rendered the first's page.
     They read `ATLAS_PORT` now.
+
+Card text (a helper session in this checkout):
+
+19. **Natural Earth's Wikidata ids are wrong often enough to need an audit**: 54 of them point somewhere else
+    (San Lorenzo 10,481 km away; Pyongsan at Pyongyang). Distance from the item's own coordinate, scaled by the
+    thing's size, catches them; 795 items have no coordinate and are checked by their article's.
+20. **A match by name inside a big thing's limit can still be wrong.** The Sahel matched "Sahel, Tunisia", 2,300 km
+    off and inside the Sahel's own 5,200 km. By-name matches are held to 350 km or the exact title.
+21. **The description made the climate fields visible, and they are coarse.** Lima reads as steppe with 520 mm of
+    rain. Nothing scores those fields (B2), and now every card prints them.
+22. **Wikimedia holds a client with no contact address to ten requests a minute.** The title build is two hours
+    cold and instant warm (`data/_cache/wiki`).
 
 ## What the ninth round found (2026-11-11)
 
@@ -372,18 +390,21 @@ Plus the standing ones:
 
 ## The work queue
 
-1. **B1** - bright cloud over the summer Southern Ocean; cumulus along the wind; a daily cycle for convective
-   cloud over land; the land-cumulus share from data, not one fitted number.
-2. **A16** - the season close in at full strength: a reference month per place for Sentinel-2 (a coarse table of
-   Blue Marble at the picture's own season, sampled per window into uniforms), so the month's colour change can
-   be told from the two cameras' standing difference. Today it is applied at half strength, by eye.
-3. **A17** - water that has moved: Lake Mead, the Dead Sea. JRC's `seasonality` or `transitions` tiles would say
+1. **B2** - a witness for the climate fields (station normals or ERA5 monthly means, measure-against only).
+   Every location card now prints them month by month and classes the climate from them; Lima reads as steppe.
+2. **B1** - what is left: a real cloud-street scene in a spare grain channel (the trades lean with the wind and
+   are not streets); the Southern Ocean belt's level in December (5-12% under EPIC); a daily cycle for convective
+   cloud over land; `LAND_CU_SHARE` from data (not refitted after the exact cross-fade).
+3. **F16** - make the street lamps' light add up to Black Marble's amount in each 500 m; and the step in
+   brightness between the street view and the gold field further out (F11).
+4. **A19** - a measure for the thinned air and raised contrast close in, which are by eye. **A20** - unequal
+   texels, so the close grid is 2.4 m at high latitude too. **A21** - look at the 5 m floor in motion.
+5. **A17** - water that has moved: Lake Mead, the Dead Sea. JRC's `seasonality` or `transitions` tiles would say
    where the record itself is in doubt; there the picture could decide. **A12**'s remainder with it.
-4. **C4, C5** - small lakes' depths, part-frozen great lakes, Issyk-Kul; river ice scored against river records.
-5. **F2** - population by polygon, not by the country raster.
-6. **A10** - the Parana and the Congo; Canada's part-water cells; a width dataset as an independent witness.
-7. **F12** - no ships on ice-bound lanes. **F1** - what the label round left open. **F14** - Svalbard, the
-   Azores and their like are still named for their states.
+6. **F7** - whether Wikipedia's opening belongs on dispute cards is the owner's call (asked in the tenth round's
+   report). **F8** - 855 cards without an article; a click on a river line.
+7. **C4, C5** - small lakes' depths, part-frozen great lakes, Issyk-Kul; river ice scored against river records.
+8. **F2** - population by polygon. **A10** - the Parana and the Congo. **F12**, **F1**, **F14** as before.
 
 **If you touch the light model** (`earth.frag.glsl`, Space branch): the order is `epic_anchors.py` (refit
 exposure and gamma), then `land_transfer.py --fit` (refit the albedo table, paste the printed line), then

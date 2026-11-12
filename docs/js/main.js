@@ -3,21 +3,21 @@
 // The substrate is drawn into a cache whenever state or camera changes; things that move
 // (tracers, aircraft, satellites, pulses) are drawn over it every frame.
 
-import { Camera, R_KM } from './camera.js?v=20261112T020725Z';
-import { Fields, UNIT } from './fields.js?v=20261112T020725Z';
-import { Earth, LENSES } from './earth.js?v=20261112T020725Z';
-import { Detail } from './detail.js?v=20261112T020725Z';
-import { sun, moon, monthState, seasonName, D2R } from './astro.js?v=20261112T020725Z';
-import { program, setUniforms, texFromImage, loadVersion } from './gl.js?v=20261112T020725Z';
-import { LineBatch, PointBatch, Labels, segmentsFromLines, deq, graticule, parallels } from './overlays.js?v=20261112T020725Z';
-import { FlowTracers, Flights, makeSamplers, seedRandom } from './particles.js?v=20261112T020725Z';
-import { SYSTEMS, LAYERS, paletteCanvas, FUEL_COLORS } from './catalog.js?v=20261112T020725Z';
-import { Data } from './data.js?v=20261112T020725Z';
-import { INSETS, Inset, insetAlpha, INSET_PAD } from './insets.js?v=20261112T020725Z';
-import { Live, HOUR, DAY } from './live.js?v=20261112T020725Z';
-import { UI, SPEEDS } from './ui.js?v=20261112T020725Z';
-import * as Cards from './cards.js?v=20261112T020725Z';
-import { peopleBySun, iceExtents, meanTemps, mixMonth } from './dash.js?v=20261112T020725Z';
+import { Camera, R_KM } from './camera.js?v=20261112T060955Z';
+import { Fields, UNIT } from './fields.js?v=20261112T060955Z';
+import { Earth, LENSES } from './earth.js?v=20261112T060955Z';
+import { Detail } from './detail.js?v=20261112T060955Z';
+import { sun, moon, monthState, seasonName, D2R } from './astro.js?v=20261112T060955Z';
+import { program, setUniforms, texFromImage, loadVersion } from './gl.js?v=20261112T060955Z';
+import { LineBatch, PointBatch, Labels, segmentsFromLines, deq, graticule, parallels } from './overlays.js?v=20261112T060955Z';
+import { FlowTracers, Flights, makeSamplers, seedRandom } from './particles.js?v=20261112T060955Z';
+import { SYSTEMS, LAYERS, paletteCanvas, FUEL_COLORS } from './catalog.js?v=20261112T060955Z';
+import { Data } from './data.js?v=20261112T060955Z';
+import { INSETS, Inset, insetAlpha, INSET_PAD } from './insets.js?v=20261112T060955Z';
+import { Live, HOUR, DAY } from './live.js?v=20261112T060955Z';
+import { UI, SPEEDS } from './ui.js?v=20261112T060955Z';
+import * as Cards from './cards.js?v=20261112T060955Z';
+import { peopleBySun, iceExtents, meanTemps, mixMonth } from './dash.js?v=20261112T060955Z';
 
 const canvas = document.getElementById('gl');
 const gl = canvas.getContext('webgl2', { antialias: false, alpha: false, powerPreference: 'high-performance', preserveDrawingBuffer: true });
@@ -529,7 +529,8 @@ function saveHash() {
   hashTimer = setTimeout(() => {
     const c = cam.center(), p = new URLSearchParams();
     if (state.clock !== 'live') p.set('t', new Date(state.t).toISOString().slice(0, 16) + 'Z');
-    p.set('v', cam.view); p.set('s', state.style); p.set('ll', `${c[0].toFixed(2)},${c[1].toFixed(2)}`); p.set('km', cam.kmPerPx().toFixed(2));
+    p.set('v', cam.view); p.set('s', state.style); const kk = cam.kmPerPx(), dp = kk < 0.5 ? 4 : 2;                      // close in, a hundredth of a degree is a kilometre: a link must come back to the same street
+    p.set('ll', `${c[0].toFixed(dp)},${c[1].toFixed(dp)}`); p.set('km', kk.toFixed(kk < 0.5 ? 3 : 2));
     if (state.lens !== 'none') p.set('lens', state.lens);
     p.set('on', Object.keys(state.layers).filter((k) => state.layers[k]).join(','));
     history.replaceState(null, '', '#' + p.toString().replace(/%2C/g, ',').replace(/%3A/g, ':'));

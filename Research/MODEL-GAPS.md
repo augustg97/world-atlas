@@ -153,6 +153,47 @@ trades' at 8.5.
   view angle in the storm belts and the tropics.
 - NOT STARTED: the daily cycle over land and `LAND_CU_SHARE` from data.
 
+**F8 and F7, a description on every card: DELIVERED, by a helper session in this checkout, read and kept.**
+
+The owner chose "Wikipedia, live": when a place's card opens the page asks `en.wikipedia.org` for the opening of
+its article and shows it, credited and linked, CC BY-SA 4.0. No Wikipedia text is in the tree. What IS in the tree
+is which article belongs to which card: `web/data/wiki.json` (0.5 MB of titles and Wikidata ids), made by
+`build/wiki_titles.py` from Natural Earth's own Wikidata ids and checked by `audit_cardtext.py`.
+
+| kind | cards | with an article | by which route |
+|---|---|---|---|
+| city | 7,342 | 7,094 (96.6%) | Natural Earth's id 7,069; by name 20; GeoNames id 5 |
+| country | 247 | 247 | Natural Earth's id |
+| dispute | 27 | 22 | Natural Earth's id |
+| feature (seas, ranges, regions) | 640 | 593 (92.7%) | id 573; by name 20 |
+| peak | 81 named | 68 | id 62; by name 6 |
+| river (a new card) | 449 reaches | 400 (89.1%) | id 393; by name 7 |
+| volcano | 1,609 | 1,116 (69.4%) | Smithsonian volcano number |
+| all | 10,395 | 9,540 (91.8%) | |
+
+- **The audit earns its place: 185 of Natural Earth's ids were refused**, 54 of them because the item is somewhere
+  else. San Lorenzo's pointed 10,481 km away; Betanzos (Bolivia) at Spain's; Pyongsan at Pyongyang; the Cordillera
+  Oriental and Occidental swapped between Peru and Colombia. Each mapped item's own coordinate (or, for 795 with
+  none, its article's) must lie within a stated distance of the card, scaled by the thing's size. Shipped table: 0
+  misplaced, 0 disambiguation pages, 0 dead titles. One wrong match was caught by reading, not by distance: the
+  Sahel had matched "Sahel, Tunisia" by name; by-name matches are now held to 350 km or the card's exact title.
+- **Every location card also has "Through the year"**, the atlas's own and needing no network: twelve monthly
+  means of temperature and precipitation at the place from the shipped fields, a chart, three sentences written by
+  rule, day length, and the Köppen-Geiger class by Peel et al.'s rule, badged modelled (`web/js/climate.js`).
+- The text is untrusted and is only ever set as text; the request carries the article's title and nothing else
+  (no cookie, no referrer). With the host blocked the card says so in one line and is otherwise whole.
+- **Not right, and on every card now:** the climate fields are coarse (temperature 200 km, precipitation 250 km)
+  and have no witness (B2). Lima's card says 520 mm of precipitation a year and class BSh; Lima is a desert.
+  Continental winters read cold from memory (Beijing -8 C in January; its normal is nearer -3). The block says the
+  scale it is a mean over; that does not make Lima right. B2 is raised to the top of the queue.
+- A dispute's card carries Wikipedia's opening too, which may say whose the ground is (Crimea's does). A note
+  under it says the atlas's own statement is the Status section. The owner may prefer no Wikipedia text there.
+- 855 cards have no article (493 volcanoes, 248 cities), each with its reason in `REGISTER-cardtext.md`. Kuta
+  shares Denpasar's article by Natural Earth's id (8 km apart: distance cannot catch it).
+- The build asks Wikidata and Wikipedia with a generic client name, which Wikimedia holds to ten requests a
+  minute: two hours from a cold cache, nothing from a warm one. A contact address would make it minutes; that is
+  the owner's call and was not made for them.
+
 **A19, the air thinned close in: APPLIED, by eye (new item).** From 125 m a device pixel inwards four fifths of the
 air's own light is taken out and the picture's contrast is raised about a middle grey (`AIR_CUT`, `S2_FLOOR`,
 `S2_LIFT`, `S2_CONTRAST`). At 5 m a pixel a city seen through the whole atmosphere was a grey sheet; Sentinel-2's
@@ -924,7 +965,7 @@ texture is a magnified photograph, and vegetated land still reads darker than EP
 | # | P | item | touches | from |
 |---|---|---|---|---|
 | B1 | P2 | **Clouds: amount and brightness from observation; fine structure from real cloud since 2026-11-10 (third round).** Three kinds (photograph for fronts and storms, sheets, broken low cloud), amount and light from ISCCP (2007-2016), and closer than 10 km a pixel the shape is cut from three VIIRS scenes' ordering fields (`build/cloud_grain.py`), scored against fifteen other VIIRS scenes (`cloud_texture.py`; tables in APPLIED). Open, in order of what the pairs and the numbers show: (1) the Amazon in the dry season is fine cumulus everywhere; since the fifth round the atlas has a land-cumulus grain and draws a fifth of wet-land cloud light as cumulus fields (`LAND_CU_SHARE`, fitted to four EPIC forest medians, one of which it makes worse), and still has too few small clouds and clusters too bright (size spectrum 0.45 against a floor of 0.39); the share should come from a cloud-type climatology that resolves small cumulus, not from one fitted number; two grain channels are spare (`cloudgrain2.jpg` G, B); (2) the trades' brightest tenth is 0.45 against 0.23; **since the tenth round cumulus is read along the monthly-mean wind** (`streetAt`: 11.6 degrees off the wind over the scored scenes, 36.8 before; sizes 0.122 to 0.040, direction 0.078 to 0.021), but the grain's pieces are 10 to 30 km and real streets are rows of 2 to 5 km cells, so the trades lean and are not yet streets to the eye: a real street scene in one of the two spare grain channels is the next step (the texture audit also carries about 0.05 of noise per scene from which part of a tile falls on it, and should average several layouts); (3) Congo carries 0.14 too much light and twice the bright cover (0.47 against 0.22): ISCCP's April mean against three afternoons, and no daily cycle in the photograph regime; (4) **the summer Southern Ocean, since the tenth round**: a middling sheet share is weather and its light goes to the photograph's systems (`sheetLight`, `deckShare`), and only heaped cloud closes its gaps at a slant (`heapedF`, `CLOUD_OPP_FLAT`, one fitted number); 40-65 S in December has EPIC's spread (38 and 41 levels against 41.9 and 40.9; 31 before) and white share 17 and 21% against 23 and 22% (15 and 18 before), but its LEVEL is still 5-12% under EPIC (128 and 124 against 132 and 138), a residual slope with Sun height; the storm belts still rise toward the limb in the north (1.18 at view cosines 0.3-0.5); decks are a flat slab from far off and the Californian one has a harder outline than before; close in, layered cloud is cut into pieces as heaped cloud is; (5) one scene stands for each kind everywhere and repeats every 2048 km; (6) no towers, no cloud shadows at an offset, no clearings along rivers and coasts; (7) sheet share under a fifth of the sky is not drawn; (8) positions are still one 2002 photograph carried on a monthly-mean wind; (9) the Sun-side brightening is pinned at two angles only; (10) between 4 and 11 km a pixel the grain fades into the 10 km photograph and the view is soft; (11) ISCCP shows a faint ring at the GOES-West sub-satellite point; (12) NOT STARTED in the tenth round: a daily cycle for convective cloud over land, and `LAND_CU_SHARE` from data (it now sits 2.0 further from the four forest medians in total, 51.7 to 53.7, because the exact cross-fade it is drawn through changed and it was not refitted) | `cloudAt()`, `pieces()`, `grainAt()`, `deckAt()`, `cumulusAt()`, `build/cloud_grain.py` | interview |
-| B2 | P2 | No independent witness for wind, temperature, pressure or precipitation. Score the shipped means against ERA5 monthly means (measure-against only) | new `Research/modeling/audit_climate.py` | SOURCE-SURVEY §5 |
+| B2 | P2 | **TOP OF THE QUEUE since the tenth round: every location card now prints these fields month by month and classes the climate from them** (Lima: 520 mm a year, BSh; continental winters cold by several degrees from memory). No independent witness for wind, temperature, pressure or precipitation. Score the shipped means against ERA5 monthly means (measure-against only) | new `Research/modeling/audit_climate.py` | SOURCE-SURVEY §5 |
 | B3 | P2 | The daily temperature cycle is a three-parameter model with no check. Compare its range against a station or reanalysis diurnal-range climatology | `airTemp()` in shader and `cards.js` | SCOPE §4 |
 | B4 | P3 | The lapse-rate correction is a constant 6.5 K/km; winter inversions over ice sheets and basins are wrong in sign | same | SOURCE-SURVEY |
 | B5 | P3 | Cloud drift is sped up 2.5× and cloud shadows use an exaggerated height. Both are stated in About; neither is measured | `earth.frag.glsl` | About panel |
@@ -962,8 +1003,8 @@ texture is a magnified photograph, and vegetated land still reads darker than EP
 | F4 | P2 | Endonyms exist for 50 of 242 units (those whose main language Natural Earth translates). The rest show English only | `vectors.ENDONYM_LANG` | SCOPE §6 |
 | F5 | P2 | No electricity-demand field although SCOPE's layer table lists a demand wave; only the people-awake indicator exists | `dash.js` | SCOPE §4 |
 | F6 | P3 | A straight amber lane lies along ~3°N across the eastern Pacific. It is in the AIS data; it may be a real Panama–Asia track or a latitude artefact. Inspect the full-resolution source | `fields_human.step_ships` | visual review |
-| F7 | P3 | Dispute cards carry Natural Earth's one-line notes only | `cards.disputeCard` | card contract |
-| F8 | P3 | Feature, volcano and power-station cards are generic tier; no curated text exists for any physical feature | `cards.js` | card contract |
+| F7 | P3 | Dispute cards carry Natural Earth's one-line notes, and since the tenth round the opening of the Wikipedia article (22 of 27), with a note that the atlas's own statement is the Status section. Wikipedia's opening may say whose the ground is; whether it belongs on these cards is the owner's call. No curated account of each claim exists | `cards.disputeCard`, `wiki.js` | card contract |
+| F8 | — | **DELIVERED 2026-11-11 (tenth round)** for places: city, country, feature, peak, river (a new card), dispute and volcano cards open with the article's lead from English Wikipedia, live (9,540 of 10,395 matched; table in APPLIED), and carry the atlas's own year at the place. Power-station and airport cards are still generic. Open: 855 cards without an article; no direct click on a river line (the probe links to it); the card is long (Tokyo 1,790 px) | `cards.js`, `wiki.js`, `climate.js`, `build/wiki_titles.py`, `audit_cardtext.py` | card contract |
 | F9 | P3 | Country tints are a 4 km raster sampled nearest: stair-stepped along borders when zoomed in (hidden under the vector line at most scales) | `fields_human.step_countries` | build notes |
 | F10 | P4 | Time zones (Natural Earth, public domain) are downloaded and unused | — | fetch list |
 | F11 | — | **DELIVERED 2026-11-11 (tenth round)** closer than about 100 m a pixel: the measured amount (Black Marble, 500 m) is put where OpenStreetMap says a city's light comes from, as lamps along streets (table in APPLIED). Between 100 m and 2 km a pixel a large city is still one field of gold, and the step in brightness between that and the street view is abrupt. Radiance with range exists (VNP46A4) behind an Earthdata login | `earth.frag.glsl` streetLit, `streets.js` | sixth round |
@@ -989,7 +1030,9 @@ texture is a magnified photograph, and vegetated land still reads darker than EP
 
 ---
 
-**Count: 50 items; none open at P1** (A12, A13 and A15 delivered in the ninth round, 2026-11-11; A16, A17 and A18 added). In order:
+**Count: 57 items; none open at P1** (tenth round: A16, F8, F11 and F15 delivered; A19, A20, A21, F16, F17 new)
+
+**Before the tenth round: 50 items; none open at P1** (A12, A13 and A15 delivered in the ninth round, 2026-11-11; A16, A17 and A18 added). In order:
 
 1. **B1** - bright cloud over the summer Southern Ocean; cumulus that lines up along the wind; a daily cycle for convective cloud over land; average the texture audit over several tile layouts.
 2. **A16** - the season close in at full strength: a reference month for Sentinel-2, by place.

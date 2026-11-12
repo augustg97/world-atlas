@@ -18,6 +18,10 @@
 //              30 m, as map tiles on Google's storage: the same Web Mercator tiling as the elevation, tile for tile.
 //              The owner approved the host on 2026-11-11 (register A15). Land or water inside the window is this
 //              record's; NASA's 250 m MODIS mask and the picture's colour (water.js) stand in polewards of it (78 N, 59 S).
+//   streets    OpenStreetMap's roads, buildings and land use as vector tiles from OpenFreeMap (streets.js; the owner
+//              approved the host on 2026-11-11, register F15), closer than 120 m a pixel. Drawn by a worker onto the
+//              imagery's own grid: a day overlay laid over Sentinel-2, and a light pattern carried in the imagery
+//              texture's fourth channel. The lights' AMOUNT (Black Marble) then rides in the elevation texture's fourth.
 //
 // The top half of this file is pure mathematics (no DOM, no GL) and is tested by
 // build/test_app_math.mjs: tile <-> lon/lat for both tilings, the Mercator row resampling, the
@@ -25,10 +29,11 @@
 // class of bug in this project (CLAUDE.md, "The canonical frame"); change nothing here without
 // running that test.
 
-import { UNIT } from './fields.js?v=20261112T020725Z';
-import { stamped } from './gl.js?v=20261112T020725Z';
-import { R_KM } from './camera.js?v=20261112T020725Z';
-import { WATER_RULE, boxMean, waterFlag, runRule } from './water.js?v=20261112T020725Z';
+import { UNIT } from './fields.js?v=20261112T060955Z';
+import { stamped } from './gl.js?v=20261112T060955Z';
+import { R_KM } from './camera.js?v=20261112T060955Z';
+import { WATER_RULE, boxMean, waterFlag, runRule } from './water.js?v=20261112T060955Z';
+import { OFM, STREETS, streetPlan } from './streets.js?v=20261112T060955Z';
 
 const D2R = Math.PI / 180, R2D = 180 / Math.PI;
 export const KM_PER_DEG = R_KM * D2R;                       // 111.195 km on the atlas's sphere
@@ -83,6 +88,7 @@ export function gibsTileBounds(col, row, L) {
 // mosaic itself is 10 m, which is level 13 (9.6 m at the equator); beyond that the tiles only magnify.
 export const S2 = {
   layer: 's2cloudless', tilePx: 256, level0Deg: 180, minLevel: 8, maxLevel: 13,
+  drawLevel: 15,        // the window's own grid may be this fine (2.4 m): level 13's tiles magnified, for the streets and buildings drawn over them
   url: (z, row, col) => `https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless/default/WGS84/${z}/${row}/${col}.jpg`,
   credit: 'Sentinel-2 cloudless by EOX (contains modified Copernicus Sentinel data 2016)', link: 'https://s2maps.eu',
 };
@@ -314,12 +320,13 @@ export const PLAN = {
   maxElevTiles: 96,     // elevation requests per window (256 px tiles: a quarter of the pixels each)
   maxTex: 8192,         // texels on a side
   gainKm: 3,            // a streamed texel coarser than this adds nothing to the shipped fields
-  minKm: 0.0095,        // no source here is finer than this: Sentinel-2 cloudless is a 10 m mosaic
+  minKm: 0.0024,        // the finest grid a window is drawn on. Sentinel-2 cloudless is a 10 m mosaic; finer than that the picture is magnified and only the streets and buildings gain
+  maxPx: 9e6,           // texels in an imagery window (a 2.4 m grid over a wide screen at high latitude is 20 million: one level coarser then)
   bmKm: 0.45,           // a wanted texel finer than this is beyond Blue Marble's last level (0.49 km): Sentinel-2's
   // The window is the view's lon/lat box grown by this share of its size on every side. Negative: the
   // box does not fit the request budget, and the window covers the middle of the view only.
   margins: [0.25, 0.15, 0.05, -0.05, -0.12, -0.19, -0.26, -0.32, -0.38],
-  fullView: 0.05,       // the least margin that still counts as covering the view (the shader's fade takes 6% of the window)
+  fullView: 0.05,       // the least margin that still counts as covering the view (the shader's fade takes 3% of the window)
   slack: 0.10,          // how far, in view sizes, the view may move before a new window is fetched
   quickSteps: 2,        // the quick first pass is this many levels coarser in both layers: a sixteenth of the requests
   quickLeast: 24,       // a window of fewer requests than this has no quick pass
@@ -341,15 +348,18 @@ function snap(b, step) {
   const north = Math.min(90, 90 - Math.floor((90 - b.north) / step + 1e-9) * step), south = Math.max(-90, 90 - Math.ceil((90 - b.south) / step - 1e-9) * step);
   return { west, north, lonSpan: east - west, latSpan: north - south };
 }
-function albPlan(win, L, src = 'bm') {
+function albPlan(win, VL, src = 'bm') {
   const s2 = src === 's2';
+  // Beyond Sentinel-2's last level the tiles are that level's and the window's grid is finer by `mag`: `sw` x `sh` is
+  // the mosaic the tiles make, `w` x `h` the grid the window is drawn on. Everywhere else the two are one.
+  const L = s2 ? Math.min(VL, S2.maxLevel) : VL, mag = 2 ** (VL - L);
   const t = s2 ? s2TexelDeg(L) : gibsTexelDeg(L), P = s2 ? S2.tilePx : GIBS.tilePx, m = s2 ? s2Matrix(L) : gibsMatrix(L);
-  const x0 = Math.round((win.west + 180) / t), y0 = Math.round((90 - win.north) / t), w = Math.round(win.lonSpan / t), h = Math.round(win.latSpan / t);
+  const x0 = Math.round((win.west + 180) / t), y0 = Math.round((90 - win.north) / t), sw = Math.round(win.lonSpan / t), sh = Math.round(win.latSpan / t), w = sw, h = sh;
   const r0 = Math.max(0, Math.floor(y0 / P)), r1 = Math.min(m.h - 1, Math.floor((y0 + h - 1) / P));      // rows that exist
   const c0 = Math.floor(x0 / P), c1 = Math.floor((x0 + w - 1) / P), count = (r1 - r0 + 1) * (c1 - c0 + 1);
   const tiles = [];
   if (count <= LIST_MAX) for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) tiles.push({ col: ((c % m.w) + m.w) % m.w, row: r, dx: c * P - x0, dy: r * P - y0 });
-  return { L, w, h, tiles, count, texelDeg: t, texelKm: t * KM_PER_DEG, src, tilePx: P };
+  return { L, VL, mag, w: sw * mag, h: sh * mag, sw, sh, tiles, count, texelDeg: t / mag, texelKm: (t / mag) * KM_PER_DEG, src, tilePx: P };
 }
 function elevPlan(win, z) {
   const src = terrTexelDeg(z), n = 2 ** z, south = win.north - win.latSpan;
@@ -382,7 +392,7 @@ export function planDetail(view, kmPerPx, opts = {}) {
   const want = Math.max(P.minKm, 0.8 * kmPerPx);
   const refLat = Math.min(80, Math.abs(view.lat));
   const albKm = (L) => gibsTexelDeg(L) * KM_PER_DEG, elevKm = (z) => terrTexelKm(refLat, z);
-  const fits = (p) => !p || (p.count <= (p.z === undefined ? (p.src === 's2' ? P.maxS2Tiles : P.maxTiles) : P.maxElevTiles) && p.w <= P.maxTex && p.h <= P.maxTex);
+  const fits = (p) => !p || (p.count <= (p.z === undefined ? (p.src === 's2' ? P.maxS2Tiles : P.maxTiles) : P.maxElevTiles) && p.w <= P.maxTex && p.h <= P.maxTex && (p.z !== undefined || p.w * p.h <= P.maxPx));
   let src = 'bm';
   const make = (m, L, z) => {
     // snapped to the grid of the quick pass (quickPlan), 2^quickSteps texels: both passes then cover one rectangle exactly
@@ -395,7 +405,7 @@ export function planDetail(view, kmPerPx, opts = {}) {
     // finer than Blue Marble has: Sentinel-2, at the coarsest level that meets the rule, one level coarser at a time
     // while the whole view does not fit. If even its coarsest useful level does not fit, Blue Marble's last level does.
     const s2Km = (zz) => s2TexelDeg(zz) * KM_PER_DEG;
-    let zz = S2.maxLevel; while (zz > S2.minLevel && s2Km(zz - 1) <= want) zz--;
+    let zz = S2.drawLevel; while (zz > S2.minLevel && s2Km(zz - 1) <= want) zz--;
     src = 's2';
     while (zz > S2.minLevel && !fits(make(P.fullView, zz, null).alb)) zz--;
     if (fits(make(P.fullView, zz, null).alb)) L = zz; else src = 'bm';
@@ -404,12 +414,18 @@ export function planDetail(view, kmPerPx, opts = {}) {
   // one level coarser at a time while the whole view does not fit and the coarser level still gains
   while (src === 'bm' && !fits(make(P.fullView, L, null).alb) && albKm(L - 1) <= P.gainKm) L--;
   while (!fits(make(P.fullView, null, z).elev) && z > 0 && elevKm(z - 1) <= P.gainKm) z--;
-  for (const m of P.margins) { const p = make(m, L, z); if (fits(p.alb) && fits(p.elev)) return finish(p, want); }
+  for (const m of P.margins) {
+    const p = make(m, L, z);
+    if (!(fits(p.alb) && fits(p.elev))) continue;
+    // streets and buildings, where the picture is Sentinel-2 and the view is close enough for a road to be more than a hair
+    p.streets = src === 's2' && !P.noStreets && kmPerPx < STREETS.activeKm ? streetPlan(p.win) : null;
+    return finish(p, want);
+  }
   return null;
 }
 function finish(p, want) {
   p.wantKm = want;
-  p.key = `${p.win.west.toFixed(5)},${p.win.north.toFixed(5)},${p.win.lonSpan.toFixed(5)},${p.win.latSpan.toFixed(5)},${p.alb ? p.alb.src + p.alb.L : '-'},${p.elev ? p.elev.z : '-'},${p.night ? 'n' : '-'}`;
+  p.key = `${p.win.west.toFixed(5)},${p.win.north.toFixed(5)},${p.win.lonSpan.toFixed(5)},${p.win.latSpan.toFixed(5)},${p.alb ? p.alb.src + p.alb.VL : '-'},${p.elev ? p.elev.z : '-'},${p.night ? 'n' : '-'},${p.streets ? 's' + p.streets.z : '-'}`;
   return p;
 }
 
@@ -420,8 +436,9 @@ function finish(p, want) {
  */
 export function quickPlan(p, opts = {}) {
   const P = { ...PLAN, ...opts };
-  if (!p || !p.alb || !p.elev || p.alb.count + p.elev.count < P.quickLeast || p.alb.L - P.quickSteps < 0) return null;
-  const q = { win: p.win, margin: p.margin, alb: albPlan(p.win, p.alb.L - P.quickSteps, p.alb.src), elev: elevPlan(p.win, Math.max(0, p.elev.z - P.quickSteps)), night: p.night, quick: true };
+  // (a window with streets always has one: the picture goes up first and the streets are drawn onto it when they come)
+  if (!p || !p.alb || !p.elev || (p.alb.count + p.elev.count < P.quickLeast && !p.streets) || p.alb.VL - P.quickSteps < 0) return null;
+  const q = { win: p.win, margin: p.margin, alb: albPlan(p.win, p.alb.VL - P.quickSteps, p.alb.src), elev: elevPlan(p.win, Math.max(0, p.elev.z - P.quickSteps)), night: p.night, streets: null, quick: true };
   return finish(q, p.wantKm);
 }
 
@@ -466,6 +483,7 @@ export function windowUniforms(p) {
     uDetS2: p.alb && p.alb.src === 's2' ? 1 : 0,
     uDetElevPx: p.elev ? [1 / p.elev.w, 1 / p.elev.h] : [1, 1],
     uDetElevM: p.elev ? [p.elev.texelDeg[0] * KM_PER_DEG * 1000, p.elev.texelDeg[1] * KM_PER_DEG * 1000] : [1000, 1000],
+    uDetWinM: [w.lonSpan * KM_PER_DEG * 1000 * Math.cos((w.north - w.latSpan / 2) * D2R), w.latSpan * KM_PER_DEG * 1000],
   };
 }
 
@@ -507,6 +525,22 @@ class LRU {
   get(k) { const v = this.m.get(k); if (v !== undefined) { this.m.delete(k); this.m.set(k, v); } return v; }
   set(k, v) { this.m.delete(k); this.m.set(k, v); while (this.m.size > this.max) { const [ok, ov] = this.m.entries().next().value; this.m.delete(ok); if (this.drop) this.drop(ov); } }
 }
+
+/** A colour ratio (red or blue albedo over green, 0.08..2.5) as a byte, log-coded: a step is 1.4%. The shader's detUnpack is the inverse. */
+export const seasonCode = (ratio) => Math.max(0, Math.min(255, Math.round((Math.log(Math.max(ratio, 0.08) / 0.08) / Math.log(2.5 / 0.08)) * 255)));
+export const seasonRatio = (code) => 0.08 * Math.exp((code / 255) * Math.log(2.5 / 0.08));
+/** Blue Marble's albedo table out of the earth shader's own text (ALB_LUT: nine knots, three channels), so that there is one copy of it. */
+export function albedoLut(src) {
+  const m = /const vec3 ALB_LUT\[9\] = vec3\[\]\(([^;]*)\);/.exec(src);
+  if (!m) throw new Error('the earth shader has no ALB_LUT');
+  const v = [...m[1].matchAll(/vec3\(([^)]*)\)/g)].map((q) => q[1].split(',').map(Number));
+  if (v.length !== 9 || v.some((q) => q.length !== 3 || q.some((x) => !Number.isFinite(x)))) throw new Error('ALB_LUT is not nine vec3');
+  return v;
+}
+/** A display value 0..255 of one channel `k` to albedo by the table: the shader's albedoOf, the snow branch excepted. */
+export const lutAlbedo = (lut, v, k) => { const t = (v / 255) * 8, i = Math.min(7, Math.floor(t)); return lut[i][k] + (lut[i + 1][k] - lut[i][k]) * (t - i); };
+/** Three bytes in one float32 (exact: under 2^24): the lights' amount 0..1, and two season codes. */
+export const packDet = (amount, r, b) => Math.round(Math.max(0, Math.min(1, amount)) * 255) * 65536 + r * 256 + b;
 
 /** Does the water record have every tile of an elevation plan? (JRC.north, JRC.south) */
 export function jrcCovers(p) {
@@ -575,10 +609,10 @@ export class Detail {
     // the lights are wanted where the Sun is not well up somewhere in the view (they fade out by 6 degrees of Sun)
     const sunAlt = (lon, lat) => Math.asin(Math.sin(lat * D2R) * Math.sin(sun.lat * D2R) + Math.cos(lat * D2R) * Math.cos(sun.lat * D2R) * Math.cos((lon - sun.lon) * D2R)) * R2D;
     const dark = !!sun && [[view.lon, view.lat], [view.west, view.north], [view.east, view.north], [view.west, view.south], [view.east, view.south]].some(([lo, la]) => sunAlt(lo, la) < 8);
-    const plan = planDetail(view, k, { maxTex: this.maxTex, night: dark });
+    const plan = planDetail(view, k, { maxTex: this.maxTex, night: dark, noStreets: !this.floatLinear });      // (the lights' amount under a street plan needs a 32-bit float texture)
     if (!plan) { this._cancel(); if (this.state !== 'idle') this._set('idle', ''); return; }
     // a window serves if it is at least as fine as the one wanted now and holds what that one was to cover, less the slack
-    const serves = (p) => p && windowHolds(p.win, view, plan.margin - PLAN.slack) && (!plan.alb || (p.alb && p.alb.texelDeg <= plan.alb.texelDeg * 1.001)) && (!plan.elev || (p.elev && p.elev.z >= plan.elev.z)) && (!plan.night || p.night);
+    const serves = (p) => p && windowHolds(p.win, view, plan.margin - PLAN.slack) && (!plan.alb || (p.alb && p.alb.texelDeg <= plan.alb.texelDeg * 1.001)) && (!plan.elev || (p.elev && p.elev.z >= plan.elev.z)) && (!plan.night || p.night) && (!plan.streets || (p.streets && p.streets.z >= plan.streets.z));
     if (this.cur && !this.cur.partial && serves(this.cur.plan)) { this._cancel(); return; }      // (a window whose imagery stopped half painted does not serve)
     if (this.job && serves(this.job.plan)) return;
     if (plan.key === this.failedKey) return;
@@ -627,11 +661,12 @@ export class Detail {
     if (!stepwise) this._show(plan, got, view, errs);
     const c = this.cur;
     c.quick = false; c.partial = !!c.partial && !got.alb;               // imagery that stopped half painted stays marked
-    if (got.alb && plan.night && !got.alb.night) errs.push(`lights: ${job.nightError || 'not fetched'}`);
+    if (plan.night && ((got.alb && !got.alb.night) || (plan.streets && got.elev && !got.elev.night))) errs.push(`lights: ${job.nightError || 'not fetched'}`);
+    if (plan.streets && got.alb && !got.alb.streets) errs.push(`streets: ${job.streetsError || 'not drawn'}`);
     if (this.keep) { this.canvas = got.alb ? got.alb.canvas : null; this.cpu = got.elev ? { w: plan.elev.w, h: plan.elev.h, d: got.elev.data, water: got.elev.flag, win: plan.win } : null; }
     if (got.alb) got.alb.canvas = null;
     this.stats = { requests: job.requests, cached: job.hits, bytes: job.bytes, ms: since(), firstMs: job.marks.first || null, paintMs: job.marks.paint || null, albMs: job.marks.alb || null, elevMs: job.marks.elev || null,
-      compositeMs: job.compositeMs || 0, flagMs: job.flagMs || null, water: got.elev ? got.elev.waterBy : null, albTiles: plan.alb ? plan.alb.tiles.length : 0, elevTiles: plan.elev ? plan.elev.tiles.length : 0 };
+      compositeMs: job.compositeMs || 0, flagMs: job.flagMs || null, water: got.elev ? got.elev.waterBy : null, albTiles: plan.alb ? plan.alb.tiles.length : 0, elevTiles: plan.elev ? plan.elev.tiles.length : 0, streets: job.streets || null };
     this.error = errs.length ? errs.join('; ') : null;
     this.failedKey = errs.length ? plan.key : '';
     this._describe(stepwise ? c.plan : plan, c, errs, view);
@@ -670,7 +705,7 @@ export class Detail {
     c[kind] = { ...layer, canvas: null, at: old ? old.at : (this.frozen ? -1e9 : performance.now()) };
     if (old && old.tex !== layer.tex) gl.deleteTexture(old.tex);
     this.fields.tex[kind === 'alb' ? 'detAlb' : 'detElev'] = layer.tex;
-    c.plan = { ...c.plan, [kind]: plan[kind], ...(kind === 'alb' ? { night: !!layer.night } : {}) };
+    c.plan = { ...c.plan, [kind]: plan[kind], ...(kind === 'alb' ? { night: !!layer.night, streets: layer.streets ? plan.streets : null } : {}) };
     this._waterColour();
     this._describe(c.plan, c, [], null);
     this.onChange();
@@ -687,12 +722,14 @@ export class Detail {
     const km = (v) => (v < 0.095 ? `${Math.round(v * 1000)} m` : `${v.toFixed(v < 0.95 ? 2 : 1)} km`);
     const lat = view ? view.lat : plan.win.north - plan.win.latSpan / 2;
     const nightKm = plan.alb && plan.alb.src === 's2' ? gibsTexelDeg(GIBS.maxLevel) * KM_PER_DEG : plan.alb ? plan.alb.texelKm : 0;
-    const parts = [c.alb && plan.alb ? `imagery ${km(plan.alb.texelKm)}${plan.alb.src === 's2' ? ' (Sentinel-2)' : ''}` : null, c.alb && c.alb.night ? `night lights ${km(nightKm)}` : null,
+    const parts = [c.alb && plan.alb ? `imagery ${km(plan.alb.texelKm)}${plan.alb.src === 's2' ? ' (Sentinel-2)' : ''}` : null, (c.alb && c.alb.alpha === 'bm') || (c.elev && c.elev.night) ? `night lights ${km(nightKm)}` : null,
       c.elev && plan.elev ? `elevation ${km(terrTexelKm(lat, plan.elev.z))}` : null].filter(Boolean);
     c.note = errs.length ? `Some tiles could not be fetched (${errs.join('; ')}). ${parts.length ? `Showing ${parts.join(', ')}; the rest is the shipped field.` : 'Showing the shipped fields.'}`
       : `Streamed for this view: ${parts.join(', ')} a texel.`;
     if (c.elev && c.elev.water) c.note += c.elev.waterBy === 'jrc' ? ' Land and water: JRC Global Surface Water (EC JRC/Google).' : ' Land and water: NASA\u2019s MODIS mask and the picture\u2019s colour.';
-    c.credit = c.alb && plan.alb && plan.alb.src === 's2' ? S2 : null;      // EOX asks for its attribution on the map
+    if (c.alb && c.alb.streets) c.note += ' Streets and buildings: OpenStreetMap (OpenFreeMap).';
+    // sources that ask to be named on the map itself while their data is on it: EOX for Sentinel-2, OpenStreetMap for the streets
+    c.credit = c.alb && plan.alb && plan.alb.src === 's2' ? [{ pre: 'Imagery: ', credit: S2.credit, link: S2.link, post: ', CC BY 4.0' }, ...(c.alb.streets ? [{ pre: 'Streets: ', credit: OFM.credit, link: OFM.link, post: '' }] : [])] : null;
   }
 
   /** Fetch with retries; counts requests and bytes on the job. With `mayMiss`, a 404 is an answer (null), not a failure. */
@@ -733,7 +770,7 @@ export class Detail {
   async _imagery(job, plan, seed = null, onPaint = null) {
     const gl = this.gl, p = plan.alb, W = plan.win, bmp = new Map(), src = p.src === 's2' ? S2 : GIBS;
     let paint = null;                                                    // (tile) => void, once the live canvas exists
-    const order = seed ? [...p.tiles].sort((a, b) => Math.hypot(a.dx + p.tilePx / 2 - p.w / 2, a.dy + p.tilePx / 2 - p.h / 2) - Math.hypot(b.dx + p.tilePx / 2 - p.w / 2, b.dy + p.tilePx / 2 - p.h / 2)) : p.tiles;
+    const order = seed ? [...p.tiles].sort((a, b) => Math.hypot(a.dx + p.tilePx / 2 - p.sw / 2, a.dy + p.tilePx / 2 - p.sh / 2) - Math.hypot(b.dx + p.tilePx / 2 - p.sw / 2, b.dy + p.tilePx / 2 - p.sh / 2)) : p.tiles;
     const early = [];
     const tilesP = this._each(order, job, async (t) => {
       const key = `${p.src}/${p.L}/${t.row}/${t.col}`;
@@ -749,13 +786,16 @@ export class Detail {
       if (paint) paint(t, b); else if (seed) early.push([t, b]);
     }, p.src === 's2' ? PAR.s2 : PAR.gibs);
     tilesP.catch(() => {});                                              // awaited further down; a failure before then is not an unhandled one
+    // Streets and buildings (streets.js), drawn by a worker on this window's grid. A failure costs the streets only.
+    const streetsP = plan.streets ? this._streets(job, plan).catch((e) => { if (e.name === 'AbortError') throw e; job.streetsError = e.message || String(e); return null; }) : null;
+    if (streetsP) streetsP.catch(() => {});
     // The lights: Black Marble's tiles, fetched alongside. Under Blue Marble they are the same rows and columns of
     // another layer; under Sentinel-2 they are Black Marble's last level over the same window, magnified onto the
     // finer grid below. A failure here costs the lights only: the imagery still shows.
     let nbmp = null;
     const np = p.src === 's2' ? albPlan(snap({ west: W.west, east: W.west + W.lonSpan, north: W.north, south: W.north - W.latSpan }, gibsTexelDeg(GIBS.maxLevel)), GIBS.maxLevel) : p;
     let nightP = null;
-    if (plan.night) {
+    if (plan.night && !plan.streets) {                                   // (with streets the lights' amount goes to the elevation texture: _ground)
       nbmp = new Map();
       nightP = this._each(np.tiles, job, async (t) => {
         const key = `${np.L}/${t.row}/${t.col}`;
@@ -771,19 +811,21 @@ export class Detail {
     }
     // Equirectangular onto equirectangular at the same pixel size: every tile lands on whole pixels.
     const mosaic = (tiles, q, pre = '') => {
-      const c = new OffscreenCanvas(q.w, q.h), g = c.getContext('2d', { alpha: false, colorSpace: 'srgb' });
+      const c = new OffscreenCanvas(q.sw, q.sh), g = c.getContext('2d', { alpha: false, colorSpace: 'srgb' });
       g.imageSmoothingEnabled = false;
       for (const t of q.tiles) g.drawImage(tiles.get(`${pre}${q.L}/${t.row}/${t.col}`), t.dx, t.dy);
       return c;
     };
     await (seed ? nightP : Promise.all([tilesP, nightP]));               // a live layer waits for its lights only (a handful of tiles, most of them the quick pass's)
     if (job.ctl.signal.aborted) { await tilesP.catch(() => {}); throw new DOMException('aborted', 'AbortError'); }
+    // nothing of this window on screen yet to draw the streets onto: wait for them and put the picture up whole
+    let st = streetsP && !seed ? await streetsP : null;
     let c;
     if (seed) {
-      c = new OffscreenCanvas(p.w, p.h);
+      c = new OffscreenCanvas(p.sw, p.sh);
       const g = c.getContext('2d', { alpha: false, colorSpace: 'srgb' });
       g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'medium';
-      g.drawImage(seed, 0, 0, seed.width, seed.height, 0, 0, p.w, p.h);
+      g.drawImage(seed, 0, 0, seed.width, seed.height, 0, 0, p.sw, p.sh);
       g.imageSmoothingEnabled = false;
       for (const [t, b] of early) g.drawImage(b, t.dx, t.dy);
     } else c = mosaic(bmp, p, `${p.src}/`);
@@ -799,14 +841,27 @@ export class Detail {
       nc = out;
     }
     const tex = gl.createTexture();
-    let lastMs = 0, lastAt = 0, dirty = false;
-    // the canvas to the texture: colour, then the lights into alpha, then the mipmaps the join reads its 5 km means from
+    let lastMs = 0, lastAt = 0, dirty = false, out = null;
+    // `alpha` says what the fourth channel holds: 'bm' Black Marble's light, 'streets' the street pattern, null nothing
+    const layer = { tex, canvas: c, night: !!nc || (!!plan.streets && !!plan.night), alpha: null, streets: false, thumb: null };
+    // the canvas to the texture: colour (the mosaic, magnified onto the window's grid where that is finer, with the
+    // streets' day overlay laid on it), then the fourth channel, then the mipmaps the join reads its 5 km means from
     const upload = () => {
       const t0 = performance.now();
+      let from = c;
+      if (p.mag > 1 || (st && st.overlay)) {
+        out ||= new OffscreenCanvas(p.w, p.h);
+        const g = out.getContext('2d', { alpha: false, colorSpace: 'srgb' });
+        g.imageSmoothingEnabled = p.mag > 1; g.imageSmoothingQuality = 'high';
+        g.drawImage(c, 0, 0, p.sw, p.sh, 0, 0, p.w, p.h);
+        if (st && st.overlay) g.drawImage(st.overlay, 0, 0, p.w, p.h);
+        from = out;
+      }
+      layer.alpha = st ? 'streets' : nc ? 'bm' : null; layer.streets = !!st;
       gl.bindTexture(gl.TEXTURE_2D, tex);
       gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1); gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false); gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.NONE);
-      gl.texImage2D(gl.TEXTURE_2D, 0, nc ? gl.RGBA8 : gl.RGB8, nc ? gl.RGBA : gl.RGB, gl.UNSIGNED_BYTE, c);
-      if (nc) this._writeLights(tex, nc, p.w, p.h);
+      gl.texImage2D(gl.TEXTURE_2D, 0, layer.alpha ? gl.RGBA8 : gl.RGB8, layer.alpha ? gl.RGBA : gl.RGB, gl.UNSIGNED_BYTE, from);
+      if (st) this._writeLights(tex, st.pattern, p.w, p.h, false); else if (nc) this._writeLights(tex, nc, p.w, p.h);
       gl.bindTexture(gl.TEXTURE_2D, tex);
       gl.generateMipmap(gl.TEXTURE_2D);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
@@ -815,7 +870,6 @@ export class Detail {
       if (ext) gl.texParameterf(gl.TEXTURE_2D, ext.TEXTURE_MAX_ANISOTROPY_EXT, Math.min(8, gl.getParameter(ext.MAX_TEXTURE_MAX_ANISOTROPY_EXT)));
       lastAt = performance.now(); lastMs = lastAt - t0; dirty = false;
     };
-    const layer = { tex, canvas: c, night: !!nc, thumb: null };
     if (seed) {
       const g = c.getContext('2d');
       upload();
@@ -823,12 +877,15 @@ export class Detail {
       // tiles from here on are painted as they land; the texture follows at most four times a second, less often if an upload is slow
       paint = (t, b) => { g.drawImage(b, t.dx, t.dy); dirty = true; if (!job.ctl.signal.aborted && performance.now() - lastAt > Math.max(250, 6 * lastMs)) { upload(); this.onChange(); } };
       try { await tilesP; } finally { paint = null; if (dirty && !job.ctl.signal.aborted) { upload(); this.onChange(); } }
+      if (streetsP) { st = await streetsP; if (st && !job.ctl.signal.aborted) { upload(); this.onChange(); } }
     } else upload();
+    if (st) { job.requests += st.requests; job.bytes += st.bytes; job.hits += st.cached; job.streets = { ms: st.ms, roads: st.roads, buildings: st.buildings, tiles: plan.streets.count, z: plan.streets.z }; if (st.overlay) st.overlay.close(); st.pattern.close(); }
+    out = null;
     // a small copy of the picture, kept with the layer: the window's mean water colour is counted from it (_waterColour)
     const tw = Math.min(256, p.w), th = Math.max(1, Math.min(256, Math.round((p.h * tw) / p.w)));
     const tg = new OffscreenCanvas(tw, th).getContext('2d', { alpha: false, willReadFrequently: true, colorSpace: 'srgb' });
     tg.imageSmoothingEnabled = true; tg.imageSmoothingQuality = 'high';
-    tg.drawImage(c, 0, 0, p.w, p.h, 0, 0, tw, th);
+    tg.drawImage(c, 0, 0, p.sw, p.sh, 0, 0, tw, th);
     layer.thumb = { w: tw, h: th, d: tg.getImageData(0, 0, tw, th).data };
     return layer;
   }
@@ -839,7 +896,7 @@ export class Detail {
    * mosaic is thrown away. (A 2D canvas cannot hold the four channels: it premultiplies colour by alpha.)
    * Every piece of GL state touched is put back; this runs between frames.
    */
-  _writeLights(tex, canvas, w, h) {
+  _writeLights(tex, canvas, w, h, bm = true) {
     const gl = this.gl;
     if (!this._lightProg) {
       const sh = (type, src) => { const o = gl.createShader(type); gl.shaderSource(o, src); gl.compileShader(o); if (!gl.getShaderParameter(o, gl.COMPILE_STATUS)) throw new Error(`lights shader: ${gl.getShaderInfoLog(o)}`); return o; };
@@ -850,6 +907,13 @@ export class Detail {
       gl.linkProgram(pr);
       if (!gl.getProgramParameter(pr, gl.LINK_STATUS)) throw new Error(`lights program: ${gl.getProgramInfoLog(pr)}`);
       this._lightProg = pr; this._lightU = gl.getUniformLocation(pr, 'uN');
+      // the street pattern is a grey picture already: its value is the channel
+      const cp = gl.createProgram();
+      gl.attachShader(cp, sh(gl.VERTEX_SHADER, '#version 300 es\nvoid main() { gl_Position = vec4(float((gl_VertexID << 1) & 2) * 2.0 - 1.0, float(gl_VertexID & 2) * 2.0 - 1.0, 0.0, 1.0); }'));
+      gl.attachShader(cp, sh(gl.FRAGMENT_SHADER, '#version 300 es\nprecision highp float;\nuniform sampler2D uN;\nout vec4 o;\nvoid main() { o = vec4(0.0, 0.0, 0.0, texelFetch(uN, ivec2(gl_FragCoord.xy), 0).r); }'));
+      gl.linkProgram(cp);
+      if (!gl.getProgramParameter(cp, gl.LINK_STATUS)) throw new Error(`pattern program: ${gl.getProgramInfoLog(cp)}`);
+      this._patProg = cp; this._patU = gl.getUniformLocation(cp, 'uN');
     }
     const was = { fb: gl.getParameter(gl.FRAMEBUFFER_BINDING), vp: gl.getParameter(gl.VIEWPORT), blend: gl.isEnabled(gl.BLEND), scissor: gl.isEnabled(gl.SCISSOR_TEST), depth: gl.isEnabled(gl.DEPTH_TEST), cull: gl.isEnabled(gl.CULL_FACE), prog: gl.getParameter(gl.CURRENT_PROGRAM), vao: gl.getParameter(gl.VERTEX_ARRAY_BINDING), unit: gl.getParameter(gl.ACTIVE_TEXTURE) };
     const ntex = gl.createTexture(), fb = gl.createFramebuffer();
@@ -864,7 +928,7 @@ export class Detail {
       gl.viewport(0, 0, w, h);
       gl.disable(gl.BLEND); gl.disable(gl.SCISSOR_TEST); gl.disable(gl.DEPTH_TEST); gl.disable(gl.CULL_FACE);
       gl.colorMask(false, false, false, true);
-      gl.useProgram(this._lightProg); gl.uniform1i(this._lightU, UNIT.detAlb);
+      gl.useProgram(bm ? this._lightProg : this._patProg); gl.uniform1i(bm ? this._lightU : this._patU, UNIT.detAlb);
       gl.bindVertexArray(null);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     } finally {
@@ -885,8 +949,12 @@ export class Detail {
    */
   async _ground(job, plan, albP, errs) {
     const p = plan.elev;
-    const [grid, occ] = await Promise.all([this._elevation(job, plan),
-      this._occurrence(job, plan).catch((e) => { if (e.name === 'AbortError') throw e; console.warn('detail: the water record could not be read; NASA’s mask and the picture are used', e); return null; })]);
+    const [grid, occ, amount, ref] = await Promise.all([this._elevation(job, plan),
+      this._occurrence(job, plan).catch((e) => { if (e.name === 'AbortError') throw e; console.warn('detail: the water record could not be read; NASA’s mask and the picture are used', e); return null; }),
+      // with streets, the imagery's fourth channel is the street pattern and the lights' amount rides here instead
+      plan.night && plan.streets ? this._night(job, plan).catch((e) => { if (e.name === 'AbortError') throw e; job.nightError = e.message || String(e); return null; }) : null,
+      // Blue Marble at the Sentinel-2 picture's own season (register A16), for the full window only: the quick pass is not kept waiting for it
+      plan.alb && plan.alb.src === 's2' && !plan.quick && this.floatLinear ? this._season(job, plan).catch((e) => { if (e.name === 'AbortError') throw e; console.warn('detail: the season reference could not be read; the month\u2019s colour is applied at half strength', e); return null; }) : null]);
     let flag = null, share = null, waterBy = null;
     if (occ) {
       // The texture carries the record's share itself, re-centred so that JRC.water sits at one half: the shader
@@ -905,9 +973,89 @@ export class Detail {
       }
     }
     if (job.ctl.signal.aborted) throw new DOMException('aborted', 'AbortError');
-    const t0 = performance.now(), tex = this._elevTexture(p, grid, share || flag);
+    const t0 = performance.now(), tex = this._elevTexture(p, grid, share || flag, amount, ref);
     job.compositeMs = (job.compositeMs || 0) + Math.round(performance.now() - t0);
-    return { tex, flag, w: p.w, h: p.h, water: !!flag, waterBy, waterC: null, data: this.keep ? grid.data : null };
+    return { tex, flag, w: p.w, h: p.h, water: !!flag, waterBy, waterC: null, night: !!amount, ref: !!ref, data: this.keep ? grid.data : null };
+  }
+
+  /** Black Marble's light over the window on the elevation's grid: Float32Array, 0..1 in nightLight()'s units. Its
+   *  last level (500 m) is far coarser than the grid, so this is a magnification. */
+  async _night(job, plan) {
+    const W = plan.win, e = plan.elev, t7 = gibsTexelDeg(GIBS.maxLevel);
+    const sn = snap({ west: W.west, east: W.west + W.lonSpan, north: W.north, south: W.north - W.latSpan }, t7), np = albPlan(sn, GIBS.maxLevel);
+    const bmp = new Map();
+    await this._each(np.tiles, job, async (t) => {
+      const key = `${np.L}/${t.row}/${t.col}`;
+      let b = this.nightCache.get(key);
+      if (b) job.hits++;
+      else {
+        b = await createImageBitmap(await this._fetch(GIBS.nightUrl(np.L, t.row, t.col), job), { colorSpaceConversion: 'none', premultiplyAlpha: 'none' });
+        if (b.width !== GIBS.tilePx || b.height !== GIBS.tilePx) throw new Error(`lights tile ${key} is ${b.width} x ${b.height}`);
+        this.nightCache.set(key, b);
+      }
+      bmp.set(key, b);
+    }, PAR.gibs);
+    const m = new OffscreenCanvas(np.w, np.h), mg = m.getContext('2d', { alpha: false, colorSpace: 'srgb' });
+    mg.imageSmoothingEnabled = false;
+    for (const t of np.tiles) mg.drawImage(bmp.get(`${np.L}/${t.row}/${t.col}`), t.dx, t.dy);
+    const c = new OffscreenCanvas(e.w, e.h), g = c.getContext('2d', { alpha: false, willReadFrequently: true, colorSpace: 'srgb' });
+    g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high';
+    g.drawImage(m, (W.west - sn.west) / t7, (sn.north - W.north) / t7, W.lonSpan / t7, W.latSpan / t7, 0, 0, e.w, e.h);
+    const px = g.getImageData(0, 0, e.w, e.h).data, out = new Float32Array(e.w * e.h);
+    for (let i = 0; i < out.length; i++) out[i] = nightLight(px[i * 4], px[i * 4 + 1], px[i * 4 + 2]);
+    return out;
+  }
+
+  /**
+   * Blue Marble at the Sentinel-2 picture's own season (web/fields/albedo_ref.webp, build/season_ref.py) over the
+   * window, on the elevation's grid: {r, b}, each a Uint8Array holding the picture's red and blue ALBEDO over its green
+   * albedo (by the shader's own table), log-coded (seasonCode). Null where the window crosses the picture's edge at the date line.
+   */
+  async _season(job, plan) {
+    this._refBlob ||= fetch(stamped('fields/albedo_ref.webp')).then((r) => { if (!r.ok) throw new Error(`season reference: HTTP ${r.status}`); return r.blob(); });
+    this._refBlob.catch(() => { this._refBlob = null; });
+    this._lut ||= fetch(stamped('shaders/earth.frag.glsl')).then((r) => { if (!r.ok) throw new Error(`earth shader: HTTP ${r.status}`); return r.text(); }).then(albedoLut);
+    this._lut.catch(() => { this._lut = null; });
+    const [blob, lut] = await Promise.all([this._refBlob, this._lut]);
+    if (job.ctl.signal.aborted) throw new DOMException('aborted', 'AbortError');
+    const W = plan.win, e = plan.elev, t = SHIPPED_ALB_DEG, NX = Math.round(360 / t), NY = NX / 2;
+    const fx0 = (W.west + 180) / t, fy0 = (90 - W.north) / t, fw = W.lonSpan / t, fh = W.latSpan / t;
+    // the piece of the picture under the window, with two texels to spare each side for the filter
+    const x0 = Math.floor(fx0) - 2, y0 = Math.max(0, Math.floor(fy0) - 2), x1 = Math.ceil(fx0 + fw) + 2, y1 = Math.min(NY, Math.ceil(fy0 + fh) + 2);
+    if (x0 < 0 || x1 > NX) return null;
+    const bmp = await createImageBitmap(blob, x0, y0, x1 - x0, y1 - y0, { colorSpaceConversion: 'none', premultiplyAlpha: 'none' });
+    const c = new OffscreenCanvas(e.w, e.h), g = c.getContext('2d', { alpha: false, willReadFrequently: true, colorSpace: 'srgb' });
+    g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'low';       // bilinear: the picture is 5 km and the grid far finer
+    // (a canvas samples at pixel centres: half a source texel is the difference between the two grids' origins)
+    g.drawImage(bmp, fx0 - x0, fy0 - y0, fw, fh, 0, 0, e.w, e.h);
+    bmp.close();
+    const px = g.getImageData(0, 0, e.w, e.h).data, n = e.w * e.h, r = new Uint8Array(n), b = new Uint8Array(n);
+    for (let i = 0; i < n; i++) { const gr = Math.max(lutAlbedo(lut, px[i * 4 + 1], 1), 1e-3); r[i] = seasonCode(lutAlbedo(lut, px[i * 4], 0) / gr); b[i] = seasonCode(lutAlbedo(lut, px[i * 4 + 2], 2) / gr); }
+    return { r, b };
+  }
+
+  /** Streets and buildings for a plan, drawn by the worker: {overlay: ImageBitmap|null, pattern: ImageBitmap, ...}, or null where no worker can be had. */
+  _streets(job, plan) {
+    if (this._sw === undefined) {
+      try {
+        const u = new URL('./streets.worker.js', import.meta.url); u.search = new URL(import.meta.url).search;   // the build's code stamp, if any
+        this._sw = new Worker(u, { type: 'module' });
+        this._sCalls = new Map(); this._sId = 0;
+        this._sw.onmessage = (ev) => {
+          const c = this._sCalls.get(ev.data.id); if (!c) { if (ev.data.overlay) ev.data.overlay.close(); if (ev.data.pattern) ev.data.pattern.close(); return; }
+          this._sCalls.delete(ev.data.id);
+          if (ev.data.error) c.reject(ev.data.error === 'aborted' ? new DOMException('aborted', 'AbortError') : new Error(ev.data.error)); else c.resolve(ev.data);
+        };
+        this._sw.onerror = () => { const cs = [...this._sCalls.values()]; this._sCalls.clear(); this._sw = null; for (const c of cs) c.reject(new Error('the streets worker failed')); };
+      } catch (e) { this._sw = null; }
+    }
+    if (!this._sw) return Promise.resolve(null);
+    const p = plan.alb, id = ++this._sId;
+    return new Promise((resolve, reject) => {
+      this._sCalls.set(id, { resolve, reject });
+      job.ctl.signal.addEventListener('abort', () => { if (this._sw && this._sCalls.has(id)) this._sw.postMessage({ cancel: id }); }, { once: true });
+      this._sw.postMessage({ id, win: plan.win, w: p.w, h: p.h, z: plan.streets.z, tiles: plan.streets.tiles, texelM: p.texelKm * 1000 });
+    });
   }
 
   async _elevation(job, plan) {
@@ -973,15 +1121,19 @@ export class Detail {
   }
 
   /** The elevation texture. R: metres. G: the share of the texel that is the tiles' (0 under the sea and beyond 85
-   *  degrees, where R holds the shipped field). B: water, when `flag` is given: 0 or 1, or a share whose half is the shore. */
-  _elevTexture(p, grid, flag) {
-    const gl = this.gl, n = p.w * p.h, rgb = new Float32Array(n * 3);
-    for (let i = 0; i < n; i++) { rgb[i * 3] = grid.data[i]; rgb[i * 3 + 1] = grid.own[i]; rgb[i * 3 + 2] = flag ? flag[i] : 0; }
+   *  degrees, where R holds the shipped field). B: water, when `flag` is given: 0 or 1, or a share whose half is the shore.
+   *  A, when `amount` or `ref` is given: three bytes packed in one float (packDet; the shader's detPack reads them):
+   *  Black Marble's light (the window's imagery then carries the street pattern in its own fourth channel), and the
+   *  season reference's red and blue over green. Packed values need all 24 bits of a 32-bit float's mantissa. */
+  _elevTexture(p, grid, flag, amount = null, ref = null) {
+    const pack = (amount || ref) && this.floatLinear;
+    const gl = this.gl, n = p.w * p.h, k = pack ? 4 : 3, rgb = new Float32Array(n * k);
+    for (let i = 0; i < n; i++) { rgb[i * k] = grid.data[i]; rgb[i * k + 1] = grid.own[i]; rgb[i * k + 2] = flag ? flag[i] : 0; if (pack) rgb[i * k + 3] = packDet(amount ? amount[i] : 0, ref ? ref.r[i] : 0, ref ? ref.b[i] : 0); }
     const tex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, tex);
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
     // metres as floats. Without linear filtering of 32-bit floats, half floats: 8 m steps above 8192 m, finer below.
-    gl.texImage2D(gl.TEXTURE_2D, 0, this.floatLinear ? gl.RGB32F : gl.RGB16F, p.w, p.h, 0, gl.RGB, gl.FLOAT, rgb);
+    gl.texImage2D(gl.TEXTURE_2D, 0, pack ? gl.RGBA32F : this.floatLinear ? gl.RGB32F : gl.RGB16F, p.w, p.h, 0, pack ? gl.RGBA : gl.RGB, gl.FLOAT, rgb);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     return tex;
@@ -1088,10 +1240,14 @@ export class Detail {
 
   /** The shader's uniforms for this instant. With the layer off, or nothing loaded, both weights are 0. */
   uniforms(now) {
-    const u = { uDetAlb: UNIT.detAlb, uDetElev: UNIT.detElev, uDetWin: [0, 0, 1, 1], uDetAlbW: 0, uDetElevW: 0, uDetNightW: 0, uDetWaterW: 0, uDetWaterC: [0.10, 0.15, 0.20], uDetS2: 0, uDetAlbLod: 0, uDetElevPx: [1, 1], uDetElevM: [1000, 1000] };
+    const u = { uDetAlb: UNIT.detAlb, uDetElev: UNIT.detElev, uDetWin: [0, 0, 1, 1], uDetAlbW: 0, uDetElevW: 0, uDetNightW: 0, uDetNightE: 0, uDetRef: 0, uDetStreetW: 0, uDetStreetFill: 0, uDetWaterW: 0, uDetWaterC: [0.10, 0.15, 0.20], uDetS2: 0, uDetAlbLod: 0, uDetElevPx: [1, 1], uDetElevM: [1000, 1000], uDetWinM: [1, 1] };
     const c = this.cur;
     if (!this.enabled || !c) return u;
     const wgt = (l) => { if (!l) return 0; const x = Math.max(0, Math.min(1, (now - l.at) / FADE_MS)); return x * x * (3 - 2 * x); };
-    return { ...u, ...windowUniforms(c.plan), uDetAlbW: wgt(c.alb), uDetElevW: wgt(c.elev), uDetNightW: c.alb && c.alb.night ? wgt(c.alb) : 0, uDetWaterW: c.elev && c.elev.water ? wgt(c.elev) : 0, uDetWaterC: (c.elev && c.elev.waterC) || u.uDetWaterC };
+    return { ...u, ...windowUniforms(c.plan), uDetAlbW: wgt(c.alb), uDetElevW: wgt(c.elev), uDetNightW: c.alb && c.alb.alpha === 'bm' ? wgt(c.alb) : c.elev && c.elev.night ? wgt(c.elev) : 0, uDetNightE: c.elev && c.elev.night && !(c.alb && c.alb.alpha === 'bm') ? 1 : 0,
+      uDetStreetW: c.alb && c.alb.alpha === 'streets' ? wgt(c.alb) : 0, uDetRef: c.elev && c.elev.ref ? 1 : 0,
+      // side streets are in the tiles from zoom 13; coarser tiles hold the main roads only, and a little of the measured light is left under them
+      // as a glow (a tenth at most: at seven tenths a metropolis was one slab of gold again, in 500 m blocks)
+      uDetStreetFill: c.plan.streets ? [0.10, 0.10, 0.10, 0.08, 0.04, 0, 0][Math.max(0, Math.min(6, c.plan.streets.z - 8))] : 0, uDetWaterW: c.elev && c.elev.water ? wgt(c.elev) : 0, uDetWaterC: (c.elev && c.elev.waterC) || u.uDetWaterC };
   }
 }

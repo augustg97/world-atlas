@@ -2,9 +2,11 @@
 // an eyebrow, a title, fact rows, values FOR THE CURRENT INSTANT with their evidence tier, the
 // vintage of every number, and its sources (SCOPE section 7).
 
-import { TIERS, LAYERS, LENS_DEFS, FUEL_COLORS } from './catalog.js?v=20261112T020725Z';
-import { sunElevation, localSolarTime, dayLength, D2R } from './astro.js?v=20261112T020725Z';
-import { R_KM } from './camera.js?v=20261112T020725Z';
+import { TIERS, LAYERS, LENS_DEFS, FUEL_COLORS } from './catalog.js?v=20261112T060955Z';
+import { sunElevation, localSolarTime, dayLength, D2R } from './astro.js?v=20261112T060955Z';
+import { R_KM } from './camera.js?v=20261112T060955Z';
+import { wikiKey } from './wiki.js?v=20261112T060955Z';
+import { monthlySeries, koppen, yearSentences, climateChart, climateTable } from './climate.js?v=20261112T060955Z';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const fmt = (v, d = 0) => (Number.isFinite(v) ? v.toLocaleString('en-US', { maximumFractionDigits: d, minimumFractionDigits: d }) : '—');
@@ -55,6 +57,39 @@ function nearestCity(D, lon, lat, maxKm) {
   return best ? { row: best, km: bd } : null;
 }
 
+/**
+ * Where the card's description goes. The text is the lead of the card's Wikipedia article, asked for when the card
+ * is shown (js/wiki.js fills this placeholder; the article is named in data/wiki.json). Nothing of it is in the atlas.
+ * `caution`: a line shown under the text when there is text (a dispute's article may take a side; the atlas does not).
+ */
+const describe = (kind, obj, caution = '') => `<div class="sec wiki" data-wkey="${esc(kind + ':' + wikiKey(kind, obj))}"${caution ? ` data-caution="${esc(caution)}"` : ''}><div class="sec-h">Description</div><p class="wiki-state">Looking up the article…</p></div>`;
+
+const seriesMemo = new Map();          // the twelve months at the last few places asked for: a card is rebuilt every second
+function seriesAt(F, lon, lat, year, water) {
+  const k = `${lon},${lat},${year},${water}`;
+  if (seriesMemo.has(k)) return seriesMemo.get(k);
+  const s = monthlySeries(F, lon, lat, year, water);
+  if (s.ok) { if (seriesMemo.size > 12) seriesMemo.delete(seriesMemo.keys().next().value); seriesMemo.set(k, s); }
+  return s;
+}
+/**
+ * The atlas's own description of a place: the year there, computed from the fields the page holds (js/climate.js).
+ * `where` finishes the heading ("in Tokyo", "at its label point"); `above` names something higher than the ground
+ * the temperature is given for (a summit); `water`: whether the place is on water (false for a city, a state, a
+ * summit: the 20 km mask can hold a shore town as water); left out, the mask answers.
+ */
+function yearBlock(ctx, lon, lat, where = '', above = '', water = undefined) {
+  const d = new Date(ctx.t), s = seriesAt(ctx.F, lon, lat, d.getUTCFullYear(), water);
+  const head = `Through the year${where ? ' ' + esc(where) : ''} ${badge('climatology', '1991–2020')}`;
+  if (!s.ok) return section(head, `<div class="note">${esc(s.why)} The twelve months are shown once they can be computed.</div>`);
+  const now = d.getUTCMonth(), k = s.water ? null : koppen(s.t, s.pmm);
+  const cls = k ? row('Köppen–Geiger class', `${k.code} · ${esc(k.name)}`, 'modelled')
+    : `<div class="note">The Köppen–Geiger classes describe climates on land; none is given for a point on water.</div>`;
+  const ground = s.water ? 'over the water' : `taken to the ground’s height here (${fmt(s.z)} m, a 10 km mean${above ? '; ' + esc(above) : ''}) at ${fmt(ctx.F.meta.climate.lapse_K_per_km, 1)} °C per km`;
+  return section(head, climateChart(s, now) + yearSentences(s).map((t) => `<p class="prose">${esc(t)}</p>`).join('') + cls + climateTable(s, now)
+    + `<p class="fine">Twelve monthly means of 1991–2020, written by rule from this atlas’s fields: air temperature from NCEP/NCAR Reanalysis 1, ${ground}; precipitation from GPCP v2.3. The fields resolve about 200 km (temperature) and 250 km (precipitation), so a coast, a mountain or a dry valley takes its surroundings’ values${k ? ', and the class can differ from a finer published map' : ''}. Day length is computed from the Sun’s geometry.</p>`);
+}
+
 // ------------------------------------------ the probe ------------------------------------------
 export function probeCard(ctx, lon, lat) {
   const { F, D, astro } = ctx, ms = astro.month;
@@ -89,11 +124,14 @@ export function probeCard(ctx, lon, lat) {
   people += row('Light at night', Number.isNaN(nl) ? 'loading…' : nl < 0.004 ? 'dark' : nl < 0.06 ? 'dim' : nl < 0.3 ? 'lit' : 'brightly lit', 'static', '2016');
   if (Number.isFinite(co2) && co2 > 6) people += row('Fossil CO₂', `${fmt(co2)} t/km²/yr`, 'static', '2022');
   if (isWater && Number.isFinite(sh) && sh > 6e4) people += row('Shipping', sh > 5e6 ? 'a major lane' : sh > 6e5 ? 'a regular lane' : 'occasional traffic', 'static', '2015–21');
+  const rv = D.riverNear ? D.riverNear(lon, lat, 10) : null;          // a drawn river within 10 km: its card is one click away
   return {
     kind: 'probe', lon, lat,
     html: `<div class="eyebrow">${isWater ? 'A point at sea' : 'A point on land'} · ${coord(lon, lat)}</div><h2>${esc(title)}</h2>
       <div class="tierhead">Computed from the fields at this place and time</div>
       ${section('Sun', sunRows(ctx, lon, lat))}${section('Ground', ground)}${section('Air', air)}${section('Sea', sea)}${section('People', people)}
+      ${yearBlock(ctx, lon, lat, 'here')}
+      ${rv ? `<button class="link" data-open="river:${rv.i}|${rv.lon.toFixed(3)}|${rv.lat.toFixed(3)}">Open the card for the ${/canal/i.test(rv.river.name) ? '' : 'river '}${esc(rv.river.name)}, ${fmt(rv.km)} km away →</button>` : ''}
       ${c ? `<button class="link" data-open="country:${c.a3}">Open the card for ${esc(c.name)} →</button>` : ''}`,
   };
 }
@@ -125,7 +163,7 @@ export function countryCard(ctx, c) {
       ${c.endonym ? `<div class="endonym">${esc(c.endonym)}</div>` : ''}${c.formal && c.formal !== c.name ? `<div class="formal">${esc(c.formal)}</div>` : ''}
       ${c.sov && c.sov !== c.name && c.sov !== c.short ? `<div class="note">Sovereignty: ${esc(c.sov)}.</div>` : ''}
       <div class="tierhead">${tier}</div>
-      ${section('Facts', facts)}${now}${dis ? section('Contested', `<div class="note contested">Boundaries here are disputed. This atlas draws who administers the ground and marks the dispute.</div>${dis}`) : ''}
+      ${section('Facts', facts)}${describe('country', c)}${now}${cap ? yearBlock(ctx, cap[1], cap[2], `in ${cap[0]}`, '', false) : yearBlock(ctx, c.lon, c.lat, 'at its label point', '', false)}${dis ? section('Contested', `<div class="note contested">Boundaries here are disputed. This atlas draws who administers the ground and marks the dispute.</div>${dis}`) : ''}
       ${src(['Geometry and names: Natural Earth 5.1.2 (de facto worldview), public domain.', st ? 'Statistics: World Bank Open Data, CC BY 4.0; the year of each value is shown beside it.' : 'No statistical series available.'])}`,
   };
 }
@@ -142,13 +180,17 @@ export function cityCard(ctx, r) {
       ${alt ? `<div class="endonym">${esc(alt.split('|')[0])}</div>` : ''}
       <div class="tierhead">Computed from the fields at this place and time</div>
       ${section('Facts', row('Urban-area population', big(pop), 'static', 'NE 5.1') + row('Position', coord(lon, lat)) + row('Ground', Number.isFinite(z) ? `${fmt(Math.max(z, 0))} m (10 km mean)` : 'loading…', 'static', '2022'))}
+      ${describe('city', r)}
       ${section('Now', sunRows(ctx, lon, lat) + row('Air temperature now', `${fmt(T.now, 1)} °C`, 'modelled') + row(`${monthName} mean`, `${fmt(T.mean, 1)} °C`, 'climatology', '1991–2020') + row('Precipitation', `${fmt(ctx.F.climate('precip', lon, lat, ctx.astro.month), 1)} mm/day`, 'climatology'))}
+      ${yearBlock(ctx, lon, lat, '', '', false)}
       ${c ? `<button class="link" data-open="country:${c.a3}">Open the card for ${esc(c.name)} →</button>` : ''}
       ${src(['Natural Earth 5.1.2 populated places (public domain). Population is the source’s estimate for the urban agglomeration and is not a census figure.'])}`,
   };
 }
 
 export function featureCard(ctx, f) {
+  if (f.river) return riverCard(ctx, f);                              // a drawn river arrives as a feature (data.js riverItem)
+  const peak = 'elev' in f;                                           // a summit from the elevation points, not a region
   const kinds = { 'Range/mtn': 'Mountain range', 'Pen/cape': 'Peninsula or cape', Geoarea: 'Region', ocean: 'Ocean', sea: 'Sea', gulf: 'Gulf', bay: 'Bay', strait: 'Strait', channel: 'Channel', mountain: 'Mountain' };
   const z = ctx.F.elevation(f.lon, f.lat);
   const T = airTemp(ctx.F, f.lon, f.lat, ctx.astro.month, ctx.astro.sun);
@@ -159,9 +201,29 @@ export function featureCard(ctx, f) {
       <div class="tierhead">Generic — Natural Earth attributes only</div>
       ${section('At its label point', row('Position', coord(f.lon, f.lat)) + (f.elev ? row('Summit', `${fmt(f.elev)} m`, 'static') : row(z < 0 ? 'Depth' : 'Elevation', `${fmt(Math.abs(z))} m`, 'static', '2022'))
         + (Number.isFinite(sst) ? row('Sea-surface temperature', `${fmt(sst, 1)} °C`, 'climatology') : row('Air temperature now', `${fmt(T.now, 1)} °C`, 'modelled')))}
+      ${describe(peak ? 'peak' : 'feature', f)}
       ${section('Sun', sunRows(ctx, f.lon, f.lat))}
-      <div class="note">This atlas has no curated text for this feature yet. What is shown is the name and class from the source, and the fields sampled at one point inside it.</div>
+      ${yearBlock(ctx, f.lon, f.lat, peak ? '' : 'at its label point', peak && f.elev ? `the summit, at ${fmt(f.elev)} m, is higher and colder` : '', f.realm === 'sea')}
+      <div class="note">This atlas has no curated text of its own for this feature. Its own part is the name and class from the source, and the fields sampled at one point inside it.</div>
       ${src(['Natural Earth 5.1.2 geography regions and marine areas (public domain).'])}`,
+  };
+}
+
+/** A drawn river. `f` is data.js riverItem(): the reach, and the point on it the card was opened at. */
+export function riverCard(ctx, f) {
+  const z = ctx.F.elevation(f.lon, f.lat);
+  const T = airTemp(ctx.F, f.lon, f.lat, ctx.astro.month, ctx.astro.sun);
+  return {
+    kind: 'river', lon: f.lon, lat: f.lat,
+    html: `<div class="eyebrow">${/canal/i.test(f.name) ? 'Canal' : 'River'}</div><h2>${esc(f.name)}</h2>
+      <div class="tierhead">Generic — Natural Earth attributes only</div>
+      ${section('At this point on it', row('Position', coord(f.lon, f.lat)) + row('Ground', Number.isFinite(z) ? `${fmt(Math.max(z, 0))} m (10 km mean)` : 'loading…', 'static', '2022')
+        + row('Air temperature now', `${fmt(T.now, 1)} °C`, 'modelled'))}
+      ${describe('river', f.river)}
+      ${section('Sun', sunRows(ctx, f.lon, f.lat))}
+      ${yearBlock(ctx, f.lon, f.lat, 'here', '', false)}
+      <div class="note">This atlas draws the river’s centreline and holds its name and nothing else about it: no length, no discharge. The values above are the fields at one point on the line.</div>
+      ${src(['Natural Earth 5.1.2 rivers and lake centrelines, 1:50m (public domain).'])}`,
   };
 }
 
@@ -171,6 +233,8 @@ export function disputeCard(ctx, d) {
     html: `<div class="eyebrow">Contested territory</div><h2>${esc(d.name)}</h2>${badge('static', '2022')} <span class="tier tier-contested">CONTESTED</span>
       <div class="tierhead">Curated from Natural Earth’s boundary notes</div>
       ${section('Status', `<p class="prose">${esc(d.note)}.</p><p class="prose">This atlas draws the line of actual control and marks it as disputed. It takes no position on the claims; each party’s own card links here.</p>`)}
+      ${describe('dispute', d, 'Wikipedia’s text may say whose this ground is. This atlas does not: its own statement is the Status above, and it takes no position on the claims.')}
+      ${yearBlock(ctx, d.lon, d.lat, 'at its centre', '', false)}
       ${src(['Natural Earth 5.1.2 breakaway and disputed areas (public domain). Natural Earth’s notes are brief; they name the administering power and the claimants and nothing more.'])}`,
   };
 }
@@ -193,6 +257,8 @@ export function volcanoCard(ctx, v) {
     kind: 'volcano', lon, lat,
     html: `<div class="eyebrow">Volcano · ${esc(country)}</div><h2>${esc(name)}</h2><div class="tierhead">Generic — catalogue attributes only</div>
       ${section('Facts', row('Type', esc(type || '—')) + row('Summit', Number.isFinite(elev) ? `${fmt(elev)} m` : '—') + row('Last known eruption', when) + row('Position', coord(lon, lat)))}
+      ${describe('volcano', v)}
+      ${yearBlock(ctx, lon, lat, '', Number.isFinite(elev) && elev > 0 ? `the summit, at ${fmt(elev)} m, may be higher and colder` : '', Number.isFinite(elev) && elev > 0 ? false : undefined)}
       ${src(['NOAA NCEI Global Volcano Locations Database (public domain), after the Smithsonian Global Volcanism Program.'])}`,
   };
 }

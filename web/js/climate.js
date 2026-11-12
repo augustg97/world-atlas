@@ -110,12 +110,16 @@ export function yearSentences(s) {
   return out;
 }
 
-/** Round values inside [lo, hi] to label an axis with: about n of them, never fewer than one. */
+/** Round values inside [lo, hi] to label an axis with: about n of them, and two at least where a finer step gives two. */
 export function ticks(lo, hi, n = 3) {
-  const span = Math.max(hi - lo, 1e-9), raw = span / n, pow = 10 ** Math.floor(Math.log10(raw));
-  const step = [1, 2, 5, 10].map((m) => m * pow).find((v) => v >= raw * 0.999), out = [];
-  for (let v = Math.ceil(lo / step - 1e-9) * step; v <= hi + step * 1e-9; v += step) out.push(Math.round(v * 1e6) / 1e6 + 0);
-  return out.length ? out : [Math.round(((lo + hi) / 2) * 10) / 10];
+  const span = Math.max(hi - lo, 1e-9);
+  for (let k = n; k <= n + 6; k++) {
+    const raw = span / k, pow = 10 ** Math.floor(Math.log10(raw));
+    const step = [1, 2, 5, 10].map((m) => m * pow).find((v) => v >= raw * 0.999), out = [];
+    for (let v = Math.ceil(lo / step - 1e-9) * step; v <= hi + step * 1e-9; v += step) out.push(Math.round(v * 1e6) / 1e6 + 0);
+    if (out.length >= 2) return out;
+  }
+  return [Math.round(((lo + hi) / 2) * 10) / 10];
 }
 
 /**

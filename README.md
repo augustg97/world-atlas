@@ -158,6 +158,14 @@ docs/         empty until the owner decides to publish
 - **The political units** (`build/units.py`) - Natural Earth's countries with France's five overseas departments
   taken out as units of their own. The names, the identity raster and the label audit all read this one list.
 - **The probe and cards** (`js/cards.js`) - click any pixel for every field's value there and then, each with its tier.
+  A place's card (city, country, feature, peak, river, dispute, volcano) opens with the lead of its English Wikipedia
+  article, fetched live and set as text only (`js/wiki.js`; which article is `data/wiki.json`, built by
+  `build/wiki_titles.py`, held by `audit_cardtext.py`), and carries the atlas's own year at the place: twelve monthly
+  means, a chart, sentences by rule and the Köppen-Geiger class (`js/climate.js`).
+- **Clouds since release 1.8** (`earth.frag.glsl`: `sheetLight`, `deckShare`, `heapedF`, `streetAt`) - a middling
+  share of sheet cloud is weather and its light goes to the cloud photograph's systems; only heaped cloud closes
+  its gaps at a slant; cumulus grains are read along the monthly-mean wind. `cloud_budget.py` holds the sheet
+  budget to a VIIRS survey of the Southern Ocean and EPIC's light by view angle.
 - **Planet now** (`js/dash.js`) - integrals of the shown fields: people in daylight, sea-ice extent, global mean temperature.
 
 ---
@@ -242,6 +250,7 @@ Failures that have each cost real time here. *(The general catalogue is in
 | the ground closer in than 0.6 km a pixel (streamed) | Sentinel-2 cloudless 2016 by EOX IT Services GmbH, https://s2maps.eu (contains modified Copernicus Sentinel data 2016) - CC BY 4.0 |
 | land and water closer in than 5 km a pixel (streamed) | Global Surface Water, occurrence 1984-2021 (Pekel et al. 2016, Nature 540) - Source: EC JRC/Google; free with attribution. Checked against ESA WorldCover 2021 v200 (CC BY 4.0), not shipped |
 | streets and buildings closer in than 120 m a pixel (streamed) | (c) OpenStreetMap contributors, ODbL 1.0 (https://www.openstreetmap.org/copyright), as vector tiles in the OpenMapTiles schema from OpenFreeMap (https://openfreemap.org) - credited on the map while its tiles are on screen |
+| the description on a place's card (fetched when the card opens; not stored) | English Wikipedia, the article's lead - text by Wikipedia contributors, CC BY-SA 4.0, credited and linked on the card. Which article belongs to which card (`data/wiki.json`): Natural Earth's Wikidata ids, resolved through Wikidata (CC0) at build time by `build/wiki_titles.py` |
 | the season of the close-in picture | `fields/albedo_ref.webp`: this project's own composite of the Blue Marble months above, by `build/season_ref.py` |
 | wide rivers | NASA MODIS Land Water Mask MOD44W (Carroll et al. 2009) through NASA GIBS, along Natural Earth 1:10m river lines - public domain |
 | clouds (texture) | NASA Blue Marble: Clouds (Stockli 2002) - public domain |
@@ -291,6 +300,8 @@ and what the model cannot know.
 - **The close-in ground is 2016, one season, another camera.** Sentinel-2 is read by its own table: ground it photographs grey is drawn 5% off grey at eleven city places (48% before release 1.7). Sentinel-2's grey is taken as grey; nothing independent says so. The month's change of colour reaches the close view whole (0.4% short at 23 places; 39% by release 1.7's rule), given a reference month per place that is fitted and has no witness; the picture's form is still one season's. Grey ground is 5.4% off grey, 9.1% at the worst city (Amsterdam). Winter snow close in is the shipped field's 5 km patches.
 - **Streets and buildings are OpenStreetMap's**: complete in some countries, sparse in others; few buildings have a height (the rest are drawn at 7 m); shadows are for one Sun, not the hour shown; below 10 m a pixel the photograph under them is only magnified. Footprints sit within 12 m of an independent map of built-up ground at eight cities; the roads have no such check. On a wide screen at high latitude their grid is 5 m, not 2.5 (A20). Central Paris at 5 m a pixel is about 10 MB of street tiles.
 - **Where the water is, close in, is a 37-year record, not the picture**: JRC Global Surface Water, water at least half of 1984-2021. 2.2% of the ground wrong at 23 places against ESA WorldCover 2021 (release 1.6's reading 3.2%, NASA's mask alone 5.6%, the 5 km field 11%). A lake or reservoir that has fallen is drawn wider than the picture under it (Lake Mead, the Dead Sea: A17); the record lies 10 to 30 m west of the picture across Europe and the north-eastern United States; polewards of 78 N and 59 S release 1.6's reading stands in.
+- **A card's description is Wikipedia's, not the atlas's**: fetched live, credited, unchecked by the atlas, and absent offline; 855 of 10,395 cards have no article matched. On a dispute's card it may say whose the ground is; the atlas's statement is the Status section.
+- **"Through the year" on a card is the atlas's coarse climate fields** (temperature about 200 km, precipitation 250 km), with no witness: Lima reads as steppe with 520 mm of rain, and the Köppen class can differ from a published map (B2).
 - **The close-in picture is audited in three places only**: where its water is, where its buildings are, and what its join does to grey ground and to the season (by an emulation of the join, not the shader itself). Its relief, its loading and everything else about it are checked by eye. Loading times were measured from one place on one network.
 - **Vintages differ**: land surface 2004, night lights 2016, borders 2022, emissions 2022, population 2025.
 - **At whole-Earth framing 125 of the 177 states in view are named**, 18 of them only in the Europe and Lesser Antilles insets. Sixteen European states, the Levant and the Caucasus still are not; the insets need open sea between the panels and are left out in a small window (F1).

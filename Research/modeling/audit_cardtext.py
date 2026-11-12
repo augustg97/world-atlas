@@ -59,7 +59,8 @@ LIMITS = {
     "feature": "2.5 x the side of a square of the feature's drawn area (at least 150 km) from its label point",
     "river": "the drawn length of the reaches of that name (at least 60 km) from the nearest drawn point of any of them: a river's coordinate is its mouth or its source",
 }
-WIDE = 3.0        # a mapping whose article title IS the card's name may lie this many limits away (a feature: at least 1000 km)
+NAME_KM = 350.0   # a mapping the build found BY NAME (not by an id) under another title must lie this close, whatever the limit
+WIDE = 3.0        # a mapping whose article title IS the card's name may lie this many limits away (wide_km: a feature and a state differ)
 
 
 # ---------------------------------------------------------------------------
@@ -81,7 +82,7 @@ def load_subject():
                          "and the titles' status there). Without it nothing here can be checked, and that is a failure.")
     rep = json.load(open(REPORT))
     return {"wiki": rd("wiki.json"), "cards": cards, "coords": rep["coords"], "enwiki": rep["enwiki"], "checked": rep.get("checked"),
-            "build": rep.get("kinds", {})}
+            "build": rep.get("kinds", {}), "by_name": {k: {w["key"] for w in v.get("found", []) if w["route"] == "name"} for k, v in rep.get("kinds", {}).items()}}
 
 
 # ---------------------------------------------------------------------------
@@ -179,11 +180,17 @@ def offset(kind, c, pts, rivers):
     return d, max(60.0, rivers[c["name"]][1])
 
 
+def wide_km(kind, lim):
+    """The wider limit, for a mapping whose article title is the card's name: WIDE limits; a feature 1000 km where its
+    own limit is less, and no more; a state at least 1000 km."""
+    return max(lim, 1000.0) if kind == "feature" else max(WIDE * lim, 1000.0) if kind == "country" else WIDE * lim
+
+
 def passes(kind, name, title, d, lim):
     """'near', 'named' (further off, but the article's title is the card's name), or None."""
     if d <= lim:
         return "near"
-    if d <= (max(WIDE * lim, 1000.0) if kind == "feature" else WIDE * lim) and fold(title) == fold(name):
+    if d <= wide_km(kind, lim) and fold(title) == fold(name):
         return "named"
     return None
 
@@ -252,6 +259,8 @@ def check_place(S, findings, M):
                 M["by_article_coord"] += 1
             d, lim = offset(k, c, pts, rivers)
             how = passes(k, card_name(k, c), title, d, lim)
+            if card_key(k, c) in S.get("by_name", {}).get(k, ()):          # found by name: a namesake fits inside a big thing's limit
+                how = "near" if d <= min(lim, NAME_KM) or (d <= lim and fold(title) == fold(card_name(k, c))) else None
             S["offsets"][k].append(d / lim)
             if how == "named":
                 M["by_name"] += 1
@@ -337,7 +346,8 @@ def _selftest():
                     {"a3": "CCC", "name": "Isles", "lon": 179.0, "polys": sq(178, 0, 0.2) + sq(-178, 0, 0.2)}],
         "dispute": [{"name": "D", "note": "n", "lon": 0.0, "polys": sq(0, 0, 0.5)}],
         "feature": [{"name": "Sea", "kind": "sea", "lon": -30.0, "lat": 0.0, "size": 10.0}, {"name": "Hills", "kind": "Range/mtn", "lon": 5.0, "lat": 5.0, "size": 0.5},
-                    {"name": "Strait", "kind": "strait", "lon": 120.0, "lat": 20.0, "size": 0.0}],
+                    {"name": "Strait", "kind": "strait", "lon": 120.0, "lat": 20.0, "size": 0.0}, {"name": "Twice", "kind": "Range/mtn", "lon": -76.4, "lat": 2.44, "size": 3.37},
+                    {"name": "Belt", "kind": "Geoarea", "lon": 10.0, "lat": 15.0, "size": 18.0}, {"name": "Shelf", "kind": "Geoarea", "lon": 10.0, "lat": -15.0, "size": 18.0}],
         "peak": [{"name": "Peak", "lon": 86.9, "lat": 28.0}],
         "river": [{"name": "Flow", "lines": [[0, 0, 100, 0, 200, 0]]}, {"name": "Brook", "lines": [[3000, 0, 3020, 0]]}],
         "volcano": [["Cone", 15.0, 38.0, 900, "", "", ""]],
@@ -346,13 +356,15 @@ def _selftest():
                      "Dead|0.000|10.000": ["Dead", "Q4"], "Twin A|60.000|60.000": ["Twin", "Q5"], "Twin B|60.050|60.000": ["Twin", "Q5"],
                      "Edge|0.000|0.000": ["Edge, Otherland", "Q14"], "Wïde|0.000|20.000": ["Wide", "Q15"], "Gone|1.000|1.000": ["Gone", "Q6"]},
             "country": {"AAA": ["Aland", "Q7"], "BBB": ["Bland", "Q8"], "CCC": ["Isles", "Q16"]}, "dispute": {"D|n": ["D", "Q9"]},
-            "feature": {"Sea|sea|-30.000|0.000": ["Sea", "Q10"], "Hills|Range/mtn|5.000|5.000": ["Hills (elsewhere)", "Q11"], "Strait|strait|120.000|20.000": ["Strait", "Q17"]},
+            "feature": {"Sea|sea|-30.000|0.000": ["Sea", "Q10"], "Hills|Range/mtn|5.000|5.000": ["Hills (elsewhere)", "Q11"], "Strait|strait|120.000|20.000": ["Strait", "Q17"],
+                        "Twice|Range/mtn|-76.400|2.440": ["Twice", "Q19"],
+                        "Belt|Geoarea|10.000|15.000": ["Belt, Elsewhere", "Q20"], "Shelf|Geoarea|10.000|-15.000": ["Shelf (region)", "Q21"]},
             "peak": {"Peak|86.900|28.000": ["Peak", "Q12"]}, "river": {"Flow|0|0": ["Flow", "Q13"], "Brook|3000|0": ["Brook", "Q18"]}, "volcano": {},
-            "counts": {"city": [8, 9], "country": [3, 3], "dispute": [1, 1], "feature": [3, 3], "peak": [1, 1], "river": [2, 2], "volcano": [0, 1]}}
+            "counts": {"city": [8, 9], "country": [3, 3], "dispute": [1, 1], "feature": [6, 6], "peak": [1, 1], "river": [2, 2], "volcano": [0, 1]}}
     at = lambda lon, lat: {"item": [lon, lat], "article": []}
     coords = {"Q1": at(10.2, 50.1), "Q2": at(-70.0, 40.0), "Q3": at(30.0, 30.0), "Q4": at(0.0, 10.0), "Q5": at(60.0, 60.0), "Q6": at(1.0, 1.0),
               "Q7": at(11.0, 51.0),            # inside Aland
-              "Q8": at(110.0, 0.0),            # 1000 km outside Bland, whose box is 314 km across: too far even by name
+              "Q8": at(115.0, 0.0),            # 1550 km outside Bland, whose box is 314 km across: too far even by name
               "Q9": at(0.52, 0.45),            # 6 km outside the disputed square, off its corner: within the 100 km floor
               "Q10": at(-10.0, 5.0),           # 2,280 km from the label point of a sea 10 degrees across: within 2.5 x 1,112 km
               "Q11": at(8.0, 5.0),             # 330 km from hills half a degree across, and the title is another place's: too far
@@ -362,22 +374,26 @@ def _selftest():
               "Q15": at(0.0, 20.4),            # 44 km away, and the title is the card's name but for an accent: within three limits
               "Q16": at(180.0, 0.0),           # between two islets either side of the date line, 200 km from each: within half the spread
               "Q17": at(125.0, 20.0),          # 520 km from the label point of a strait drawn with no area: the title is its name, under 1000 km
+              "Q19": at(-77.6, -9.2),          # a range drawn twice under one name: the article's range is 1,290 km from this one, whose own limit is 937 km
+              "Q20": at(10.0, 36.0),           # found by name: a namesake 2,330 km off, inside the 5,000 km limit of a belt 18 degrees across: too far for a name
+              "Q21": at(10.0, -36.0),          # the same distance under another title, but by Natural Earth's id: within the limit
               "Q18": at(30.9, 0.0)}            # 78 km past the end of a brook drawn 22 km long: too far, and three limits is 180 km... but the title is its name
     ok = lambda t: {"missing": False, "disambig": False, "to": t}
-    enwiki = {t: ok(t) for t in ["Right", "Namesake, Elsewhere", "Twin", "Gone", "Aland", "Bland", "D", "Sea", "Hills (elsewhere)", "Peak", "Edge, Otherland", "Wide", "Isles", "Strait", "Brook"]}
+    enwiki = {t: ok(t) for t in ["Right", "Namesake, Elsewhere", "Twin", "Gone", "Aland", "Bland", "D", "Sea", "Hills (elsewhere)", "Peak", "Edge, Otherland", "Wide", "Isles", "Strait", "Brook", "Twice", "Belt, Elsewhere", "Shelf (region)"]}
     enwiki["Disambig"] = {"missing": False, "disambig": True, "to": "Disambig"}
     enwiki["Dead"] = {"missing": True, "disambig": False, "to": "Dead"}
     enwiki["Flow"] = {"missing": False, "disambig": False, "to": "Flow (river)"}
-    S, findings, M = run({"wiki": wiki, "cards": cards, "coords": coords, "enwiki": enwiki, "checked": "2026-01-01", "build": {}})
+    S, findings, M = run({"wiki": wiki, "cards": cards, "coords": coords, "enwiki": enwiki, "checked": "2026-01-01", "build": {},
+                          "by_name": {"feature": {"Belt|Geoarea|10.000|15.000"}}})
     want = {"orphan_keys": 1, "uncovered_city": 1, "uncovered_volcano": 1, "uncovered_country": 0, "uncovered_feature": 0, "uncovered_river": 0,
-            "misplaced": 4,                # Namesake, Bland, Hills, Edge
+            "misplaced": 6,                # Namesake, Bland, Hills, Edge, Twice, Belt
             "by_name": 3,                  # Wïde, Strait, Brook
             "by_article_coord": 1,         # Flow
             "disambiguation": 1, "dead_titles": 1, "redirects": 1, "unchecked": 0, "shared_articles": 1}
     for k, v in want.items():
         assert M[k] == v, f"selftest: {k} is {M[k]}, known answer {v}\n" + "\n".join(f["what"] for f in findings) + "\n" + "\n".join(S["named"])
     named = " ".join(f["what"] for f in findings if f["check"] == "place")
-    assert all(n in named for n in ("Namesake", "Bland", "Hills", "Edge")) and not any(n in named for n in ("Right", "Sea", "Flow", "Isles", "Strait", "Brook", "Wïde")), named
+    assert all(n in named for n in ("Namesake", "Bland", "Hills", "Edge", "Twice", "Belt")) and not any(n in named for n in ("Right", "Sea", "Flow", "Isles", "Strait", "Brook", "Wïde", "Shelf")), named
     assert n3(-0.0) == "0.000" and n3(139.749) == "139.749" and card_key("river", cards["river"][0]) == "Flow|0|0" and card_key("city", ["Dead", -0.0001, 10.0]) == "Dead|0.000|10.000"
     assert fold("Wïde") == fold("wide") and fold("Atakor Volcanic Field") == fold("Atakor volcanic field") and fold("El Progreso") != fold("El Progreso, Jutiapa")
     # a record that is not there is a failure, not a pass
@@ -406,9 +422,12 @@ def _register(S, findings, M):
               "12 have no name and one has no line, leave 449 that can open a card.", "",
               "## The place check", "", "The mapped Wikidata item's own coordinate (P625) must lie within a limit of the card's position:", ""]
     lines += [f"- **{k}**: {LIMITS[k]}" for k in KINDS]
-    lines += ["", f"A mapping further off than its limit is kept only if it lies within {WIDE:g} limits (a feature: at least 1000 km, because Natural Earth draws",
-              "only a piece of some seas, straits and reefs) AND the article's title is the card's own name, accents and case aside. Where the item",
-              "has no coordinate of its own (most rivers) the coordinates the English article carries stand in.", "",
+    lines += ["", f"A mapping further off than its limit is kept only if the article's title is the card's own name, accents and case aside, AND it lies",
+              f"within {WIDE:g} limits. For a feature the wider limit is 1000 km where its own is less, and no more: Natural Earth draws only a piece of",
+              "some seas, straits and reefs, and it also draws two ranges under one name. For a state it is at least 1000 km: the Seychelles are drawn",
+              "as one island. Where the item has no coordinate of its own (most rivers) the coordinates the English article carries stand in.",
+              f"An article the build found by NAME (no id led to it) is held tighter: within {NAME_KM:g} km, or under the card's own name within the limit.",
+              "A big thing's limit is thousands of km and a namesake fits inside it: the Sahel of Tunisia inside the Sahel's.", "",
               "| kind | checked | median distance / limit | 95th percentile | worst |", "|---|---|---|---|---|"]
     for k in KINDS:
         r = sorted(S["offsets"][k])
@@ -425,6 +444,10 @@ def _register(S, findings, M):
               "| kind | card | why refused | article now |", "|---|---|---|---|"]
     for k, w in wrong:
         lines.append(f"| {k} | {w['key'].split('|')[0]} | {w['why']} | {w.get('now') or 'none'} |")
+    found = [(k, w) for k in KINDS for w in S["build"].get(k, {}).get("found", [])]
+    if found:
+        lines += ["", "## Articles found without Natural Earth's id", "", "By GeoNames id, or by name (exactly one item of that name says it is that kind of thing, has an English article and passes the place check).", "",
+                  "| kind | card | route | article | km |", "|---|---|---|---|---|"] + [f"| {k} | {w['key'].split('|')[0]} | {w['route']} | {w['title']} | {w['km']:.0f} |" for k, w in found]
     lines += ["", "## Cards without an article", ""]
     for k in KINDS:
         wo = S["build"].get(k, {}).get("without", [])
@@ -481,6 +504,6 @@ if __name__ == "__main__":
     counts = _report(findings)
     if S.get("checked"):
         import datetime
-        age = (datetime.date.today() - datetime.date.fromisoformat(S["checked"][:10])).days
+        age = (datetime.datetime.now(datetime.timezone.utc).date() - datetime.date.fromisoformat(S["checked"][:10])).days
         print(f"titles checked against en.wikipedia.org {age} days ago" + (": run build/wiki_titles.py --recheck" if age > STALE_DAYS else ""))
     sys.exit(1 if counts["HIGH"] else 0)

@@ -5,8 +5,8 @@ Renderer: ANGLE (Apple, ANGLE Metal Renderer: Apple M5 Ultra, Unspecified Versio
 | frame | verdict | mean difference, levels | pixels more than 24 levels apart |
 |---|---|---|---|
 | globe-default | ok | 0.18 | 0.03% |
-| globe-night-asia | ok | 0.14 | 0.04% |
-| globe-motion-atlantic | ok | 0.48 | 0.14% |
+| globe-night-asia | ok | 0.24 | 0.04% |
+| globe-motion-atlantic | ok | 0.50 | 0.14% |
 | region-himalaya | ok | 0.28 | 0.20% |
 | sheet-atlas | ok | 0.73 | 0.59% |
 | sheet-lens-temp | ok | 0.33 | 0.05% |

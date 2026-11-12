@@ -83,7 +83,7 @@ button { cursor: pointer; }
 #right { position: fixed; top: 76px; right: 10px; bottom: 112px; width: 318px; display: flex; flex-direction: column; gap: 10px; z-index: 15; pointer-events: none; }
 #right > div { pointer-events: auto; overflow-y: auto; scrollbar-width: thin; scrollbar-color: rgba(255, 255, 255, .15) transparent; }
 #card { flex: 1 1 auto; min-height: 120px; } #dash { flex: 0 1 auto; max-height: 100%; } #card:not([hidden]) + #dash { flex: 0 0 auto; max-height: 34%; }
-.card-bar { display: flex; justify-content: space-between; padding: 8px 10px 0; position: sticky; top: 0; }
+.card-bar { display: flex; justify-content: space-between; padding: 8px 10px 5px; margin-bottom: -5px; position: sticky; top: 0; z-index: 1; background: linear-gradient(rgba(9, 13, 22, .96) 78%, rgba(9, 13, 22, 0)); }
 .card-body { padding: 2px 14px 14px; }
 .eyebrow { font: 600 9.5px var(--sans); letter-spacing: .13em; text-transform: uppercase; color: var(--gold); margin-bottom: 3px; }
 h2 { font: 600 21px/1.15 var(--serif); margin: 0 0 3px; letter-spacing: .01em; } h2 small { font: 500 12px var(--sans); color: var(--ink-3); letter-spacing: .08em; }
@@ -98,6 +98,19 @@ h2 { font: 600 21px/1.15 var(--serif); margin: 0 0 3px; letter-spacing: .01em; }
 .prose { font: 13px/1.5 var(--serif); color: var(--ink); margin: 4px 0; }
 .link { display: block; width: 100%; text-align: left; background: none; border: 0; padding: 5px 0; color: var(--gold-2); font-size: 12px; } .link:hover { text-decoration: underline; }
 .src { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 7px; } .src p { margin: 2px 0; font-size: 10.5px; color: var(--ink-3); line-height: 1.4; }
+/* a card's description (Wikipedia's lead, fetched live: js/wiki.js) and the year at the place (js/climate.js) */
+.sec-h .tier { margin-left: 5px; letter-spacing: .09em; }
+.wiki { min-height: 58px; } .wiki-state { font-size: 11.5px; color: var(--ink-3); margin: 4px 0; }
+.wiki-more { display: block; padding: 4px 0 2px; color: var(--gold-2); font-size: 12px; text-decoration: none; } .wiki-more:hover { text-decoration: underline; }
+.wiki-credit, .fine { margin: 4px 0 0; font-size: 10.5px; line-height: 1.4; color: var(--ink-3); } .wiki-credit a { color: var(--ink-2); text-decoration: underline; }
+.clim { display: block; width: 100%; height: auto; margin: 4px 0 2px; font-family: var(--sans); }
+.clim .cg { stroke: rgba(255, 255, 255, .09); stroke-width: 1; } .clim .ct { fill: var(--ink-3); font-size: 8.5px; font-variant-numeric: tabular-nums; }
+.clim .ch { fill: var(--ink-2); font-size: 8.5px; letter-spacing: .04em; } .clim .cm { fill: var(--ink-3); font-size: 8.5px; } .clim .cm.on { fill: var(--gold); font-weight: 700; }
+.clim .cnow { fill: rgba(255, 255, 255, .07); } .clim .cdot { stroke: #0c111b; stroke-width: 2; } .clim .chit { fill: transparent; } .clim .chit:hover { fill: rgba(255, 255, 255, .06); }
+.climtab { margin: 6px 0 2px; } .climtab summary { cursor: pointer; color: var(--gold-2); font-size: 12px; padding: 3px 0; }
+.climtab table { width: 100%; border-collapse: collapse; font-size: 11.5px; font-variant-numeric: tabular-nums; margin-top: 3px; }
+.climtab th { font: 600 9px var(--sans); letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); text-align: right; padding: 2px 0; } .climtab th:first-child, .climtab td:first-child { text-align: left; color: var(--ink-2); }
+.climtab td { text-align: right; padding: 2px 0; border-bottom: 1px dotted rgba(255, 255, 255, .06); } .climtab tr.on td { color: var(--gold-2); }
 .swatch { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 6px; }
 .dsec { padding: 7px var(--pad) 6px; border-bottom: 1px solid var(--line); } .dsec:last-child { border-bottom: 0; }
 .pbar { display: flex; height: 7px; border-radius: 4px; overflow: hidden; margin: 4px 0 5px; background: #111; }

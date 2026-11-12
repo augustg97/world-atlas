@@ -1,5 +1,71 @@
 [
  {
+  "version": "1.8",
+  "date": "11 November 2026",
+  "title": "Cities with streets, by day and by night; seasons close in; clouds; a description on every card",
+  "summary": "You can now go in to 5 m a pixel, where a city has its streets and buildings. At night its light sits along those streets as lamps, not as a wash over the whole city. Close in, fields turn with the year as they do from further out. The Southern Ocean's weather is white systems on a dark sea, and cumulus lies along the wind. Every place's card opens with a description.",
+  "sections": [
+   {
+    "name": "Cities",
+    "items": [
+     "The zoom floor is 5 m a pixel (it was 20). Closer than 120 m a pixel OpenStreetMap's roads are drawn over the photograph at their width on the ground; from about 8 m a pixel its buildings too, each with its roof and the shadow its height throws.",
+     "Below 10 m a pixel the photograph is Sentinel-2 magnified, and soft. The streets and buildings are what is sharp.",
+     "In the Atlas style the same data is a street plan: main roads in yellow, streets in white, built blocks in tan.",
+     "Checked at eight cities against an independent map of built-up ground, the buildings sit within 12 m of it.",
+     "Close in, four fifths of the air's own veil is taken out and the picture's contrast is raised, as satellite maps are published. From further out you still see the ground through all of the air."
+    ]
+   },
+   {
+    "name": "Night",
+    "items": [
+     "Closer than about 100 m a pixel, a city's light is put where a city's light comes from: along its streets, lamp by lamp, brighter on main streets than side streets, in car parks and yards, and not in parks or on water. Central Park and the Seine are dark.",
+     "Before, the light took the pattern of the daytime photograph, and a city at night was an amber picture of its day, forest and all.",
+     "How much light leaves each 500 m is still measured from orbit. Where it sits within that is modelled: which streets there are is known, which are lit is not, and each lamp is set down by rule."
+    ]
+   },
+   {
+    "name": "The year, close in",
+    "items": [
+     "Close in, fields now go brown and green with the month as they do from further out. Release 1.7 applied half of the change, by eye; the whole of it now arrives (measured at 23 places: 0.4% short, where the old rule was 39% short).",
+     "The atlas now holds a picture of the season Sentinel-2 photographed each place in, and moves the ground's colour by as much as Blue Marble's own colour moves between that season and the month shown.",
+     "Grey ground is drawn 5.4% off grey on average (5.2% before), and 9.1% at the worst city (7.3% before). That is the price of joining the month's brightness to the ground and not to the ground and the air together, which had turned bare fields purple."
+    ]
+   },
+   {
+    "name": "Clouds",
+    "items": [
+     "Over the Southern Ocean in summer the cloud is bright weather systems with dark sea between them, where it was a grey film. Against NASA EPIC's December frames the spread of brightness there is 38 to 41 display levels (EPIC 41 to 42; before, 31).",
+     "Cloud in layers is no longer brightened toward the edge of the disc the way broken cloud is: EPIC shows the storm belts level from the centre outwards.",
+     "Fields of small cumulus are laid along the month's mean wind, within 12 degrees of it over the scenes checked (37 before).",
+     "Over all eight EPIC frames: mean brightness error 2.67 to 2.32 levels, share of white 0.028 to 0.018."
+    ]
+   },
+   {
+    "name": "A description on every card",
+    "items": [
+     "The card of a city, country, sea, mountain range, peak, river, volcano or disputed territory now opens with the opening of its English Wikipedia article, fetched when you open the card, credited and linked. 9,540 of 10,395 cards have one.",
+     "The text is Wikipedia's, not the atlas's, and the atlas has not checked it. Which article belongs to which card has been checked: 185 of the source's own pointers were refused, 54 of them because they pointed at another place of the same name (one of them 10,000 km away).",
+     "Every such card also carries the atlas's own account of the year there, which needs no network: twelve monthly means of temperature and precipitation with a chart, the warmest, coldest, wettest and driest months, the range of day length, and the Köppen-Geiger climate class.",
+     "Rivers have cards now: search for one, or click near one and follow the link.",
+     "Opening a card tells Wikipedia which article was asked for, and nothing else."
+    ]
+   },
+   {
+    "name": "Known to be wrong",
+    "items": [
+     "The Southern Ocean belt is still 5 to 12% dimmer than EPIC in December, and the trade-wind cumulus leans with the wind but does not yet read as streets: its pieces are five times the size of a real street's cells.",
+     "Land in the EPIC frames is a little further off than before (11.9 to 12.3) and the Sun's glint in one frame is too strong.",
+     "The lamps' light is not made to add up to the measured amount in each 500 m, and between 100 m and 2 km a pixel a large city is still one field of gold.",
+     "Building shadows are for one Sun (Sentinel-2's mid-morning), not the hour shown; few buildings have a known height.",
+     "Which month Sentinel-2 shows at each place is fitted, not published; and a field ploughed in the picture is ploughed all year.",
+     "Central Paris at 5 m a pixel is about 10 MB of street tiles.",
+     "The year on a card comes from climate fields that resolve about 200 km: Lima reads as steppe with 520 mm of rain, and winters far from the sea read a few degrees cold. Nothing yet checks those fields against weather stations.",
+     "On a disputed territory's card, Wikipedia's opening may say whose the ground is. The atlas's own statement is the Status section above it."
+    ]
+   }
+  ]
+ },
+ {
   "version": "1.7",
   "date": "11 November 2026",
   "title": "Truer colours and narrow rivers close in, and a view that arrives sooner",

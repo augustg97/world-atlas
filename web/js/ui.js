@@ -202,8 +202,8 @@ export class UI {
     host.innerHTML = html;
     this._card = { key, html };
     host.querySelectorAll('details').forEach((d, i) => { if (open[i]) d.open = true; });
+    mountDescription(host);                    // before the scroll position is put back: the text above it has its height again
     host.scrollTop = same ? top : 0;
-    mountDescription(host);
   }
 
   dashboard(d) {

@@ -525,7 +525,7 @@ if (online) {
   const svg = climateChart(s1, 10), tab = climateTable(s1, 10);
   ok('climate chart: twelve bars, twelve hit areas with their values, one marked month, and no number that was not computed',
     (svg.match(/<path /g) || []).length === 12 && (svg.match(/<title>/g) || []).length === 12 && (svg.match(/class="cm on"/g) || []).length === 1 && !/NaN|undefined|Infinity/.test(svg + tab) && (tab.match(/<tr/g) || []).length === 13);
-  ok('axis labels are round values inside the range', ticks(-12.3, 24.1, 3).join() === '0,20' && ticks(0, 187, 2).join() === '0,100' && ticks(25.2, 27.9, 3).join() === '26,27');
+  ok('axis labels are round values inside the range', ticks(-12.3, 24.1, 3).join() === '0,20' && ticks(0, 187, 2).join() === '0,100' && ticks(25.2, 27.9, 3).join() === '26,27' && ticks(12.2, 29.6, 3).join() === '15,20,25' && ticks(0, 1.06, 2).join() === '0,1');
 
   // Wikipedia's lead: cut at a sentence end, inside the cap, abbreviations not taken for ends
   const lead = 'Tokyo (; Japanese: 東京), officially the Tokyo Metropolis ( ), is the capital of Japan. It lies on Honshu, near Mt. Fuji and the U.S. base at Yokosuka. Its population was 14 million in 2023.\nA second paragraph follows here. It has two sentences.';
@@ -533,6 +533,9 @@ if (online) {
   ok('lead: under the cap it is shown whole, by paragraph, with the empty brackets a plain-text extract leaves taken out', !whole.cut && whole.paras.length === 2 && whole.paras[0].startsWith('Tokyo (Japanese: 東京), officially the Tokyo Metropolis, is the capital'));
   ok('lead: over the cap it ends at the last sentence that fits, and "Mt." and "U.S." are not sentence ends', part.cut && part.paras.length === 1 && part.paras[0].endsWith('is the capital of Japan.') && part.paras.join('').length <= 120
     && sentenceEnds('It lies near Mt. Fuji and the U.S. base. Next.').length === 2, JSON.stringify(part));
+  ok('lead: what a plain-text extract leaves inside an opening bracket is taken out', trimLead('Seychelles ( , ; French: [sɛʃɛl]), officially the Republic ( ), is a country.').paras[0] === 'Seychelles (French: [sɛʃɛl]), officially the Republic, is a country.'
+    && trimLead('The Danube ( DAN-yoob; see also other names) is a river.').paras[0] === 'The Danube (DAN-yoob; see also other names) is a river.'
+    && trimLead('It has an area of 9,390 km2 (3,625 sq mi) and 12 m2 of H2O.').paras[0] === 'It has an area of 9,390 km² (3,625 sq mi) and 12 m² of H2O.');
   ok('lead: a first sentence longer than the cap is cut at a word and marked', tiny.cut && tiny.paras[0].endsWith(' …') && tiny.paras[0].length <= 32);
   { let over = 0; for (let cap = 40; cap < lead.length + 20; cap += 7) { const r = trimLead(lead, cap); if (r.paras.join('').replace(/ …$/, '').length > cap) over++; } ok('lead: never longer than the cap, at any cap', over === 0, `${over} caps exceeded`); }
   const pl = parseLead({ query: { pages: [{ pageid: 1, title: 'Tokyo', extract: lead, fullurl: 'https://en.wikipedia.org/wiki/Tokyo' }] } });

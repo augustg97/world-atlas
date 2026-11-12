@@ -41,6 +41,11 @@ uniform sampler2D uDetElev;        // R: elevation in metres (float), linear-fil
 uniform vec4 uDetWin;
 uniform float uDetAlbW, uDetElevW; // 0..1: how much of each to use (0 = not loaded; fade in when ready)
 uniform float uDetNightW;          // 0..1: the same for the lights in uDetAlb's alpha (0 when the window was fetched without them)
+uniform float uDetNightE;          // 1 when the lights' amount is in uDetElev's alpha instead (a window with streets: uDetAlb's alpha is then the street pattern)
+uniform float uDetRef;             // 1 when uDetElev's alpha also carries Blue Marble's colour at the Sentinel-2 picture's own season (detPack)
+uniform float uDetStreetFill;      // 0..1: the share of the measured light left as an even glow, because the street tiles at this zoom hold only the main roads (detail.js)
+uniform vec2 uDetWinM;             // the window's size on the ground, metres (east-west at its middle latitude, north-south)
+uniform float uDetStreetW;         // 0..1: uDetAlb's alpha is the street pattern (streets.js): roads 0.5 and over by class, built ground under 0.3
 uniform float uDetWaterW;          // 0..1: land or water is uDetElev's B channel (detail.js waterFlag), not the shipped 5 km field
 uniform vec3 uDetWaterC;           // the mean colour of the window's water in the streamed picture, display values (detail.js _flag)
 uniform float uDetS2;              // 1 when uDetAlb is Sentinel-2 (joined by ratio, at a coarser scale), 0 when it is Blue Marble
@@ -205,6 +210,13 @@ const vec3 OCEAN_FILL = vec3(0.0, 0.010, 0.045);   // Blue Marble's ocean fill i
 const float NIGHT_SHIPPED = 0.53;  // the streamed lights' value at which the shipped field is at full scale (js/detail.js, nightLight)
 const vec3 NIGHT_NEAR = vec3(0.085, 0.10, 0.14);   // the lifted night ground, close in (see nearT). BY EYE: the land reads, the lights still lead
 const float NIGHT_GAIN = 3.0;      // faint light (cities, moonlight, stars, aurora) is not scored by a daylit photograph; this keeps it where it was set by eye
+const float AIR_CUT = 0.80;        // share of the air's veil taken out at the closest zooms (see airCut in main). BY EYE: a street reads against its block
+const float S2_FLOOR = 0.050;      // scene light Sentinel-2's black stands at under the standard air (the first knot of S2_CURVE, less a margin): taken out with the veil
+const float S2_LIFT = 0.22;        // and the range given back, so that pale roofs stay where they were
+const float S2_CONTRAST = 0.55;    // and the picture's contrast about a middle grey (S2_PIVOT) raised by this much: S2_CURVE was fitted on 20 km means, which never reach the picture's black or its white
+const float S2_PIVOT = 0.19;
+const float STREET_GAIN = 2.4;     // how fast a street's light runs up the lamp curve. BY EYE on six cities: lamps on main streets pale, side streets amber, blocks dark
+const float LAMP_R = 5.5;          // metres: the pool of light under one lamp, as it reads from above
 
 // Cumulus over humid land. Through the morning the ground heats, the air above it overturns and
 // small clouds stud every vegetated region until evening; deserts and the open sea stay clear of
@@ -217,9 +229,12 @@ const float CUMULUS_COVER = 0.20;  // fallback only (no cloud-kind field loaded)
 const float DECK_R = 0.50;         // reflectance of sheet cloud where there is one (ISCCP: sheet light over sheet share)
 const float LAND_CU_SHARE = 0.2;   // share of 'all other cloud' over heated wet land drawn as small cumulus. FITTED to EPIC's clear-ground medians over the Amazon and the Congo (four values); VIIRS is the check
 const float CU_FILL = 0.28;        // share of a satellite pixel called "cumulus" that cloud really fills: its 0.14 reflectance over a cell's 0.5
-const float CLOUD_SLANT = 0.5;     // how fast the gaps in broken cloud close as the view tilts (towers about half as tall as wide)
+const float CLOUD_SLANT = 0.5;     // how fast the gaps in HEAPED cloud close as the view tilts (towers about half as tall as wide)
+const vec2 HEAP_T = vec2(8.0, 18.0);     // surface air, C: the photograph's cloud over a colder surface is layered, over a warmer one heaped
 const float CLOUD_OPP = 0.50;      // extra brightness of broken cloud seen from the Sun's side. Amplitude from EPIC (4-12 degrees
                                    // from the Sun); it must be nearly gone by 30 degrees, where VIIRS looks and needs none: width 25
+const float CLOUD_OPP_FLAT = 0.75; // the same for layered cloud. FITTED (tenth round) so that the two storm belts, 45-65 degrees, send
+                                   // EPIC's light at view cosines 0.5-0.9 over eight frames: 1.01 of it (0.955 with CLOUD_OPP's 0.5)
 
 // ---- cloud grain ------------------------------------------------------------------------------
 // Closer than the cloud photograph resolves (10 km) the atlas knows how much cloud there is and not its
@@ -266,6 +281,71 @@ vec3 grainAt(vec2 uvd, vec3 Pd, float row) {
   if (w < 0.004) return grainLay(uvd, false, row);
   if (w > 0.996) return grainLay(uvd, true, row);
   return rankMix(grainLay(uvd, false, row), grainLay(uvd, true, row), w);
+}
+// ---- cumulus along the wind (register B1, tenth round) ------------------------------------------
+// Broken low cloud is not scattered at random: the air under it overturns in long rolls that lie along the
+// wind, and the cells stand in rows over the rising side of each roll. CLOUD STREETS. Measured on the texture
+// audit's own VIIRS scenes as the axis the 4-32 km structure runs along, against the monthly-mean surface wind
+// the atlas ships: over the trades the two agree within 10 degrees on two days of three (the third is 41 off: that
+// day's wind was not the month's), over the Amazon within 20 on all three; over fronts, storm clusters and the
+// Southern Ocean's sheets they do not agree at all (38-86 degrees off), and nothing is turned there.
+// So the two cumulus grains are read ALONG THE WIND: the tile's own east is laid along the wind, and the tile
+// is pressed together across it (STREET), so that its cells stand closer side by side than end to end.
+// A tile cannot be turned by an angle that changes from place to place without tearing, so the turning is done
+// cell by cell: the sky is cut into cells 6 degrees across, each turns the tile about its own centre by the
+// wind AT that centre and starts somewhere else in the tile, and neighbours are faded into each other as the
+// bands of grainLay are. (Turning each cell by the wind at the pixel was tried first: where the wind is light
+// its direction swings within a cell, and the Amazon's cumulus was drawn as swirls of paint.) The wind's SPEED
+// is not used: the Amazon's streets are as marked at a mean wind of 1 m/s as the trades' at 8.
+const vec2 STREET = vec2(1.0, 1.5);   // a street's cells: (drawn out along the wind, pressed together across it). How one-directional the
+                                      // 4-32 km structure then is (cloud_texture.py): the trades 0.11 for VIIRS's 0.13, 8 degrees off the wind's
+                                      // axis; the Amazon 0.16 for 0.15, 15 off. Drawn out and not pressed (1.5, 1) gave the same direction
+                                      // and took the 4-8 km sizes with it (the Amazon's size spectrum 0.48 off; pressed, 0.42)
+// Two unrelated ranks cross-faded, and the result a rank again. The weighted sum of two evenly spread numbers
+// is spread as a trapezoid; its own cumulative curve puts it back on 0..1 evenly, so a cut at 1 - p still
+// covers p inside a fade (rankMix above keeps the spread's width and not its shape: 0.257 for 0.3 at the middle).
+float rankMix1(float r0, float r1, float w) {
+  float b = min(w, 1.0 - w), a = 1.0 - b, s = r0 * (1.0 - w) + r1 * w;
+  if (b < 1e-4) return s;
+  return s < b ? s * s / (2.0 * a * b) : (s > a ? 1.0 - (1.0 - s) * (1.0 - s) / (2.0 * a * b) : (s - 0.5 * b) / a);
+}
+// the month's surface wind at a place, as a direction (east, north)
+vec2 windDir(vec2 uvp) {
+  vec2 q = vec2(fract(uvp.x), uvp.y);
+  vec2 w = mix(textureLod(uAtmoA, vec3(q, uMonth.x), 0.0).rg, textureLod(uAtmoA, vec3(q, uMonth.z), 0.0).rg, uMonth.y);
+  w = vec2(dec(w.x, uE_u10), dec(w.y, uE_v10));
+  return w / max(length(w), 0.05);
+}
+// cell i of the m round the parallel of band j (centred at latitude 6 j degrees, longitude i / m of a turn).
+// `drift` is how far the cloud's frame has been carried east of the Earth's (a fraction of a turn).
+float streetCell(vec2 uvd, float j, float i, float m, float drift, float row) {
+  float cl = cos(radians(j * 6.0));
+  vec2 wd = uHasClimate > 0.5 ? windDir(vec2(i / m + drift, 0.5 - j / 30.0)) : vec2(1.0, 0.0);
+  float e = (fract(uvd.x - i / m + 0.5) - 0.5) * 40075.0 * cl, nn = (0.5 - j / 30.0 - uvd.y) * 20037.5;   // km east and north of the cell's centre
+  vec2 eD = vec2(gDx.x, gDy.x) * 40075.0 * cl, nD = -vec2(gDx.y, gDy.y) * 20037.5;                        // and how they change across the screen
+  float along = (e * wd.x + nn * wd.y) / (2048.0 * STREET.x) + hash12(vec2(i, j) + 0.5);
+  float across = (nn * wd.x - e * wd.y) * STREET.y / 2048.0 + hash12(vec2(j, i) + 7.5);
+  // (the squeeze is not told to the sampler: told, it reads a blurred rank at the zoom floor, a blurred rank is
+  // crowded toward its middle, and a cut covers too much where the cloud is dense)
+  vec2 dA = (eD * wd.x + nD * wd.y) / (2048.0 * STREET.x), dC = (nD * wd.x - eD * wd.y) / 2048.0;
+  float span = 0.5 - 2.0 * GRAIN_EDGE;
+  vec2 q = vec2(along * 0.25, row * 0.5 + GRAIN_EDGE + span * fract(across));
+  vec3 t = textureGrad(uClouds, q, vec2(dA.x * 0.25, dC.x * span), vec2(dA.y * 0.25, dC.y * span)).gba;
+  return row < 0.5 ? t.y : t.x;                                   // row 0: cumulus over the sea. row 1: cumulus over land
+}
+float streetBand(vec2 uvd, float j, float drift, float row) {
+  float m = max(1.0, floor(60.0 * cos(radians(j * 6.0)) + 0.5));
+  float x = fract(uvd.x) * m, i = floor(x), w = smoothstep(0.3, 0.7, x - i), i1 = mod(i + 1.0, m);
+  if (w < 0.004) return streetCell(uvd, j, i, m, drift, row);
+  if (w > 0.996) return streetCell(uvd, j, i1, m, drift, row);
+  return rankMix1(streetCell(uvd, j, i, m, drift, row), streetCell(uvd, j, i1, m, drift, row), w);
+}
+// the cumulus grain's rank at a place, read along the wind
+float streetAt(vec2 uvd, float drift, float row) {
+  float b = (0.5 - uvd.y) * 30.0, j = floor(b), w = smoothstep(0.3, 0.7, b - j);
+  if (w < 0.004) return streetBand(uvd, j, drift, row);
+  if (w > 0.996) return streetBand(uvd, j + 1.0, drift, row);
+  return rankMix1(streetBand(uvd, j, drift, row), streetBand(uvd, j + 1.0, drift, row), w);
 }
 // Cloud whose light, averaged over all the sky, is `a`: where it is, and how bright. r is the grain's
 // rank here. Two numbers describe a kind of cloud, both MEASURED on eighteen VIIRS scenes at 2 km a pixel,
@@ -323,19 +403,32 @@ float cumulusAt(vec2 uv, float amount) {
   return a;                                                        // the light of the field; its pieces are cut by the caller
 }
 
-// Stratocumulus: the sheets that roof the cold eastern sides of the subtropical oceans. Seen from above
-// a sheet is a pavement of cells some 30 km across: closed where it is thick, open rings and scattered
-// cells where it thins. `amount` is the share of sky under sheet cloud (ISCCP); the cells are the grain's.
+// Stratocumulus and stratus. `amount` is the share of sky the satellite climatology (ISCCP) files under sheet
+// cloud. Two things are decided here, and each is measured.
+// HOW MUCH of that share is sheet. Not all of it: ISCCP files broken cumulus with thick cores under
+// stratocumulus, a tenth of the sky nearly everywhere, and VIIRS agrees without it (the trades, the North
+// Atlantic in September). Above 0.4 all of it is (the Peruvian, Namibian and Californian decks; ISCCP's sheet
+// light over its sheet share is 0.45-0.51 there, which is DECK_R). Between, measured in the tenth round on 48
+// VIIRS scenes of the Southern Ocean in summer (twelve places, 42-55 S, four days each; seen straight down;
+// mean reflectance less ISCCP's other cloud and the sea): there is room for 0.065 of sheet light where ISCCP
+// has 0.136, and this ramp draws 0.070 (52-55 S: 0.086 against 0.078; 42 S: 0.038 against 0.039).
+float sheetLight(float amount) { return DECK_R * amount * smoothstep(0.15, 0.40, amount); }
+// WHOSE it is. A share above a half is a DECK: a property of the place (cold water under a subsiding high), there
+// every day, and it is drawn here as its own pavement. A middling share is WEATHER: the sheets and stratus that
+// fill the cold air of the storm belts (the Southern Ocean all year, the northern seas in summer) and come and
+// go with the systems. Only the cloud photograph knows where the systems are, so that light is given to the
+// photograph (main, restLight) and takes its shapes. Until the tenth round it was laid here as a veil of
+// reflectance 0.08 over everything, and in December the Southern Ocean was a grey film where NASA EPIC shows
+// white systems with dark sea between (white share of open water at 50-70 S: EPIC 42-54%, the atlas 27-31%).
+// Drawing a middling share as PATCHES of whole sheet (a noise's rank, 500-1000 km) was tried first: EPIC's
+// white share matched in every frame (error 0.028 to 0.013) and the picture was cotton blobs on a dark sea.
+float deckShare(float amount) { return smoothstep(0.30, 0.55, amount); }
+// Seen from above a deck is a pavement of cells some 30 km across: closed where it is thick, open rings and
+// scattered cells where it thins. The cells are the grain's.
 float deckAt(vec3 Pd, float amount) {
-  if (amount < 0.02) return 0.0;
-  float c = clamp(amount * (0.55 + 0.9 * clumps3(Pd, 480.0)), 0.0, 1.0); // the sheet's own weather: pockets and clearings. MODELLED
-  // Light: the share of sky under sheet times the reflectance of a sheet where there is one. That is
-  // 0.50 in ISCCP wherever sheets cover more than 0.42 of the sky (0.45-0.51 over the Peruvian, Namibian
-  // and Californian decks). The law here before, written by eye, sent back 0.37 off Peru where ISCCP
-  // has 0.25, and the scene there was 0.12 brighter than VIIRS.
-  // A sheet thinner than a fifth of the sky is not drawn: ISCCP's thin-sheet share is everywhere, and
-  // VIIRS agrees without it.
-  return c * DECK_R * smoothstep(0.18, 0.42, c);
+  float a = sheetLight(amount) * deckShare(amount);
+  if (a < 0.004) return 0.0;
+  return min(a * (0.55 + 0.9 * clumps3(Pd, 480.0)), CLOUD_MAX);          // the deck's own weather: pockets and clearings. MODELLED
 }
 
 // ---- the ground's albedo from Blue Marble --------------------------------------------------
@@ -431,6 +524,35 @@ vec3 space(vec3 rd, float limbH, vec3 tangentN) {
   return col;
 }
 
+// uDetElev's alpha, when a window packs it (detail.js _elevTexture): three bytes in one float, so that the sixteen
+// texture units do. The lights' amount, and the red and blue ALBEDO of Blue Marble AT THE PICTURE'S OWN SEASON over
+// its green albedo (web/fields/albedo_ref.webp, build/season_ref.py; read through ALB_LUT by detail.js, which takes
+// the table from this file), log-coded over 0.08..2.5. A packed value cannot be
+// filtered by the sampler: the four texels round the point are read and unpacked, and mixed here.
+vec3 detUnpack(ivec2 q, ivec2 size) {
+  float pk = texelFetch(uDetElev, clamp(q, ivec2(0), size - 1), 0).a;
+  float a = floor(pk / 65536.0), r = floor((pk - a * 65536.0) / 256.0), b = pk - a * 65536.0 - r * 256.0;
+  return vec3(a / 255.0, 0.08 * exp(r / 255.0 * 3.4420), 0.08 * exp(b / 255.0 * 3.4420));     // 3.4420 = ln(2.5 / 0.08)
+}
+vec3 detPack(vec2 dw) {
+  ivec2 size = textureSize(uDetElev, 0);
+  vec2 t = dw * vec2(size) - 0.5, f = fract(t);
+  ivec2 q = ivec2(floor(t));
+  return mix(mix(detUnpack(q, size), detUnpack(q + ivec2(1, 0), size), f.x), mix(detUnpack(q + ivec2(0, 1), size), detUnpack(q + ivec2(1, 1), size), f.x), f.y);
+}
+
+// LAMPS. A lit street seen from above is a string of pools of light, not a band. Which post stands where is not
+// known, so they are set down by rule: one to a square of ground `cell` metres across, at a place of its own inside
+// it, each a little different in strength; the ones that fall on a street are that street's lamps. `m` is metres on
+// the ground. `tint` comes back 0..1 for the lamp's colour (some are white, most are sodium amber).
+float lamps(vec2 m, float cell, out float tint) {
+  vec2 c = floor(m / cell), f = m / cell - c;
+  float h1 = hash12(c + 0.5), h2 = hash12(c.yx * 1.7 + 11.5);
+  vec2 d = (f - (0.22 + 0.56 * vec2(h1, h2))) * cell;
+  tint = fract(h1 * 9.7 + h2 * 5.3);
+  return exp(-dot(d, d) / (LAMP_R * LAMP_R)) * (0.55 + 0.45 * fract(h1 * 13.7 + h2));
+}
+
 void main() {
   // ---- where is this pixel? -----------------------------------------------------------------
   vec2 ll; vec3 N; vec3 V; vec3 rd = vec3(0.0); bool hit; float limbH = 0.0;
@@ -474,8 +596,15 @@ void main() {
   // The focus window. Position in it, 0..1 each way (longitude wraps), and a weight that fades to nothing
   // over the outer 6% so the window never shows an edge.
   vec2 dw = vec2(fract(uv.x - uDetWin.x), uv.y - uDetWin.y) / uDetWin.zw;
-  float inWin = (uDetAlbW + uDetElevW) > 0.0 ? smoothstep(0.0, 0.06, min(min(dw.x, 1.0 - dw.x), min(dw.y, 1.0 - dw.y))) : 0.0;
+  float inWin = (uDetAlbW + uDetElevW) > 0.0 ? smoothstep(0.0, 0.03, min(min(dw.x, 1.0 - dw.x), min(dw.y, 1.0 - dw.y))) : 0.0;
   float sceneL = luma(bm);          // how bright this ground is in the shipped picture, at 5 km: what the close-in exposure meters on
+  // CLOSE IN, THE AIR'S VEIL IS THINNED (a declared departure, with the cloud's thinning and the exposure's rise).
+  // Seen through the whole atmosphere a city is a third airlight: true of the view from orbit, and at 5 m a pixel a
+  // grey sheet over streets that are the subject. Mapping satellites publish their pictures with the air taken out
+  // (Sentinel-2 cloudless is one), and from 125 m a device pixel inwards the atlas does the same, whole by 50 m:
+  // AIR_CUT of the air's own light goes (its dimming of the ground stays), and the Sentinel-2 table gives the albedo
+  // that keeps grey ground grey under what is left. Only inside a Sentinel-2 window. Said in the Finer ground card.
+  float airCut = AIR_CUT * inWin * uDetAlbW * uDetS2 * (1.0 - smoothstep(-5.3, -4.0, lodOf(2.0)));
   // LAND OR WATER IN THE WINDOW (register A12). The shipped water field is 5 km: close in, a coast drawn from it
   // shades a strip of sea as land and of land as sea, and a river narrower than that is not water at all. The
   // window carries its own answer, texel by texel, made from NASA's 250 m mask and the streamed picture's colour
@@ -483,6 +612,7 @@ void main() {
   float fineWt = inWin * uDetWaterW;
   float fineW = fineWt > 0.0 ? smoothstep(0.3, 0.7, texture(uDetElev, dw).b) : 0.0;
   float nightFine = 0.0, nightTex = 1.0;
+  float streetPat = 0.0, streetLit = 0.0, streetS = 0.0, streetCool = 0.0;   // the street pattern here; the light it carries, 0..1; how far the night is drawn by it
   vec3 albFine = vec3(0.0); float albFineW = 0.0;   // the ground's albedo read from Sentinel-2 by its own table, and how far it is used (register A13)
   if (inWin * uDetAlbW > 0.0) {
     // Frequency split. The month's colour stays the shipped field's (it is the right SEASON); the fine
@@ -546,13 +676,41 @@ void main() {
       float lumS = luma(sB) / luma(sL);
       float lumC = luma(albedoOf(shipC) * AIR_LT + AIR_I) / luma(s2Scene(detC));
       float coloured = (1.0 - nearWater) * (1.0 - fineW * fineWt);
-      vec3 sF = s2Scene(fineT.rgb) * clamp(mix(lumS, lumC, nearWater), 0.5, 2.0) * mix(vec3(1.0), pow(clamp(sB / (sL * lumS * S2_WARM), 0.7, 1.4), vec3(S2_SEASON)), coloured);
-      albFine = max((sF - AIR_I) / AIR_LT, vec3(0.004));
+      // THE MONTH (register A16). Sentinel-2 is the ground at ITS OWN season, as albedo: the picture by its table,
+      // less the air. The month is Blue Marble's, joined in ALBEDO, where the ground is kept:
+      //  - brightness: the month's albedo over the picture's, both at 5 km (land over land), always. (Until release
+      //    1.8 the ratio was of scene light, air included: a month a third brighter then added a third of the air's
+      //    blue to every texel, and with the colour ratio below turned Iowa's bare April fields purple.)
+      //  - colour, WITH the reference (uDetRef): Blue Marble's month against Blue Marble at the picture's own
+      //    season, as a SHIFT of colour at the texel's own brightness. That difference is the season and nothing
+      //    else (the two cameras' difference for this ground is in neither), so it is applied whole. A shift, not
+      //    a ratio: Sentinel-2's blue over green is two and a half times Blue Marble's for the same field, and a
+      //    ratio taken in one camera and multiplied into the other is not that camera's change;
+      //  - colour, WITHOUT it (no 32-bit float textures; a window across the date line): release 1.7's rule, the
+      //    month's scene colour over the picture's own less the cameras' standing difference, at half strength.
+      // Not on water, and not where a cell is nearly all sea.
+      vec3 sF = s2Scene(fineT.rgb);
+      if (uDetRef > 0.5) {
+        // (with the veil thinned by airCut, the floor it put under the picture's black goes with it)
+        sF = max(sF - airCut * S2_FLOOR, vec3(0.0)) * (1.0 + airCut * S2_LIFT);
+        sF *= pow(max(luma(sF), 1e-4) / S2_PIVOT, airCut * S2_CONTRAST);
+        vec3 aN = albedoOf(shipLand), pk = detPack(dw), aR = vec3(pk.y, 1.0, pk.z);     // (the reference comes as albedo over its green: a colour, which is all the shift needs)
+        float lumA = luma(aN) / max(luma(max((sL - AIR_I) / AIR_LT, vec3(0.0))), 0.01);
+        float lumCA = luma(albedoOf(shipC)) / max(luma(max((s2Scene(detC) - AIR_I) / AIR_LT, vec3(0.0))), 0.01);
+        albFine = max((sF - (1.0 - airCut) * AIR_I) / AIR_LT, vec3(0.004)) * clamp(mix(lumA, lumCA, nearWater), 0.4, 2.5);
+        vec3 shift = aN / max(luma(aN), 1e-3) - aR / max(luma(aR), 1e-3);
+        albFine = max(albFine + coloured * luma(albFine) * shift, 0.25 * albFine);
+      } else {
+        sF *= clamp(mix(lumS, lumC, nearWater), 0.5, 2.0) * mix(vec3(1.0), pow(clamp(sB / (sL * lumS * S2_WARM), 0.7, 1.4), vec3(S2_SEASON)), coloured);
+        sF = max(sF - airCut * S2_FLOOR, vec3(0.0)) * (1.0 + airCut * S2_LIFT);
+        sF *= pow(max(luma(sF), 1e-4) / S2_PIVOT, airCut * S2_CONTRAST);
+        albFine = max((sF - (1.0 - airCut) * AIR_I) / AIR_LT, vec3(0.004));
+      }
       albFine /= max(1.0, max(albFine.r, max(albFine.g, albFine.b)) / 0.95);
     }
     // past full scale, come back along the colour's own line: clamping each channel alone turned pale sand green
     if (uDetS2 > 0.5) joined /= max(1.0, max(joined.r, max(joined.g, joined.b)) / 0.97);
-    nightFine = fineT.a;
+    nightFine = uDetNightE > 0.5 ? detPack(dw).x : fineT.a;
     // not under snow: the streamed picture is one month, and summer ground does not show through winter snow
     float snowy = smoothstep(0.70, 0.90, min(bm.r, min(bm.g, bm.b)));
     bm = clamp(mix(bm, joined, inWin * uDetAlbW * (1.0 - snowy)), 0.0, 1.0);
@@ -571,6 +729,44 @@ void main() {
     // and none of it falls on water the window knows is water: the amber over a river in Black Marble is the
     // sensor's 500 m blur of its banks, not light on the river
     nightTex *= 1.0 - 0.85 * fineW * fineWt * texT;
+    // WITH THE STREET PLAN (register F15) the light is put where a city's light comes from. Black Marble measures
+    // how MUCH light leaves each 500 m of ground and nothing finer; lit by the daytime picture's pattern (above) a
+    // city was a sepia photograph of itself, forest canopy and all. OpenStreetMap says where the streets and the
+    // buildings are, so the measured amount is spread over them: each texel's share is its pattern value over the
+    // pattern's own mean across the 600 m around it, so that the 600 m still adds up to what was measured. A street
+    // through dark woods is then as bright as a street downtown and the woods stay dark; the mean is what differs.
+    // MODELLED: which street carries a lamp is not known, only which are streets. Said in the lights card.
+    if (uDetStreetW > 0.0) {
+      streetPat = fineT.a;
+      float fineLod = log2(max(length(gDx / uDetWin.zw * vec2(textureSize(uDetAlb, 0))), length(gDy / uDetWin.zw * vec2(textureSize(uDetAlb, 0)))) + 1e-6);
+      float meanP = textureLod(uDetAlb, dw, max(uDetAlbLod - 3.0, fineLod + 3.0)).a;
+      float texelM = uDetWinM.y / float(textureSize(uDetAlb, 0).y), pxM = exp2(fineLod) * texelM;       // metres a device pixel
+      float glow = textureLod(uDetAlb, dw, max(fineLod, 0.0) + 3.0).a;                                  // the pattern over eight pixels around: light off walls and ground
+      float road = smoothstep(0.40, 0.52, streetPat), cls = clamp((streetPat - 0.5) / 0.5, 0.0, 1.0);   // 0 a service lane .. 1 a main street
+      float lot = smoothstep(0.20, 0.26, streetPat) * (1.0 - road);                                     // commercial ground: yards and car parks
+      float built = smoothstep(0.04, 0.10, streetPat) * (1.0 - road) * (1.0 - lot);
+      vec2 gm = dw * uDetWinM;
+      float tA, tB;
+      float lampA = lamps(gm, 30.0, tA), lampB = lamps(gm + 13.0, 54.0, tB);
+      // finer than a lamp's pool the lamps are drawn; coarser, their mean (pool area over cell area) stands for them
+      float drawn = 1.0 - smoothstep(5.0, 14.0, pxM);
+      float lampMain = mix(0.083, lampA, drawn), lampSide = mix(0.026, lampB, drawn);
+      float lamp = mix(lampSide, max(lampMain, lampSide), smoothstep(0.35, 0.65, cls));
+      // the street between its lamps, its lamps, the yards' lamps, a little off the roofs, and the glow
+      float lightP = road * (0.018 + 0.035 * cls + (1.6 + 2.2 * cls) * lamp) + lot * (0.012 + 0.55 * lampMain) + built * 0.010 + 0.22 * glow * glow;
+      // denser streets share the same measured light among more lamps: a soft correction, not a strict one (the
+      // lamps are a rule, and the mean of a rule's light is not known texel by texel)
+      float share = pow(clamp(0.22 / max(meanP, 0.05), 0.5, 2.2), 0.5);
+      // Is this country mapped at all? Asked of the 10 km around, not the 600 m: a park is unmapped ground inside a
+      // mapped city and is dark; a town OpenStreetMap has not reached is lit evenly, as from further out.
+      float mapped = smoothstep(0.002, 0.012, textureLod(uDetAlb, dw, uDetAlbLod + 1.0).a);
+      streetLit = 1.0 - exp(-STREET_GAIN * nightFine * lightP * share);
+      // further out the tiles hold the main roads only: the side streets' light is still there, unresolved, as a glow
+      streetLit = max(streetLit, uDetStreetFill * nightFine);
+      streetLit = mix(nightFine, streetLit * (1.0 - 0.85 * fineW * fineWt * (1.0 - road)), mapped);
+      streetCool = step(0.72, mix(tB, tA, smoothstep(0.35, 0.65, cls))) * drawn * road * mapped;         // about a quarter of the lamps are white
+      streetS = uDetStreetW * texT;
+    }
   }
   vec3 alb = albedoOf(bm);
   alb = mix(alb, albFine, albFineW);
@@ -653,7 +849,8 @@ void main() {
     // shows cumulus and little besides), and drawn through the photograph that light gathers into a few bright
     // clusters with clear forest between. The total is unchanged.
     float moved = LAND_CU_SHARE * conv;
-    float restLight = kinds.z < 0.0 ? kinds.z : kinds.z * (1.0 - moved);
+    // and the sheet cloud that is weather, not a deck, is the photograph's too (deckAt)
+    float restLight = kinds.z < 0.0 ? kinds.z : kinds.z * (1.0 - moved) + sheetLight(kinds.x) * (1.0 - deckShare(kinds.x));
     cloud = cloudAt(uv, flowUV, restLight);
     float slant = 1.0 / max(mu0, 0.18);
     cloudSh = cloudAt(uv + sunStep * 0.0035 * slant, flowUV, restLight); // what stands between this ground and the Sun
@@ -679,7 +876,16 @@ void main() {
     cumFar = cumulusAt(uv, cuAmt); deckFar = deckAt(Pd, kinds.x);
     cum = cumFar; deck = deckFar;
     if (grainFade < 0.99) {
-      float cuRank = rankMix(vec3(landCu), vec3(grain.y), water).x;        // the land's cumulus on land, the sea's at sea
+      // The fields of broken low cloud are read ALONG THE WIND (streetAt): the land's cumulus on land, the sea's at
+      // sea, each only where there is land or sea to need it and cloud to draw. The heaped cloud of the photograph
+      // (landCu, in `broken` below) is not: storm clusters do not line up with the surface wind (the Congo's
+      // 4-32 km structure lies 5-65 degrees off it).
+      float cuRank = 0.5;
+      if (cumFar > 0.002) {
+        float drift = fract(uHours * 2.2e-4);
+        float seaSt = (water > 0.01 || uHasGrain2 < 0.5) ? streetAt(uvd, drift, 0.0) : 0.5;
+        cuRank = rankMix1((uHasGrain2 > 0.5 && water < 0.99) ? streetAt(uvd, drift, 1.0) : seaSt, seaSt, water);
+      }
       cum = mix(pieces(cuRank, cumFar, mix(0.38, 0.33, water), mix(1.95, 1.8, water)), cumFar, grainFade);
       deck = mix(pieces(grain.x, deckFar, 0.35, 1.5), deckFar, grainFade);
     }
@@ -780,6 +986,11 @@ void main() {
     float cloudFar = mix(cRef, tC / (max(mu0, 0.30) + tC), dayF); // below 17 degrees of Sun, broken cloud shades itself and the gain stops
     float cloudA = broken(rankMix(grain, vec3(landCu), conv).z, cloudFar, grainFade, conv);
     cloudA = 1.0 - (1.0 - cloudA) * (1.0 - lowCloud);              // sheets and cumulus under and between the larger systems
+    // HEAPED OR LAYERED. How much of this field stands up (cumulus, towers, with clear air between) and how much
+    // lies flat (the shields and sheets of the storm belts, the decks). Cumulus is heaped; a deck is flat; the
+    // photograph's cloud is heaped over a warm surface, where it is raised by convection, and layered over a
+    // cold one (HEAP_T). It decides how the view's slant is felt, below.
+    float heapedF = (cumFar + smoothstep(HEAP_T.x, HEAP_T.y, tAir) * cloudFar) / (cumFar + cloudFar + deckFar + 1e-4);
     cloudFar = 1.0 - (1.0 - cloudFar) * (1.0 - cumFar) * (1.0 - deckFar);
     // Two things the eye's position does to broken cloud, neither of which changes what the cloud is.
     // Seen at a slant, the gaps close: towers hide the clear air behind them. And seen from the Sun's
@@ -787,13 +998,20 @@ void main() {
     // the amount of cloud light is fixed by satellites looking straight down in the afternoon (ISCCP,
     // VIIRS), and NASA EPIC, which looks from within 4-12 degrees of the Sun, sees about a third more.
     // Solid cloud has no gaps and no flanks: both effects fade as the cover closes.
+    // THE SLANT IS FOR HEAPED CLOUD ONLY (tenth round). A tower hides the gap behind it; a sheet has no height to
+    // hide anything with. Measured on EPIC's eight frames as light sent back against the view's cosine, over
+    // open water (EPIC looks from the Sun's side, so the Sun's cosine is the view's): over the storm belts,
+    // 45-65 degrees, it is LEVEL from the centre of the disc to a cosine of 0.5 (0.50, 0.46, 0.51, 0.52, 0.50 in
+    // the south); over the tropics it doubles (0.20 to 0.38). With one slant for all cloud the atlas doubled in
+    // both, and the storm belts were 14% too bright at cosines 0.3-0.5 (the south 11%, the north 28%) while the
+    // Southern Ocean in December, near the centre, was 6-13% short. Now 5% (1% and 18%).
     // Both are statements about a FIELD of cloud, so the gain is worked out on the far view's light and
     // then given to whatever is drawn. Applied to each resolved piece instead, a bright core gained
     // nothing and a gap gained nothing, and the same sky came out dimmer the closer it was drawn.
     if (uView == 0 && cloudFar > 1e-3) {
       float nvC = max(dot(N, V), 0.35);
-      float seen = 1.0 - pow(1.0 - cloudFar, 1.0 + CLOUD_SLANT * (1.0 / nvC - 1.0));
-      float opp = 1.0 + CLOUD_OPP * exp(-(1.0 - dot(uSun, V)) / 0.094) * dayF;      // 0.094 = 1 - cos 25 degrees
+      float seen = 1.0 - pow(1.0 - cloudFar, 1.0 + CLOUD_SLANT * heapedF * (1.0 / nvC - 1.0));
+      float opp = 1.0 + mix(CLOUD_OPP_FLAT, CLOUD_OPP, heapedF) * exp(-(1.0 - dot(uSun, V)) / 0.094) * dayF;      // 0.094 = 1 - cos 25 degrees
       seen = seen * opp / (1.0 + seen * (opp - 1.0));
       cloudA = min(cloudA * seen / cloudFar, 0.98);
     }
@@ -812,7 +1030,13 @@ void main() {
       ramp = mix(ramp, vec3(0.68, 0.45, 0.21), smoothstep(0.18, 0.48, nightFine));
       ramp = mix(ramp, vec3(0.88, 0.65, 0.34), smoothstep(0.48, 0.76, nightFine));
       ramp = mix(ramp, vec3(0.97, 0.82, 0.54), smoothstep(0.76, 1.0, nightFine));
-      vec3 nearG = fromDisplay(ramp) * nightTex * (1.0 - dayF) * (1.0 - 0.72 * cloud);
+      // by the street plan: the same amber, run up to the pale white of a lamp seen from above where the light is densest
+      vec3 lamp = mix(vec3(0.0), vec3(0.30, 0.17, 0.07), smoothstep(0.0, 0.10, streetLit));
+      lamp = mix(lamp, vec3(0.72, 0.45, 0.19), smoothstep(0.10, 0.38, streetLit));
+      lamp = mix(lamp, vec3(0.96, 0.74, 0.40), smoothstep(0.38, 0.70, streetLit));
+      lamp = mix(lamp, vec3(1.00, 0.93, 0.76), smoothstep(0.70, 0.97, streetLit));
+      lamp = mix(lamp, vec3(0.92, 0.95, 1.0) * max(lamp.r, 0.001), 0.7 * streetCool);
+      vec3 nearG = mix(fromDisplay(ramp) * nightTex, fromDisplay(lamp), streetS) * (1.0 - dayF) * (1.0 - 0.72 * cloud);
       // the change of curve is spread over the zoom from where the window opens (5 km a pixel) to 2 km
       col += mix(NIGHT_GAIN * farG, nearG, (1.0 - smoothstep(-1.2, 0.5, lodOf(2.0))) * uDetNightW * inWin);
     }
@@ -836,7 +1060,7 @@ void main() {
                                                    + AER_W * aerosolPhase(-cSV) * (1.0 - exp(-tauA * (amV + amS))) * exp(-tau * AIR_ABOVE_HAZE * (amV + amS)));
       // 0.6: about half of what the direct beam loses still arrives as skylight. The +1 is the Sun's
       // own vertical column; `trans` above carries only the extra path of a low Sun.
-      col = col * exp(-(tau * 0.6 + tauA * 0.3) * (amV + 1.0)) + inscat * smoothstep(-0.10, 0.02, mu0);
+      col = col * exp(-(tau * 0.6 + tauA * 0.3) * (amV + 1.0)) + inscat * smoothstep(-0.10, 0.02, mu0) * (1.0 - airCut);
     }
   } else {
     // =================================== Atlas ===============================================
@@ -856,7 +1080,9 @@ void main() {
     lensShade = hs;
     // permanent ice reads white: bright in BOTH bracketing months is not enough in winter, so use latitude and height too
     float iceSheet = smoothstep(0.55, 0.8, luma(toLinear(bm))) * smoothstep(58.0, 66.0, abs(degrees(ll.y)) + max(z, 0.0) / 400.0);
-    vec3 land = mix(tint, vec3(0.97, 0.98, 0.99), iceSheet) * mix(1.0, hs, 0.55);
+    // (under a street plan the relief is drawn at half strength: at 10 m a pixel the tiles' heights are roofs as much as ground)
+    float planW = uDetStreetW * inWin * (1.0 - smoothstep(-5.8, -5.0, lodOf(2.0)));
+    vec3 land = mix(tint, vec3(0.97, 0.98, 0.99), iceSheet) * mix(1.0, hs, mix(0.55, 0.22, planW));
     if (cId.g > 0.5) {                                 // contested ground is hatched, never plain
       float st = step(0.5, fract((gl_FragCoord.x + gl_FragCoord.y) / 7.0));
       land = mix(land, vec3(0.62, 0.60, 0.62), 0.28 * st);
@@ -870,6 +1096,15 @@ void main() {
     float wr = uHasWater > 0.5 ? wn.r : 0.0;
     float edge = 1.0 - smoothstep(0.0, 1.6, abs(wr - 0.5) / max(fwidth(wr), 1e-5));
     col = mix(col, vec3(0.22, 0.42, 0.62), edge * 0.75);
+    // THE STREET PLAN, close in (register F15): OpenStreetMap's roads and buildings, read off the pattern channel.
+    // Roads are 0.5 and over (the main ones 0.85 and over, in the sheet's road yellow), built ground under 0.3.
+    // From 60 m a device pixel inwards; whole by 35 m.
+    if (uDetStreetW > 0.0) {
+      float sw = planW * (1.0 - water);
+      float road = smoothstep(0.36, 0.50, streetPat), built = smoothstep(0.04, 0.10, streetPat) * (1.0 - road);
+      col = mix(col, col * vec3(0.80, 0.78, 0.76), built * sw);
+      col = mix(col, mix(vec3(1.0, 1.0, 0.99), vec3(0.99, 0.86, 0.52), smoothstep(0.80, 0.90, streetPat)), road * sw);
+    }
     if (uSelCountry > 0.5 && abs(cId.r * 255.0 - uSelCountry) < 0.5 && water < 0.5) col = mix(col, vec3(1.0, 0.82, 0.25), 0.35);
     if (uDaylightOn > 0.5) col *= mix(vec3(0.60, 0.64, 0.74), vec3(1.0), dayF);     // night is a cool shade the map stays readable under
     col = toLinear(col);

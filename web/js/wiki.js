@@ -60,7 +60,8 @@ export function sentenceEnds(p) {
  * are kept while they fit; the one that does not is cut at its last sentence that does. `cut` says text was left out.
  */
 export function trimLead(text, cap = LEAD_CAP) {
-  const paras = String(text ?? '').split(/\n+/).map((p) => p.replace(/\(\s*[;,]\s*/g, '(').replace(/\(\s+/g, '(').replace(/\s*\(\s*\)/g, '').replace(/\s+/g, ' ').trim()).filter(Boolean);
+  // a plain-text extract drops what was markup: the pronunciation inside an opening bracket, the superscript of km²
+  const paras = String(text ?? '').split(/\n+/).map((p) => p.replace(/\(\s*(?:[;,]\s*)+/g, '(').replace(/\(\s+/g, '(').replace(/\b(km|mi|m|ft)2\b/g, '$1²').replace(/\s*\(\s*\)/g, '').replace(/\s+/g, ' ').trim()).filter(Boolean);
   const out = []; let used = 0;
   for (const p of paras) {
     if (used + p.length <= cap) { out.push(p); used += p.length; continue; }

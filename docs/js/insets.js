@@ -33,8 +33,8 @@
 // Island and Sala y Gomez (Chile) and Ducie atoll (Pitcairn). There is no rectangle of this size on the sheet
 // between the panels that covers none. Research/modeling/audit_labels.py reports what lies under each frame.
 
-import { Camera, R_KM, wtForward } from './camera.js?v=20261112T020725Z';
-import { D2R } from './astro.js?v=20261112T020725Z';
+import { Camera, R_KM, wtForward } from './camera.js?v=20261112T060955Z';
+import { D2R } from './astro.js?v=20261112T060955Z';
 
 const LADDER = 1.05;                 // the label layer's scale ladder (overlays.js, ZOOM_STEP)
 export const MIN_GAIN = 1.5;         // an inset that magnifies less than this is not worth its frame

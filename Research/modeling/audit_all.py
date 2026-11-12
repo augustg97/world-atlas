@@ -88,6 +88,18 @@ CHECKS = [
     # 26 units differ by more than 10% (vintage, small islands, city states); register F2 lists them.
     ("population", [[PY, M("audit_population.py"), "--json"]], {"units_off_10pct": 26, "total_err_pct": 0.37}, False,
      "the population field against World Bank national totals"),
+    # Which English Wikipedia article each location card names (web/data/wiki.json; the page fetches the article's
+    # lead when the card opens). 10,395 cards of seven kinds; REGISTER-cardtext.md lists every card without an
+    # article and why. misplaced, disambiguation, dead_titles, orphan_keys and unchecked must stay ZERO: each is a
+    # card that would show another place's article, or none. The uncovered_* are cards with no article (the card says
+    # so): 248 cities, 5 disputes, 47 features, 13 peaks, 49 river reaches, 493 volcanoes on 2026-11-12. by_name:
+    # mappings further off than their limit, kept because the article's title is the card's name. Needs
+    # data/_cache/wiki/report.json, which build/wiki_titles.py writes (the items' coordinates; what en.wikipedia.org
+    # said of each title, on the date in the register).
+    ("card-text", [[PY, M("audit_cardtext.py"), "--selftest"], [PY, M("audit_cardtext.py"), "--json"]],
+     {"misplaced": 0, "disambiguation": 0, "dead_titles": 0, "orphan_keys": 0, "unchecked": 0, "by_name": 43, "shared_articles": 36,
+      "uncovered_city": 248, "uncovered_country": 0, "uncovered_dispute": 5, "uncovered_feature": 47, "uncovered_peak": 13, "uncovered_river": 49, "uncovered_volcano": 493}, False,
+     "a card matched to the article of another place, to a disambiguation page or to a title that is gone; fewer cards described"),
     # Names of states, as the label layer actually placed them, on 24 framings and in the sheet's two insets
     # (register F1). The count of states is 198 (193 UN members plus Vatican, Taiwan, Kosovo, N. Cyprus,
     # Somaliland). overlaps, under_9px, misplaced (a name mostly on another country, tested against geometry),
