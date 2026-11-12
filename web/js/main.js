@@ -529,7 +529,8 @@ function saveHash() {
   hashTimer = setTimeout(() => {
     const c = cam.center(), p = new URLSearchParams();
     if (state.clock !== 'live') p.set('t', new Date(state.t).toISOString().slice(0, 16) + 'Z');
-    p.set('v', cam.view); p.set('s', state.style); p.set('ll', `${c[0].toFixed(2)},${c[1].toFixed(2)}`); p.set('km', cam.kmPerPx().toFixed(2));
+    p.set('v', cam.view); p.set('s', state.style); const kk = cam.kmPerPx(), dp = kk < 0.5 ? 4 : 2;                      // close in, a hundredth of a degree is a kilometre: a link must come back to the same street
+    p.set('ll', `${c[0].toFixed(dp)},${c[1].toFixed(dp)}`); p.set('km', kk.toFixed(kk < 0.5 ? 3 : 2));
     if (state.lens !== 'none') p.set('lens', state.lens);
     p.set('on', Object.keys(state.layers).filter((k) => state.layers[k]).join(','));
     history.replaceState(null, '', '#' + p.toString().replace(/%2C/g, ',').replace(/%3A/g, ':'));

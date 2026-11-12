@@ -459,13 +459,187 @@ if (online) {
     const at = (lon, lat) => { c2.lookAt(lon, lat); return jrcCovers(planDetail(viewBox(c2), 0.3).elev); };
     ok('water record: asked for at Paris and Tierra del Fuego, not on Svalbard or the Antarctic Peninsula', at(2.35, 48.86) && at(-68.3, -54.8) && !at(16, 78.6) && !at(-62.9, -64.8)); }
   cam.setKmPerPx(4.5); const far = planDetail(viewBox(cam), 4.5);
-  ok('quick pass: a window of few requests has none', far && (far.alb.count + far.elev.count >= PLAN.quickLeast || quickPlan(far) === null) && quickPlan({ ...p, alb: { ...p.alb, count: 4 }, elev: { ...p.elev, count: 4 } }) === null);
+  ok('quick pass: a window of few requests has none', far && (far.alb.count + far.elev.count >= PLAN.quickLeast || quickPlan(far) === null) && quickPlan({ ...p, streets: null, alb: { ...p.alb, count: 4 }, elev: { ...p.elev, count: 4 } }) === null);
+  ok('quick pass: a window with streets always has one, so the picture is up before they are drawn', !!p.streets && quickPlan({ ...p, alb: { ...p.alb, count: 4 }, elev: { ...p.elev, count: 4 } }) !== null && quickPlan(p).streets === null);
   // the window's water colour: the mean of the picture where the flag is water, however the two grids differ
   const th = { w: 8, h: 4, d: new Uint8ClampedArray(8 * 4 * 4) }, fl = new Uint8Array(16 * 12);
   for (let j = 0; j < 4; j++) for (let i = 0; i < 8; i++) { const o = (j * 8 + i) * 4, wat = i < 4; th.d[o] = wat ? 20 : 200; th.d[o + 1] = wat ? 40 : 180; th.d[o + 2] = wat ? 60 : 150; th.d[o + 3] = 255; }
   for (let j = 0; j < 12; j++) for (let i = 0; i < 16; i++) fl[j * 16 + i] = i < 8 ? 1 : 0;
   const wc = waterColour({ w: 80, h: 40, d: (() => { const d = new Uint8ClampedArray(80 * 40 * 4); for (let j = 0; j < 40; j++) for (let i = 0; i < 80; i++) { const o = (j * 80 + i) * 4, s = (Math.floor(j / 10) * 8 + Math.floor(i / 10)) * 4; d[o] = th.d[s]; d[o + 1] = th.d[s + 1]; d[o + 2] = th.d[s + 2]; d[o + 3] = 255; } return d; })() }, fl, 16, 12);
   ok('water colour: the picture\'s mean where the flag is water, and nothing for a window with no water', wc && Math.abs(wc[0] - 20 / 255) < 1e-6 && Math.abs(wc[1] - 40 / 255) < 1e-6 && Math.abs(wc[2] - 60 / 255) < 1e-6 && waterColour(th, new Uint8Array(16 * 12), 16, 12) === null);
+}
+
+// ------------------------------------------------------------------ the cards' text: the year at a place, and Wikipedia's lead
+{
+  const { koppen, yearSentences, monthlySeries, daylightMonthly, hoursText, climateChart, climateTable, ticks, koppenName } = await import('../web/js/climate.js');
+  const { wikiKey, articleFor, trimLead, sentenceEnds, parseLead, leadUrl, articleUrl, LEAD_CAP } = await import('../web/js/wiki.js');
+  // Köppen-Geiger on twelve synthetic months whose class is known (station normals, rounded; the class is each station's published one)
+  const K = [
+    ['Af', 'a wet equatorial year', [26.5, 27, 27.5, 28, 28.3, 28.3, 27.9, 27.9, 27.6, 27.6, 27, 26.4], [240, 110, 170, 150, 170, 130, 150, 150, 160, 160, 250, 250]],
+    ['Am', 'a short dry season under a very wet year', [27, 27.5, 28.5, 29, 28.5, 26.5, 26, 26, 26.5, 27, 27.5, 27], [20, 25, 40, 110, 300, 700, 600, 350, 250, 300, 150, 40]],
+    ['Aw', 'a monsoon with a rainless winter', [24, 24.5, 27, 28.5, 30, 29, 27.5, 27, 27.5, 28.5, 27.5, 25.5], [1, 1, 0, 1, 15, 520, 850, 500, 320, 75, 15, 3]],
+    ['BWh', 'a hot desert', [14, 15, 17.5, 21.5, 25, 27.5, 28, 28, 26.5, 23.5, 19, 15], [5, 4, 4, 1, 0.5, 0, 0, 0, 0, 1, 4, 6]],
+    ['BSk', 'a cold steppe with summer rain', [-1, 0.5, 4.5, 9, 14, 19.5, 23, 22, 17, 10.5, 4, -0.5], [12, 12, 30, 45, 60, 45, 50, 45, 30, 25, 18, 12]],
+    ['Csa', 'a hot dry summer and a wet winter', [8, 9, 11, 14, 18, 22, 25, 25, 21, 17, 12, 9], [70, 70, 60, 60, 40, 20, 15, 25, 70, 100, 110, 90]],
+    ['Csb', 'the same in the southern hemisphere, with a warm summer', [21, 20, 18, 15, 12, 9.5, 9, 10.5, 12.5, 15, 17.5, 20], [0.5, 1, 3, 13, 58, 80, 73, 52, 24, 13, 6, 2]],
+    ['Cfb', 'a mild wet ocean climate', [5, 5.5, 7, 10, 13, 16, 18.4, 18, 15, 12, 8, 5.5], [55, 40, 42, 44, 49, 45, 45, 50, 49, 69, 59, 55]],
+    ['Cfa', 'a hot humid summer', [6, 7, 10, 15, 20, 24, 27, 26.5, 23, 17, 11, 7], [50, 60, 110, 130, 140, 170, 150, 170, 210, 200, 90, 50]],
+    ['Cwa', 'a subtropical dry winter', [14, 16.5, 21.5, 26, 28, 28.5, 28, 27.5, 27, 24.5, 19.5, 15], [18, 20, 15, 30, 60, 220, 330, 300, 190, 60, 8, 8]],
+    ['Dfb', 'a continental year with a warm summer', [-6.5, -6.7, -1, 6.7, 13.2, 17, 19.2, 17, 11.3, 5.6, -1.2, -5.2], [52, 41, 35, 37, 49, 80, 85, 82, 68, 71, 55, 52]],
+    ['Dwa', 'a continental year with a dry winter and a hot summer', [-3, 0, 6, 14, 20, 24.5, 26.5, 25, 20, 13, 5, -1], [3, 5, 8, 21, 34, 78, 185, 160, 45, 22, 7, 3]],
+    ['Dfc', 'a subarctic year', [-23, -20, -12, -2, 7, 14, 16, 13, 6.5, -3, -15, -21], [20, 15, 15, 15, 30, 50, 65, 60, 45, 35, 30, 25]],
+    ['Dfd', 'the coldest winters on Earth outside the ice', [-38.6, -33.8, -20.1, -4.8, 7.5, 16.4, 19.5, 15.2, 6.1, -7.8, -27, -37.6], [9, 8, 7, 9, 20, 37, 39, 38, 29, 19, 16, 10]],
+    ['ET', 'tundra', [-25, -26, -24, -16, -6, 2, 6, 5, 0.5, -8, -17, -22], [8, 7, 7, 8, 9, 12, 25, 28, 20, 18, 10, 8]],
+    ['EF', 'an ice cap', [-28, -40, -54, -57, -58, -58, -60, -60, -59, -51, -38, -28], [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]],
+  ];
+  const wrong = K.filter(([code, , t, p]) => (koppen(t, p) || {}).code !== code).map(([code, , t, p]) => `${code} came out ${(koppen(t, p) || {}).code}`);
+  ok(`Köppen-Geiger: ${K.length} synthetic years of known class`, wrong.length === 0, wrong.join('; '));
+  ok('Köppen-Geiger: every class it can return has a name, and a year with a missing month has no class', K.every(([code]) => koppenName(code)) && koppenName('Cfb') === 'Temperate, no dry season, warm summer' && koppenName('Dwd') === 'Cold, dry winter, very cold winter' && koppenName('Xx') === null && koppen([1, 2, 3], [1, 2, 3]) === null && koppen(K[0][2], K[0][3].map((v, i) => (i === 4 ? NaN : v))) === null);
+  // the sentences, on a known year
+  const yr = { t: K[7][2], pmm: K[7][3], day: [8.5, 10, 12, 14, 15.5, 16.5, 16, 14.5, 12.5, 10.5, 9, 8], sst: null };
+  const st = yearSentences(yr);
+  ok('year sentences: warmest and coldest month with their values', st[0] === 'July is the warmest month, with a mean air temperature of 18.4 °C; January is the coldest, at 5.0 °C.', st[0]);
+  ok('year sentences: the year\'s precipitation, its wettest and driest months', st[1] === 'About 600 mm of precipitation falls in a typical year, as a mean over some 250 km. October is the wettest month (69 mm) and February the driest (40 mm).', st[1]);
+  ok('year sentences: the range of daylight', st[2] === 'Daylight averages 8 h 00 m a day in December and 16 h 30 m in June.' && st.length === 3, st[2]);
+  const flat = yearSentences({ t: K[0][2].map(() => 27), pmm: Array(12).fill(1), day: Array(12).fill(12.1), sst: [28, 28.5, 29, 29, 28.5, 28, 27.5, 27, 27.5, 28, 28, 28] });
+  ok('year sentences: a year with no seasons, no rain and a sea under it says so', flat[0] === 'Mean air temperature is 27.0 °C in every month.' && yearSentences({ ...yr, t: K[0][2] })[0].startsWith('Mean air temperature changes little through the year: 26.4 °C in December, 28.3 °C in May') && flat[1] === 'Almost no precipitation falls here: about 12 mm in a typical year.'
+    && flat[2] === 'The day is close to 12 h 06 m long all year.' && flat[3] === 'The water’s surface is warmest in March (29.0 °C) and coldest in August (27.0 °C).', flat.join(' | '));
+  const polar = yearSentences({ t: K[14][2], pmm: K[14][3], day: [0, 4, 11, 17, 24, 24, 24, 19, 13, 8, 1, 0], sst: null })[2];
+  ok('year sentences: polar night and the midnight Sun', polar === 'There is no daylight in January (polar night) and the Sun does not set in May.', polar);
+  ok('a length of day in words', hoursText(12.1) === '12 h 06 m' && hoursText(9.999) === '10 h 00 m' && hoursText(0) === 'none' && hoursText(24) === '24 hours');
+  // day length by month: London's longest and shortest months (solstice days are 16 h 38 m and 7 h 50 m), the equator, the poles' side
+  const dl = daylightMonthly(51.5, 2026), eq = daylightMonthly(0, 2026), hi = daylightMonthly(80, 2026);
+  ok('monthly day length: London 16.5 h in June and 7.9 h in December; 12.1 h all year on the equator; none and 24 h at 80 N', near(dl[5], 16.5, 0.15) && near(dl[11], 7.9, 0.15) && eq.every((v) => near(v, 12.12, 0.03)) && hi[11] === 0 && hi[5] === 24,
+    `${dl[5].toFixed(2)} ${dl[11].toFixed(2)} ${eq[0].toFixed(2)} ${hi[11]} ${hi[5]}`);
+  // the twelve months from a field store: lapse to the ground's height, mm a day to mm a month, and nothing when a month is missing
+  const store = (over = {}) => ({ has: { climate: true }, meta: { climate: { lapse_K_per_km: 6.5 } }, elevation: () => 1000, waterFrac: () => 0,
+    climate: (name, lon, lat, ms) => (name === 't0' ? 20 + ms.i0 : name === 'precip' ? 2 : NaN), ...over });
+  const s1 = monthlySeries(store(), 10, 50, 2026);
+  ok('monthly series: sea-level temperature taken 1000 m up at 6.5 K a km; 2 mm a day is 62 mm in January and 56 in February', s1.ok && near(s1.t[0], 13.5, 1e-9) && near(s1.t[11], 24.5, 1e-9) && s1.pmm[0] === 62 && s1.pmm[1] === 56 && s1.sst === null && s1.day.length === 12);
+  const s2 = monthlySeries(store({ waterFrac: () => 1, elevation: () => -3000, climate: (name, lon, lat, ms) => (name === 't0' ? 20 : name === 'precip' ? 1 : name === 'sst' ? 18 + ms.i0 : NaN) }), 10, 50, 2026);
+  ok('monthly series: over water the sea floor is not a height and the sea\'s own temperature comes too', s2.ok && s2.water && s2.t[0] === 20 && s2.sst && s2.sst[11] === 29);
+  const s3 = monthlySeries(store({ waterFrac: () => 1, elevation: () => 200 }), 10, 50, 2026, false);
+  ok('monthly series: a card that knows it is on land is on land, whatever the mask says of its cell', s3.ok && !s3.water && s3.sst === null && near(s3.t[0], 20 - 1.3, 1e-9));
+  ok('monthly series: a field not loaded, or silent in one month, gives no series and a reason', !monthlySeries(store({ has: { climate: false } }), 0, 0, 2026).ok && !monthlySeries(store({ elevation: () => NaN }), 0, 0, 2026).ok
+    && !monthlySeries(store({ climate: (name, lon, lat, ms) => (ms.i0 === 7 ? NaN : 5) }), 0, 0, 2026).ok && typeof monthlySeries(store({ elevation: () => NaN }), 0, 0, 2026).why === 'string');
+  const svg = climateChart(s1, 10), tab = climateTable(s1, 10);
+  ok('climate chart: twelve bars, twelve hit areas with their values, one marked month, and no number that was not computed',
+    (svg.match(/<path /g) || []).length === 12 && (svg.match(/<title>/g) || []).length === 12 && (svg.match(/class="cm on"/g) || []).length === 1 && !/NaN|undefined|Infinity/.test(svg + tab) && (tab.match(/<tr/g) || []).length === 13);
+  ok('axis labels are round values inside the range', ticks(-12.3, 24.1, 3).join() === '0,20' && ticks(0, 187, 2).join() === '0,100' && ticks(25.2, 27.9, 3).join() === '26,27');
+
+  // Wikipedia's lead: cut at a sentence end, inside the cap, abbreviations not taken for ends
+  const lead = 'Tokyo (; Japanese: 東京), officially the Tokyo Metropolis ( ), is the capital of Japan. It lies on Honshu, near Mt. Fuji and the U.S. base at Yokosuka. Its population was 14 million in 2023.\nA second paragraph follows here. It has two sentences.';
+  const whole = trimLead(lead), part = trimLead(lead, 120), tiny = trimLead('One very long sentence without any full stop that simply goes on and on past the cap', 30);
+  ok('lead: under the cap it is shown whole, by paragraph, with the empty brackets a plain-text extract leaves taken out', !whole.cut && whole.paras.length === 2 && whole.paras[0].startsWith('Tokyo (Japanese: 東京), officially the Tokyo Metropolis, is the capital'));
+  ok('lead: over the cap it ends at the last sentence that fits, and "Mt." and "U.S." are not sentence ends', part.cut && part.paras.length === 1 && part.paras[0].endsWith('is the capital of Japan.') && part.paras.join('').length <= 120
+    && sentenceEnds('It lies near Mt. Fuji and the U.S. base. Next.').length === 2, JSON.stringify(part));
+  ok('lead: a first sentence longer than the cap is cut at a word and marked', tiny.cut && tiny.paras[0].endsWith(' …') && tiny.paras[0].length <= 32);
+  { let over = 0; for (let cap = 40; cap < lead.length + 20; cap += 7) { const r = trimLead(lead, cap); if (r.paras.join('').replace(/ …$/, '').length > cap) over++; } ok('lead: never longer than the cap, at any cap', over === 0, `${over} caps exceeded`); }
+  const pl = parseLead({ query: { pages: [{ pageid: 1, title: 'Tokyo', extract: lead, fullurl: 'https://en.wikipedia.org/wiki/Tokyo' }] } });
+  ok('lead: the answer is read as a title, an address and paragraphs', pl.title === 'Tokyo' && pl.url === 'https://en.wikipedia.org/wiki/Tokyo' && pl.paras.length === 2 && !pl.cut && LEAD_CAP >= 1000);
+  ok('lead: an address that is not the article on en.wikipedia.org is not used', parseLead({ query: { pages: [{ title: 'São Paulo', extract: 'x.', fullurl: 'javascript:alert(1)' }] } }).url === 'https://en.wikipedia.org/wiki/S%C3%A3o_Paulo' && articleUrl('A b') === 'https://en.wikipedia.org/wiki/A_b');
+  { let threw = 0; for (const j of [null, {}, { query: { pages: [] } }, { query: { pages: [{ title: 'X', missing: true }] } }]) { try { parseLead(j); } catch (e) { threw++; } } ok('lead: a missing article or a malformed answer is an error, not an empty description', threw === 4); }
+  ok('the request names the article and nothing else', leadUrl('Côte d\'Ivoire') === 'https://en.wikipedia.org/w/api.php?action=query&prop=extracts|info&exintro=1&explaintext=1&redirects=1&inprop=url&format=json&formatversion=2&origin=*&titles=C%C3%B4te%20d\'Ivoire');
+
+  // which article belongs to which card: the page's own key rule over the shipped files, against the counts the build wrote
+  ok('card keys: a city, a state, a dispute, a feature, a peak, a river', wikiKey('city', ['Tokyo', 139.749, 35.687]) === 'Tokyo|139.749|35.687' && wikiKey('country', { a3: 'JPN' }) === 'JPN'
+    && wikiKey('dispute', { name: 'Crimea', note: 'Admin. by Russia; Claimed by Ukraine' }) === 'Crimea|Admin. by Russia; Claimed by Ukraine' && wikiKey('feature', { name: 'X', kind: 'sea', lon: -0, lat: 12.5 }) === 'X|sea|0.000|12.500'
+    && wikiKey('peak', { name: 'Y', lon: 86.881, lat: 27.98 }) === 'Y|86.881|27.980' && wikiKey('river', { name: 'Z', lines: [[5194, 5570, 5188, 5569]] }) === 'Z|5194|5570' && wikiKey('river', { name: 'Z', lines: [] }) === '');
+  const D = (f) => new URL(`../web/data/${f}`, import.meta.url);
+  if (existsSync(D('wiki.json'))) {
+    const W = JSON.parse(readFileSync(D('wiki.json'), 'utf8')), rd = (f) => JSON.parse(readFileSync(D(f), 'utf8'));
+    const places = rd('places.json'), pol = rd('political.json'), phys = rd('physical.json'), volc = rd('volcanoes.json');
+    const sets = { city: places.rows, country: pol.countries, dispute: pol.disputes, feature: phys.features, peak: phys.peaks.filter((p) => p.name),
+      river: phys.rivers.filter((r) => r.name && r.lines.length && r.lines[0].length), volcano: volc.rows };
+    const off = [];
+    for (const [kind, cards] of Object.entries(sets)) {
+      const hit = cards.filter((c) => articleFor(kind, wikiKey(kind, c), W)).length;
+      if (hit !== W.counts[kind][0] || cards.length !== W.counts[kind][1]) off.push(`${kind}: the page finds ${hit} of ${cards.length}, the build wrote ${W.counts[kind].join(' of ')}`);
+    }
+    ok('card keys: the page finds an article for exactly the cards the build matched, kind by kind', off.length === 0, off.join('; ') || Object.entries(W.counts).map(([k, v]) => `${k} ${v[0]}/${v[1]}`).join(', '));
+    const tokyo = articleFor('city', wikiKey('city', places.rows.find((r) => r[0] === 'Tokyo')), W), jp = articleFor('country', 'JPN', W);
+    ok('card keys: Tokyo\'s card has the article Tokyo and Japan\'s has Japan', tokyo && tokyo.title === 'Tokyo' && tokyo.qid === 'Q1490' && jp && jp.title === 'Japan' && articleFor('country', 'XXX', W) === null && articleFor('city', 'x') === undefined);
+  } else ok('card keys: web/data/wiki.json is there to check (build/wiki_titles.py)', false);
+}
+
+// ---------------------------------------------------------------- streets and buildings (streets.js, register F15)
+{
+  const { OFM, STREETS, ROADS, FILLS, streetPlan, decodeTile, frame, tileXY, tileLon, tileLat, shadowOffset } = await import('../web/js/streets.js');
+  const D = await import('../web/js/detail.js');
+  // a vector tile written here, byte by byte, to the published format: what the decoder must read back is known
+  const varint = (v) => { const o = []; while (v > 127) { o.push((v & 127) | 128); v = Math.floor(v / 128); } o.push(v); return o; };
+  const tag = (f, w) => varint(f * 8 + w);
+  const bytes = (f, b) => [...tag(f, 2), ...varint(b.length), ...b];
+  const str = (f, s) => bytes(f, [...new TextEncoder().encode(s)]);
+  const zz = (v) => (v < 0 ? -2 * v - 1 : 2 * v);
+  const geom = (pts, close) => [...varint(1 * 8 + 1), ...varint(zz(pts[0][0])), ...varint(zz(pts[0][1])), ...varint((pts.length - 1) * 8 + 2), ...pts.slice(1).flatMap((p, i) => [...varint(zz(p[0] - pts[i][0])), ...varint(zz(p[1] - pts[i][1]))]), ...(close ? varint(7 + 8) : [])];
+  const feature = (type, tags, g) => [...bytes(2, tags.flatMap((t) => varint(t))), ...tag(3, 0), ...varint(type), ...bytes(4, g)];
+  const layer = (name, keys, vals, feats) => [...tag(15, 0), ...varint(2), ...str(1, name), ...feats.flatMap((f) => bytes(2, f)), ...keys.flatMap((k) => str(3, k)), ...vals.flatMap((v) => bytes(4, typeof v === 'string' ? str(1, v) : [...tag(4, 0), ...varint(v)])), ...tag(5, 0), ...varint(4096)];
+  const tile = new Uint8Array([
+    ...bytes(3, layer('transportation', ['class', 'brunnel'], ['primary', 'minor', 'tunnel', 'rail', 'path'], [
+      feature(2, [0, 0], geom([[0, 0], [4096, 0], [4096, 2048]])),              // a main street
+      feature(2, [0, 1, 1, 2], geom([[10, 10], [20, 20]])),                     // a side street in a tunnel: left out
+      feature(2, [0, 3], geom([[5, 5], [6, 5]])),                               // a railway
+      feature(2, [0, 4], geom([[1, 1], [2, 2]])),                               // a footpath: not drawn
+      feature(1, [0, 0], [...varint(1 * 8 + 1), ...varint(zz(7)), ...varint(zz(7))]),   // a point in a line layer: not drawn
+    ])),
+    ...bytes(3, layer('building', ['render_height'], [30], [feature(3, [0, 0], geom([[100, 100], [200, 100], [200, 200], [100, 200]], true)), feature(3, [], geom([[-50, 300], [50, 300], [50, 400]], true))])),
+    ...bytes(3, layer('landuse', ['class'], ['commercial', 'cemetery'], [feature(3, [0, 0], geom([[0, 0], [10, 0], [10, 10]], true)), feature(3, [0, 1], geom([[0, 0], [10, 0], [10, 10]], true))])),
+    ...bytes(3, layer('poi', ['name'], ['a shop'], [feature(1, [0, 0], [...varint(9), ...varint(2), ...varint(2)])])),
+  ]);
+  const d = decodeTile(tile);
+  ok('streets: a tile written to the published format is read back: one main street with its three points, the tunnel, the path and the stray point left out',
+    Object.keys(d.roads).join() === 'primary' && d.roads.primary.length === 1 && [...d.roads.primary[0]].join() === '0,0,4096,0,4096,2048' && d.extent === 4096, JSON.stringify(Object.fromEntries(Object.entries(d.roads).map(([k, v]) => [k, v.length]))));
+  ok('streets: the railway is kept apart from the roads', d.rail.length === 1 && [...d.rail[0]].join() === '5,5,6,5');
+  ok('streets: a building keeps its height and its closed ring; one without a height gets the default; a point beyond the tile edge is kept (lines must join)',
+    d.buildings.length === 2 && d.buildings[0].h === 30 && [...d.buildings[0].rings[0]].join() === '100,100,200,100,200,200,100,200,100,100' && d.buildings[1].h === STREETS.defaultH && d.buildings[1].rings[0][0] === -50);
+  ok('streets: commercial ground is kept and a cemetery is not; a layer the atlas does not draw is skipped', Object.keys(d.fills).join() === 'commercial' && d.fills.commercial.length === 1);
+  ok('streets: a tile cut short is an error, not a wrong answer', (() => { try { decodeTile(tile.subarray(0, 40)); return false; } catch (e) { return /cut short/.test(e.message); } })());
+  ok('streets: every road is 0.5 or over in the pattern and every filled ground under 0.3, so one channel tells them apart', Object.values(ROADS).every((r) => r.light >= 0.5 && r.light <= 1) && Object.values(FILLS).every((v) => v < 0.3 && v > 0.05));
+  // the frame: Web Mercator tile coordinates against known places
+  const [gx, gy] = tileXY(0, 0, 3);
+  ok('streets: longitude 0, latitude 0 is the middle of the tile grid; the grid\'s top is 85.0511 N', near(gx, 4, 1e-12) && near(gy, 4, 1e-9) && near(tileLat(0, 5), 85.0511287798, 1e-9) && near(tileLon(2 ** 14, 14), 180, 1e-12));
+  const [px, py] = tileXY(2.3376, 48.8606, 14);
+  ok('streets: the Louvre is in tile 14/8298/5636 (OpenStreetMap\'s own numbering), and there and back is exact', Math.floor(px) === 8298 && Math.floor(py) === 5636 && near(tileLon(px, 14), 2.3376, 1e-10) && near(tileLat(py, 14), 48.8606, 1e-10), `${px.toFixed(2)}, ${py.toFixed(2)}`);
+  // the plan: the finest zoom that fits the budget; the unwrapped column is kept for placing
+  const win5 = { west: 2.28, north: 48.89, lonSpan: 0.12, latSpan: 0.06 };
+  const sp = streetPlan(win5);
+  ok('streets: a 9 km window at Paris is zoom 14 within the budget and holds its corners', sp && sp.z === 14 && sp.count <= STREETS.maxTiles && sp.tiles.length === sp.count && sp.tiles.some((t) => t.x === 8298 && t.y === 5636), sp && `z${sp.z}, ${sp.count} tiles`);
+  const sp2 = streetPlan({ west: 1.5, north: 49.4, lonSpan: 1.6, latSpan: 1.0 });
+  ok('streets: a 120 km window drops to the zoom that fits', sp2 && sp2.z < 12 && sp2.z >= OFM.minZoom && sp2.count <= STREETS.maxTiles, sp2 && `z${sp2.z}, ${sp2.count} tiles`);
+  ok('streets: no plan beyond Web Mercator\'s reach', streetPlan({ west: 10, north: 86, lonSpan: 0.1, latSpan: 0.05 }) === null);
+  const spw = streetPlan({ west: 179.95, north: 10.05, lonSpan: 0.1, latSpan: 0.1 });
+  ok('streets: across the date line the tiles wrap and the unwrapped column runs on', spw && spw.tiles.some((t) => t.x === 0 && t.ox === 2 ** spw.z) && spw.tiles.every((t) => t.x >= 0 && t.x < 2 ** spw.z));
+  // the drawing frame: metres, so a road is as wide north-south as east-west
+  const fr = frame(win5, 4000, 2000);
+  ok('streets: the canvas is drawn in metres: a degree of longitude at 48.86 N is 73.2 km and the scale is finer east-west than north-south by its cosine',
+    near(fr.mx(win5.west + 1), 111195 * Math.cos(48.86 * Math.PI / 180), 1) && near(fr.my(win5.north - 1), 111195, 1e-6) && near(fr.sx / fr.sy, (4000 / 0.12) / (2000 / 0.06) / Math.cos(48.86 * Math.PI / 180), 1e-9), `${fr.sx.toFixed(4)} ${fr.sy.toFixed(4)} px/m`);
+  const [sx, sy] = shadowOffset(100, 48), [, sy2] = shadowOffset(100, -34);
+  ok('streets: a 100 m tower throws 62 m of shadow, to the north-west north of the equator and the south-west south of it', near(Math.hypot(sx, sy), 62, 1e-9) && sx < 0 && sy < 0 && sy2 > 0);
+  // the planner with streets: the zoom floor, the magnified grid, the pixel budget
+  const cam5 = new Camera(); cam5.resize(1440, 900, 2); cam5.lookAt(2.3376, 48.8606); cam5.setKmPerPx(0.005);
+  ok('camera: the zoom floor is 5 m a pixel and the globe camera reaches it', near(cam5.kmPerPx(), 0.005, 1e-9), `${cam5.kmPerPx()}`);
+  const p5 = planDetail(viewBox(cam5), cam5.kmPerPx());
+  ok('plan: at 5 m a pixel the grid is finer than Sentinel-2 (its level-13 tiles magnified), within the texel budget, with streets at zoom 14',
+    p5 && p5.alb.src === 's2' && p5.alb.L === S2.maxLevel && p5.alb.mag >= 2 && p5.alb.w === p5.alb.sw * p5.alb.mag && p5.alb.w * p5.alb.h <= PLAN.maxPx && p5.alb.texelKm <= 0.0049 && p5.streets && p5.streets.z === 14 && p5.streets.count <= STREETS.maxTiles && windowHolds(p5.win, viewBox(cam5), PLAN.fullView),
+    p5 && `grid level ${p5.alb.VL} (x${p5.alb.mag}), ${p5.alb.w} x ${p5.alb.h}, ${p5.alb.count} tiles, streets z${p5.streets && p5.streets.z} x ${p5.streets && p5.streets.count}`);
+  ok('plan: the magnified grid starts on a whole source texel, so the mosaic magnifies without a seam', p5 && Number.isInteger(Math.round(((p5.win.west + 180) / s2TexelDeg(S2.maxLevel)) * 1e6) / 1e6) && near(p5.alb.sw * s2TexelDeg(S2.maxLevel), p5.win.lonSpan, 1e-9));
+  cam5.setKmPerPx(0.2);
+  const pFar = planDetail(viewBox(cam5), cam5.kmPerPx());
+  ok('plan: at 200 m a pixel there are no streets, and with streets refused there are none at 5 m', pFar && pFar.streets === null && (() => { cam5.setKmPerPx(0.005); const q = planDetail(viewBox(cam5), 0.005, { noStreets: true }); return q && q.streets === null; })());
+  // the season reference's packing (register A16)
+  ok('season: three bytes ride in one float exactly, and come apart as the shader takes them apart', (() => {
+    for (const [a, r, b] of [[0, 0, 0], [1, 255, 255], [0.5, 17, 200], [0.2, 255, 0]]) {
+      const pk = Math.fround(D.packDet(a, r, b)), A = Math.floor(pk / 65536), R = Math.floor((pk - A * 65536) / 256), B = pk - A * 65536 - R * 256;
+      if (A !== Math.round(a * 255) || R !== r || B !== b) return false;
+    }
+    return true;
+  })());
+  ok('season: a colour ratio survives its byte to within 1%, from 0.1 to 2.4', [0.1, 0.19, 0.5, 1, 1.6, 2.4].every((v) => Math.abs(D.seasonRatio(D.seasonCode(v)) / v - 1) < 0.01) && D.seasonCode(0.01) === 0 && D.seasonCode(9) === 255);
+  const shader = readFileSync(new URL('../web/shaders/earth.frag.glsl', import.meta.url), 'utf8');
+  const lut = D.albedoLut(shader);
+  ok('season: the albedo table is read out of the shader itself: nine knots, rising, black at 0', lut.length === 9 && lut[0].every((v) => v === 0) && lut.every((q, i) => i === 0 || q.every((v, k) => v > lut[i - 1][k])) && near(D.lutAlbedo(lut, 255, 0), lut[8][0], 1e-12) && near(D.lutAlbedo(lut, 255 / 16, 1), lut[1][1] / 2, 1e-12));
+  ok('season: the shader unpacks with the same constants the page packs with', /0\.08 \* exp\(r \/ 255\.0 \* 3\.4420\)/.test(shader) && near(Math.log(2.5 / 0.08), 3.4420, 1e-4));
 }
 
 console.log(bad ? `\napp math: ${bad} FAILURES` : '\napp math: ALL PASS');

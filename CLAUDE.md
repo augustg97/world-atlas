@@ -75,8 +75,15 @@ The general protocol lives in `~/Modeling Studio`. Its skills apply here:
     NASA GIBS, AWS Terrain Tiles, the live feeds, since 2026-11-11 Google's storage (`storage.googleapis.com`, JRC Global
     Surface Water's `tiles2021/occurrence` tiles only; approved that day, register A15), and EOX (`tiles.maps.eox.at`, layer
     `s2cloudless` ONLY: the 2016 mosaic is CC BY 4.0; the later years are non-commercial and not approved).
+    Since the tenth round (2026-11-11, the owner's answers that day): OpenFreeMap (`tiles.openfreemap.org`:
+    OpenStreetMap's roads and buildings as vector tiles, ODbL, credited on the map while on screen; register F15)
+    and English Wikipedia (`en.wikipedia.org`, asked when a place's card opens for the opening of its article;
+    the owner chose "Wikipedia, live": NO Wikipedia text is stored in the tree, and what the card shows is credited
+    and linked to the article, CC BY-SA 4.0).
     The audits fetch into the ignored `reference/` from those hosts and, for the close-water witness only, from
     ESA WorldCover's public bucket (`esa-worldcover.s3.eu-central-1.amazonaws.com`, CC BY 4.0): the page never asks it.
+    `build/wiki_titles.py` asks Wikidata (`www.wikidata.org`, CC0) at BUILD time for article titles and ids, which
+    ARE in the tree (`web/data/wiki.json`): the page never asks Wikidata.
 
 ---
 
@@ -117,7 +124,7 @@ node build/test_app_math.mjs                     # ephemeris vs almanac, project
 # the list of political units is build/units.py (France's overseas departments are their own): `political`, `places`
 # and fields_human.py `countries` must be rebuilt TOGETHER when it changes, because a unit's id is its index
 
-# the whole audit suite against its baselines (sixteen checks, about 7 min; --quick skips the browser checks)
+# the whole audit suite against its baselines (eighteen checks, about 9 min; --quick skips the browser checks)
 ./venv/bin/python Research/modeling/audit_all.py
 # score against NASA EPIC by hand: render (headless), then compare
 "$HOME/Modeling Studio/.venv/bin/python" Research/modeling/epic_render.py cur
@@ -141,6 +148,11 @@ node build/test_app_math.mjs                     # ephemeris vs almanac, project
 ./venv/bin/python Research/modeling/s2_transfer.py --fetch      # once: Sentinel-2 at 5 km, whole Earth (8 MB, reference/s2global)
 ./venv/bin/python Research/modeling/s2_transfer.py              # prints S2_CURVE, the gains (S2_WARM), AIR_LT, AIR_I
 ./venv/bin/python Research/modeling/audit_closecolour.py
+# the season close in: Blue Marble at the Sentinel-2 picture's own season (web/fields/albedo_ref.webp, 3 MB). Rebuild after
+# s2_transfer.py changes its fit, or after any albedo month is rebuilt
+./venv/bin/python build/season_ref.py
+# streets and buildings: OpenStreetMap's footprints (the page's own decoder, under node) against WorldCover's built-up ground
+./venv/bin/python Research/modeling/audit_streets.py           # fetches 120 tiles into reference/streets the first time (20 MB)
 # build the published site (audits first; stamps code and data; never pushes)
 ./venv/bin/python build/build_site.py
 # the visual ratchet alone; accept a moved frame only with a reason
@@ -308,6 +320,31 @@ node build/test_app_math.mjs                     # ephemeris vs almanac, project
   it. The new source "did not work" at first because the shot was taken at weight 0. Wait 450 ms after `detail.busy`.
 - **Coordinates from memory are not landmarks.** Four river asserts and two audit sample points were placed by
   recollection and missed rivers that were there. Find a named feature by its NAME in the vector data.
+
+- **One canvas path of a hundred thousand overlapping pieces takes the rasteriser over half a minute.** Building
+  shadows for sixteen tiles as ONE path hung the streets worker (one tile: 0.6 s; sixteen: no answer in 40 s) and
+  the window with it. Fill a few hundred pieces at a time; draw them solid and thin them to a shadow in one step.
+- **Vector tiles overlap at their edges** so that lines join. Drawn unclipped, every roof and road in the overlap
+  was drawn twice and Paris had pale bands a tile apart. Clip each tile's drawing to its own square.
+- **A ratio taken in one camera is not the other camera's change.** The month's colour over the reference's, as a
+  ratio, multiplied into Sentinel-2 (whose blue over green is 2.5 times Blue Marble's for the same field) turned
+  Iowa's bare fields purple. The season is applied as a SHIFT of colour at the texel's own brightness, in albedo.
+- **Join the month's brightness in albedo, not in scene light.** Scene light holds the air; a month a third
+  brighter, joined there, added a third of the air's blue to every texel. `audit_closecolour.py` scored the close
+  view at 100 to 250% of Blue Marble's change until the join moved to albedo; then 94 to 104% at every place.
+- **A colour carried without its brightness, through a table that is not linear, is not the same colour.** The
+  reference month was first carried as display red and blue over green and given the month's brightness in the
+  shader; `ALB_LUT` bends each channel differently, and a brightness change read as a colour change. It is carried
+  as ALBEDO ratios now, read through the table on the page's side (`albedoLut` takes the table from the shader's text).
+- **Score a change in the space the model makes it in.** The season scored in scene light looked erratic (-90% to
+  +130%) with a correct join: the air's share of the light changes with brightness, and differently for the two
+  pictures. In albedo the same join scored 100%. And the reverse: the scene-light score is what found the two faults above.
+- **"Nothing mapped here" must be asked over a wide area.** Asked over 600 m, every park and wood inside a mapped
+  city fell back to an even glow: amber blobs. Asked over 10 km, a park is dark and an unmapped town still glows.
+- **Three bytes can ride in one channel of a 32-bit float texture**, read by `texelFetch` and mixed by hand
+  (`detPack`); never through the sampler's filter, and never in a half-float texture (11 bits).
+- **The globe camera had a second floor.** `MIN_KM_PER_PX` went to 5 m and `setKmPerPx` still stopped at 18 m:
+  the distance was clamped at 1.004 radii. A limit that exists in two places is changed in one.
 
 Plus the standing ones: a process backgrounded with `&` inside a tool call dies when that call
 ends; a waiter on a `pgrep` pattern can match itself — wait on a **PID**; a static host can serve

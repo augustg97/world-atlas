@@ -123,6 +123,41 @@ export class Data {
     return best ? `${best.name}: ${best.note}.` : null;
   }
 
+  /**
+   * The drawn river nearest a point, if one lies within maxKm: { i, river, km, lon, lat }, the last two the nearest
+   * point ON its line. Distances are to the segments (their vertices can be tens of km apart), on a local flat map.
+   */
+  riverNear(lon, lat, maxKm) {
+    const R = this.physical.rivers, box = this._rbox || (this._rbox = R.map((r) => {
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      for (const l of r.lines) for (let i = 0; i < l.length; i += 2) { if (l[i] < x0) x0 = l[i]; if (l[i] > x1) x1 = l[i]; if (l[i + 1] < y0) y0 = l[i + 1]; if (l[i + 1] > y1) y1 = l[i + 1]; }
+      return [x0 / 100, y0 / 100, x1 / 100, y1 / 100];
+    }));
+    const kx = 111.195 * Math.cos(lat * Math.PI / 180), ky = 111.195, padY = maxKm / ky, padX = maxKm / Math.max(kx, 1e-6);
+    let best = null, bd = maxKm;
+    for (let n = 0; n < R.length; n++) {
+      const r = R[n], b = box[n];
+      if (!r.name || lon < b[0] - padX || lon > b[2] + padX || lat < b[1] - padY || lat > b[3] + padY) continue;
+      for (const l of r.lines) for (let i = 0; i + 3 < l.length; i += 2) {
+        const ax = (l[i] / 100 - lon) * kx, ay = (l[i + 1] / 100 - lat) * ky, bx = (l[i + 2] / 100 - lon) * kx, by = (l[i + 3] / 100 - lat) * ky;
+        const dx = bx - ax, dy = by - ay, len = dx * dx + dy * dy, t = len ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / len)) : 0;
+        const d = Math.hypot(ax + t * dx, ay + t * dy);
+        if (d < bd) { bd = d; best = { i: n, river: r, km: d, lon: lon + (ax + t * dx) / kx, lat: lat + (ay + t * dy) / ky }; }
+      }
+    }
+    return best;
+  }
+  /** A river as something a card can be opened for: the reach, and a point on its line (the middle of its longest line unless given). */
+  riverItem(r, lon, lat) {
+    if (lon === undefined) { const l = r.lines.reduce((a, b) => (b.length > a.length ? b : a), r.lines[0] || []), m = (l.length >> 2) << 1; lon = l[m] / 100; lat = l[m + 1] / 100; }
+    return { name: r.name, kind: 'River', rank: r.rank, lon, lat, realm: 'land', river: r };
+  }
+  /** "index|lon|lat" from a card's link -> what app.pick() takes. The river's card opens as a feature's does. */
+  riverRef(s) {
+    const [i, lon, lat] = s.split('|').map(Number), r = this.physical.rivers[i];
+    return r && r.name && Number.isFinite(lon) && Number.isFinite(lat) ? { lon, lat, km: Infinity, ref: ['feature', this.riverItem(r, lon, lat)] } : null;
+  }
+
   /** Everything that can carry a name on the map, with the zoom range it shows at. */
   labelItems() {
     const items = [];
@@ -171,6 +206,10 @@ export class Data {
     for (const c of this.political.countries) { const s = Math.min(...[c.name, c.short, c.endonym || ''].map(score).filter((v) => v >= 0), 9); if (s < 9) out.push({ s: s + c.rank * 0.01, label: c.name, sub: c.type, ref: ['country', c], lon: c.lon, lat: c.lat, km: 6 }); }
     for (const r of this.places.rows) { const s = score(r[0]); if (s >= 0) out.push({ s: s + 0.3 + r[4] * 0.02, label: r[0], sub: (this.countryByA3[r[6]] || {}).name || r[6], ref: ['city', r], lon: r[1], lat: r[2], km: 1.6 }); }
     for (const f of this.physical.features) { const s = score(f.name); if (s >= 0) out.push({ s: s + 0.5 + f.rank * 0.02, label: f.name, sub: f.kind, ref: ['feature', f], lon: f.lon, lat: f.lat, km: Math.max(2, Math.min(14, f.size / 4)) }); }
+    // rivers: one hit a name (a river is drawn as several reaches), at the reach with the longest line
+    const rv = new Map();
+    for (const r of this.physical.rivers) { if (!r.name || !r.lines.length || !r.lines[0].length || score(r.name) < 0) continue; const len = Math.max(...r.lines.map((l) => l.length)), had = rv.get(r.name); if (!had || len > had.len) rv.set(r.name, { r, len }); }
+    for (const { r } of rv.values()) { const f = this.riverItem(r); out.push({ s: score(r.name) + 0.6 + r.rank * 0.02, label: r.name, sub: 'River', ref: ['feature', f], lon: f.lon, lat: f.lat, km: 6 }); }
     return out.sort((a, b) => a.s - b.s).slice(0, n);
   }
 }

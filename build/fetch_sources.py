@@ -166,7 +166,10 @@ for f in ["ne_50m_admin_0_countries", "ne_50m_admin_0_map_units", "ne_50m_admin_
           "ne_50m_geography_regions_points", "ne_50m_geography_regions_elevation_points",
           "ne_50m_coastline", "ne_10m_time_zones",
           # the water mask (fields_surface.step_water): land, small islands, lakes and the ice shelves at 1:10m
-          "ne_10m_land", "ne_10m_minor_islands", "ne_10m_lakes", "ne_10m_antarctic_ice_shelves_polys"]:
+          "ne_10m_land", "ne_10m_minor_islands", "ne_10m_lakes", "ne_10m_antarctic_ice_shelves_polys",
+          # Wikidata ids for the cards' articles (build/wiki_titles.py): the full places file and the rivers by scale
+          # rank carry Natural Earth's `wikidataid`, which the files above do not
+          "ne_10m_populated_places", "ne_50m_rivers_lake_centerlines_scale_rank", "ne_10m_rivers_lake_centerlines_scale_rank"]:
     add("ne", f"ne/{f}.geojson", f"{NE}/{f}.geojson", "public domain (Natural Earth 5.1.2)")
 
 add("plates", "plates/PB2002_boundaries.json",

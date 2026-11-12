@@ -88,6 +88,11 @@ The comparison is only meaningful at **matched scale**. All of this exists; reus
   16 MB, cached in `reference/worldcover`). `close-colour` needs `reference/s2global` (`s2_transfer.py --fetch`, 8 MB).
 - **The app now talks to two outside hosts when zoomed in** (NASA GIBS, AWS Terrain Tiles), by default, and
   says so in About. Read register A2 before publishing: one line of the tile documentation needs the owner's eye.
+- **A FIFTH AND A SIXTH OUTSIDE HOST since the tenth round, both the owner's answers of 2026-11-11:**
+  `tiles.openfreemap.org` (OpenStreetMap's streets and buildings, closer than 120 m a pixel; credited on the map)
+  and `en.wikipedia.org` (the opening of a place's article, when its card opens; no Wikipedia text is in the tree).
+- **The zoom floor is 5 m a pixel.** Below Sentinel-2's 10 m the photograph is magnified and the streets and
+  buildings are what is sharp. `web/fields/albedo_ref.webp` (3 MB) is new: Blue Marble at the picture's own season.
 - **The earth shader uses 16 of 16 texture units.** See G7. The streamed lights share the imagery texture; the
   window's water flag is the elevation texture's third channel.
 - **A FOURTH OUTSIDE HOST since the ninth round, approved by the owner on 2026-11-11: `storage.googleapis.com`**
@@ -102,6 +107,50 @@ The comparison is only meaningful at **matched scale**. All of this exists; reus
 - **A third outside host since 2026-11-11, approved by the owner: `tiles.maps.eox.at`** (Sentinel-2 cloudless 2016,
   CC BY 4.0), asked only closer in than about 0.6 km a pixel. EOX's attribution is on the map while its tiles are.
   Only the 2016 layer (`s2cloudless`) is CC BY; the later years are non-commercial and were NOT approved.
+
+## What the tenth round found (2026-11-11)
+
+Streets, the night and the season (the lead's part; clouds and the cards follow below).
+
+1. **OpenStreetMap is reachable as vector tiles with no key** (OpenFreeMap, OpenMapTiles schema, CORS open). A
+   tile is mostly things the atlas does not draw (names in sixty languages, points of interest): central Paris is
+   0.5 MB a tile unpacked, Raleigh 64 KB. The page reads the format itself (`streets.js`, 120 lines).
+2. **The night was a photograph of the day because nothing said where light comes from.** With the street plan
+   the measured amount goes onto streets as lamps and parks go dark. A band of even light along every road read
+   as a map; pools of light under lamps set down by rule read as a city.
+3. **One canvas path of 100,000 overlapping pieces hangs the rasteriser.** And tiles overlap at their edges: draw
+   each inside its own square or the overlap is drawn twice (pale bands across Paris).
+4. **"Unmapped" is a question about 10 km, not 600 m.** At 600 m every park glowed.
+5. **Left as a glow under the main roads, seven tenths of the light is the slab of gold again.** A tenth at most.
+6. **The season cannot be a ratio between two cameras.** Sentinel-2's blue over green is 2.5 times Blue Marble's
+   for the same field; Blue Marble's month over its reference, multiplied in, made Iowa's April fields purple.
+   It is a shift of colour in albedo now, at the texel's own brightness.
+7. **Joined in scene light, the month's brightness brought the air with it.** Joined in albedo, the close view
+   keeps 94 to 104% of Blue Marble's change of colour at every scored place; before, anything from 35 to 250%.
+8. **The audit found both faults because it scored in the wrong space first.** In scene light a correct join
+   looks erratic; the claim lives in albedo. Its own text now says why.
+9. **A colour without its brightness is not a colour through a table that bends.** The reference is carried as
+   albedo ratios; the page reads the table out of the shader's own text so there is one copy.
+10. **Three bytes fit in one channel of a float texture.** That is how the sixteenth sampler still holds: the
+    lights' amount and the season reference ride in the elevation texture's fourth channel.
+11. **The far view's bare fields are mauve** (brown soil behind blue air), and the close view now matches it. Not
+    this round's to fix; it is the far view's colour (A7, A19).
+12. **Seen through the whole atmosphere, a city at 5 m a pixel is a grey sheet.** The air's veil is thinned close
+    in and the contrast raised, by eye, declared (A19).
+13. **The globe camera had a second floor** (1.004 radii) under the first.
+
+Clouds (a helper session, branch `clouds-b1`, merged):
+
+14. **The summer Southern Ocean was not short of light seen straight down.** It was drawn as a veil over
+    everything. Given to the photograph's weather systems, the same light has EPIC's spread (31 to 38-41 levels).
+15. **EPIC's light over the storm belts is level from the disc's centre to a view cosine of 0.5; over the tropics
+    it doubles.** Layered cloud has no gaps to close at a slant. The slant law is for heaped cloud only now.
+16. **Broken low cloud does run along the monthly-mean wind** (1 to 41 degrees off it in the audit's own scenes),
+    whatever the wind's speed; fronts and sheets do not. The grains are read along it: 36.8 to 11.6 degrees.
+17. **The number moved more than the picture.** The trades lean with the wind and are not streets: the grain's
+    pieces are five times a street's cells. A real street scene in a spare grain channel is next.
+18. **The audits hard-coded port 8150**, so a second checkout's audit would have rendered the first's page.
+    They read `ATLAS_PORT` now.
 
 ## What the ninth round found (2026-11-11)
 

@@ -1,8 +1,9 @@
 // The interface: brand and clock, systems panel, time console, legend, card panel, dashboard,
 // search and About. All of it is generated from js/catalog.js.
 
-import { SYSTEMS, TIERS, LAYERS, LENS_DEFS, paletteCss } from './catalog.js';
+import { SYSTEMS, TIERS, LAYERS, LENS_DEFS, paletteCss, CARD_TEXT_SOURCE } from './catalog.js';
 import { coord } from './cards.js';
+import { mountDescription } from './wiki.js';
 import { seasonName } from './astro.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -98,7 +99,9 @@ export class UI {
     $('#btn-about').addEventListener('click', () => this.showAbout());
     $('#card').addEventListener('click', (e) => {
       if (e.target.closest('.card-x')) { app.closeCard(); return; }
-      const o = e.target.closest('[data-open]'); if (o) app.openRef(o.dataset.open);
+      const o = e.target.closest('[data-open]');
+      if (o && o.dataset.open.startsWith('river:')) { const hit = app.data.riverRef(o.dataset.open.slice(6)); if (hit) app.pick(hit); }   // a river's card opens as a feature's does
+      else if (o) app.openRef(o.dataset.open);
       if (e.target.closest('.card-go')) app.flyToSelection();
     });
     const s = $('#search'), res = $('#results');
@@ -175,11 +178,11 @@ export class UI {
     $('#scale-txt').textContent = `${dist} · ${kmPerPx >= 10 ? kmPerPx.toFixed(0) + ' km' : kmPerPx >= 0.95 ? kmPerPx.toFixed(1) + ' km' : Math.round(kmPerPx * 1000) + ' m'}/px`;
     $('#cursor').textContent = cursor || '';
     $('#detail').textContent = detail || '';
-    // a source that asks to be named on the map itself, while its pictures are on it (Sentinel-2 cloudless, EOX)
-    const cr = $('#credit'), key = credit ? credit.credit : '';
+    // sources that ask to be named on the map itself, while their data is on it (Sentinel-2 cloudless by EOX; OpenStreetMap)
+    const cr = $('#credit'), key = credit ? credit.map((c) => c.credit).join('|') : '';
     if (cr.dataset.k !== key) {
       cr.dataset.k = key; cr.textContent = '';
-      if (credit) { const a = document.createElement('a'); a.href = credit.link; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.textContent = credit.credit; cr.append('Imagery: ', a, ', CC BY 4.0'); }
+      for (const [i, c] of (credit || []).entries()) { const a = document.createElement('a'); a.href = c.link; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.textContent = c.credit; cr.append(i ? ' \u00b7 ' : '', c.pre, a, c.post); }
     }
   }
 
@@ -187,10 +190,20 @@ export class UI {
 
   showCard(card) {
     const host = $('#card');
-    if (!card) { host.hidden = true; host.innerHTML = ''; return; }
+    if (!card) { host.hidden = true; host.innerHTML = ''; this._card = null; mountDescription(null); return; }
     host.hidden = false;
-    host.innerHTML = `<div class="card-bar">${card.lon !== undefined ? '<button class="ghost sm card-go" title="Centre the view here">Centre</button>' : '<span></span>'}<button class="ghost sm card-x" title="Close (Esc)">×</button></div><div class="card-body">${card.html}</div>`;
-    host.scrollTop = 0;
+    const html = `<div class="card-bar">${card.lon !== undefined ? '<button class="ghost sm card-go" title="Centre the view here">Centre</button>' : '<span></span>'}<button class="ghost sm card-x" title="Close (Esc)">×</button></div><div class="card-body">${card.html}</div>`;
+    // An open card is rebuilt every second while the clock runs. Rebuilt with nothing changed, the page is left alone;
+    // rebuilt for the same thing, it keeps its place: the scroll position, an opened table, and the description
+    // (js/wiki.js paints it again from memory, in the same task, so it does not flicker).
+    const key = `${card.kind}|${card.lon}|${card.lat}|${(/<h2>(.*?)<\/h2>/.exec(card.html) || [])[1]}`, was = this._card || {};
+    if (was.html === html) return;
+    const same = was.key === key, top = host.scrollTop, open = same ? [...host.querySelectorAll('details')].map((d) => d.open) : [];
+    host.innerHTML = html;
+    this._card = { key, html };
+    host.querySelectorAll('details').forEach((d, i) => { if (open[i]) d.open = true; });
+    host.scrollTop = same ? top : 0;
+    mountDescription(host);
   }
 
   dashboard(d) {
@@ -234,9 +247,10 @@ export class UI {
       <li>Air traffic and ship motion are modelled flows, not tracked vehicles. Live positions are licence-restricted and are not used.</li>
       <li>Latitude is treated as spherical on a 6371 km sphere; the error is below a pixel at every scale offered.</li></ul>
       <h3>What this page asks the network for</h3>
-      <p>Closer in than 5 km a pixel, with <i>Finer ground, close in</i> switched on (it is by default), the page fetches map tiles for the part of the Earth on screen from four hosts: imagery and night lights from NASA (gibs.earthdata.nasa.gov), elevation from Amazon Web Services (s3.amazonaws.com), where the water is from the European Commission’s Global Surface Water on Google’s storage (storage.googleapis.com), and, closer in than about 0.6 km a pixel, Sentinel-2 imagery from EOX in Vienna (tiles.maps.eox.at). Those requests tell the hosts roughly where you are looking, as any tiled map does. Nothing else about you is sent, and with the layer off none of them is asked for anything. The live layers (earthquakes, aurora, satellites, today’s Earth) fetch whole-Earth files that say nothing about where you look.</p>
+      <p>Closer in than 5 km a pixel, with <i>Finer ground, close in</i> switched on (it is by default), the page fetches map tiles for the part of the Earth on screen from five hosts: imagery and night lights from NASA (gibs.earthdata.nasa.gov), elevation from Amazon Web Services (s3.amazonaws.com), where the water is from the European Commission’s Global Surface Water on Google’s storage (storage.googleapis.com), closer in than about 0.6 km a pixel Sentinel-2 imagery from EOX in Vienna (tiles.maps.eox.at), and closer in than 120 m a pixel OpenStreetMap’s streets and buildings from OpenFreeMap (tiles.openfreemap.org). Those requests tell the hosts roughly where you are looking, as any tiled map does. Nothing else about you is sent, and with the layer off none of them is asked for anything. The live layers (earthquakes, aurora, satellites, today’s Earth) fetch whole-Earth files that say nothing about where you look.</p>
+      <p>Opening the card of a place asks English Wikipedia (en.wikipedia.org) for the opening of that place’s article: the request carries the article’s title and nothing else, so it tells Wikipedia which place you opened and nothing more about you.</p>
       <div id="updlog"></div>
-      <h3>Sources</h3><ul class="srcs">${sources.map((s) => `<li>${esc(s)}</li>`).join('')}<li>Country statistics: World Bank Open Data, CC BY 4.0.</li>
+      <h3>Sources</h3><ul class="srcs">${sources.map((s) => `<li>${esc(s)}</li>`).join('')}<li>Country statistics: World Bank Open Data, CC BY 4.0.</li><li>${esc(CARD_TEXT_SOURCE)}</li>
       <li>Where the sea, the land and the lakes are: Natural Earth 5.1.2, 1:10m land, minor islands and lakes (public domain); Antarctica’s ice front from Blue Marble. The wide rivers, and the lakes strung along them: NASA’s MODIS land-water mask (MOD44W), along Natural Earth’s 1:10m river lines. The colour of shallow and silty water is Blue Marble’s own.</li>
       <li>We acknowledge the use of imagery provided by services from NASA's Global Imagery Browse Services (GIBS), part of NASA's Earth Science Data and Information System (ESDIS).</li>
       <li>The ground closer in than about 0.6 km a pixel: <a href="https://s2maps.eu" target="_blank" rel="noopener noreferrer">Sentinel-2 cloudless</a> by EOX IT Services GmbH (contains modified Copernicus Sentinel data 2016), CC BY 4.0, fetched as tiles while you look. It is named on the map whenever it is on screen.</li>

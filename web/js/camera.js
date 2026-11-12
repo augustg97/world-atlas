@@ -40,7 +40,9 @@ export function wtInverse(x, y) {
 // The zoom floor, km a CSS pixel. 0.35 until 2026-11-11, when Blue Marble's 0.49 km was the finest ground there was.
 // 20 m: on a 2x display a device pixel is then 10 m, which is Sentinel-2's own. Looked at there for wobble in the
 // ray-cast (a float32 coordinate resolves 2.4 m of longitude): none seen.
-export const MIN_KM_PER_PX = 0.02;
+// 5 m since release 1.8 (the owner's choice, 2026-11-11): a device pixel is 2.5 m, a house is four across, and what
+// is drawn at that scale is OpenStreetMap's streets and buildings over Sentinel-2 magnified (streets.js).
+export const MIN_KM_PER_PX = 0.005;
 export class Camera {
   constructor() {
     this.view = 'globe';
@@ -72,8 +74,8 @@ export class Camera {
     return this.mapUnitsPerPx * R_KM;
   }
   setKmPerPx(k) {
-    if (this.view === 'globe') this.dist = Math.max(1.004, Math.min(12, 1 + k * this.h / (R_KM * 2 * this.tanHalfFov)));
-    else this.mapUnitsPerPx = Math.max(5e-6, Math.min(0.02, k / R_KM));
+    if (this.view === 'globe') this.dist = Math.max(1.0003, Math.min(12, 1 + k * this.h / (R_KM * 2 * this.tanHalfFov)));
+    else this.mapUnitsPerPx = Math.max(MIN_KM_PER_PX / R_KM, Math.min(0.02, k / R_KM));
   }
 
   uniforms() {

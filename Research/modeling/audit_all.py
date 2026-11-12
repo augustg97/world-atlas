@@ -46,7 +46,8 @@ CHECKS = [
                    [PY, M("audit_ice.py"), "--selftest"], [PY, M("audit_population.py"), "--selftest"], [PY, "-W", "ignore", B("cloud_grain.py"), "--selftest"],
                    [PY, M("audit_water.py"), "--selftest"], [PY, M("audit_lakeice.py"), "--selftest"], [SPY, M("audit_gpu.py"), "--selftest"],
                    [PY, "-W", "ignore", M("audit_closewater.py"), "--selftest"], [PY, B("units.py")],
-                   [PY, "-W", "ignore", M("s2_transfer.py"), "--selftest"], [PY, "-W", "ignore", M("audit_closecolour.py"), "--selftest"], [PY, "-W", "ignore", M("closewater_witness.py"), "--selftest"]],
+                   [PY, "-W", "ignore", M("s2_transfer.py"), "--selftest"], [PY, "-W", "ignore", M("audit_closecolour.py"), "--selftest"], [PY, "-W", "ignore", M("closewater_witness.py"), "--selftest"],
+                   [PY, "-W", "ignore", B("season_ref.py"), "--selftest"], [PY, "-W", "ignore", M("audit_streets.py"), "--selftest"]],
      {"failures": 0}, False, "an audit that has stopped measuring what it says it measures"),
     # The water mask against ETOPO 2022's ocean-connected sea, north of 60 S (register A5). Before the mask was
     # rebuilt from a coastline (2026-11-10) these were 5.27, 0.11 and 460: Blue Marble paints every shelf sea in a
@@ -110,9 +111,26 @@ CHECKS = [
     # in scene light (release 1.6: 48.4%, the worst place 66%). air_drift and table_drift are tolerances of one
     # thousandth (the constants are printed to three places): retune the shader's air and forget the table, and
     # air_drift fails. Needs reference/s2global (s2_transfer.py --fetch) and reference/closewater.
+    # RE-SET 2026-11-11 (tenth round, register A16), three of them BACKWARDS, on purpose: grey_cast 5.2 -> 5.4, its
+    # worst place 7.3 -> 9.1 (Amsterdam), mean_shift 1.1 -> 1.2. Classified TRUE, small, and the price of the season:
+    # the month's brightness is now joined in ALBEDO (the ground), not in scene light (the ground and the air), so
+    # where the month's ground is darker than the picture's a grey roof stands a little bluer against the same air,
+    # and a little warmer where it is brighter. Joined in scene light a brighter month added the air's blue to every
+    # texel, and Iowa's bare fields were purple. Bought with it: season_short_pct, how much of Blue Marble's own
+    # change of colour through the year FAILS to reach the close view, at 23 places: 0.4 (release 1.7's rule, scored
+    # the same way: 39), and season_off_pct, the change across Blue Marble's direction: 0.8.
     ("close-colour", [[PY, "-W", "ignore", M("audit_closecolour.py"), "--json"]],
-     {"air_drift_e3": 1.0, "table_drift_e3": 1.0, "fit_outside_pct": 22.8, "grey_cast_pct": 5.2, "grey_cast_worst_pct": 7.3, "mean_shift_pct": 1.1}, False,
-     "close in, grey ground drawn in colour; the Sentinel-2 table drifting from the shader's own air"),
+     {"air_drift_e3": 1.0, "table_drift_e3": 1.0, "fit_outside_pct": 22.8, "grey_cast_pct": 5.4, "grey_cast_worst_pct": 9.1, "mean_shift_pct": 1.2,
+      "season_short_pct": 0.4, "season_off_pct": 0.8}, False,
+     "close in, grey ground drawn in colour; the year's change of colour not reaching the close view; the Sentinel-2 table drifting from the shader's own air"),
+    # Streets and buildings (register F15): OpenStreetMap's footprints, read by the page's own decoder and frame,
+    # against ESA WorldCover's built-up ground at eight city places. off_m is the slide that would make them agree
+    # best, the worst place: 12 m, under a texel of the grids compared (13 to 19 m). The audit itself fails if a 60 m
+    # slide does not lower the agreement by a tenth (it lowers it by 27%): an instrument that cannot see a slide.
+    # Needs reference/closewater with the witness, and fetches 120 tiles from OpenFreeMap the first time.
+    ("streets", [[PY, "-W", "ignore", M("audit_streets.py"), "--json"]],
+     {"off_m": 12.3, "off_mean_m": 8.4, "built_miss_pct": 9.1, "on_water_pct": 0.39}, False,
+     "streets and buildings slid off the ground they stand on: the vector tiles read in the wrong frame"),
     ("labels", [[SPY, M("audit_labels.py"), "--selftest"], [SPY, M("audit_labels.py"), "--json"]],
      {"sheet_states198_unnamed": 52, "globe_states198_unnamed": 59, "regional12_states198_unnamed": 300, "regional6_states198_unnamed": 38,
       "overlaps": 0, "under_9px": 0, "misplaced": 0, "hit_wrong": 0, "under_panel": 0, "sheet_drag_flips": 0, "sheet_zoom_in_losses": 4}, True,

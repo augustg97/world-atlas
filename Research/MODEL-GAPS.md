@@ -24,6 +24,141 @@ IDs are referenced from code comments and commit messages. **Never recycle one.*
 | stale-data guard | `web/version.json` stamp on every fetch | a cached two-key `climate.json` had crashed the tracers once |
 | ephemeris check | `build/test_app_math.mjs` | Sun declination within 0.004° at the four 2026 seasonal instants |
 
+## APPLIED (tenth round, 2026-11-11)
+
+Release 1.8. The owner asked for five things: "let's do both clouds and seasons. and let's make this more like an
+atlas by adding rich, objective descriptions for each of our cards describing each location. And let's improve how
+our cities look, including roads, buildings, etc. At night, let's actually show how the cities would look up
+close, rather than just shading the whole city", with a picture of Raleigh at night drawn as an amber photograph of
+its day. Asked, the owner chose OpenFreeMap for the streets, Wikipedia fetched live for the card text, and a zoom
+floor of 5 m a pixel.
+
+**F15, streets and buildings: DELIVERED (new item).** OpenStreetMap's roads, buildings and commercial ground, as
+vector tiles from OpenFreeMap (`tiles.openfreemap.org`, the fifth outside host for tiles), closer than 120 m a
+pixel. `web/js/streets.js` plans the tiles and decodes them (its own reader of the Mapbox Vector Tile format, 120
+lines, tested on a tile written byte by byte in the test); `streets.worker.js` draws them on the window's own grid.
+
+| | release 1.7 | release 1.8 |
+|---|---|---|
+| zoom floor | 20 m a pixel | 5 m |
+| finest grid a window is drawn on | 9.5 m (Sentinel-2's) | 2.4 m (Sentinel-2 magnified; 4.8 m on a wide screen at high latitude) |
+| a city by day at the floor | Sentinel-2 alone | Sentinel-2 with roads at their width on the ground, and from 8 m a pixel each building's roof and the shadow its height throws |
+| the Atlas style close in | a tint and its relief | a street plan: main roads yellow, streets white, built blocks tan |
+| building footprints against WorldCover's built-up ground, eight cities (`audit_streets.py`) | — | best agreement 8 m off on average, 12 m at worst (grids of 13 to 19 m); 9% of footprint not on built-up; 0.4% on water; a 60 m slide lowers the agreement by 27% |
+| a first view of central Paris at 5 m a pixel | — | 20 to 35 tiles, about 10 MB, 1.2 to 2.6 s for the streets after the picture |
+
+**F11, city light close in: DELIVERED by modelling where the light comes from.**
+
+- Until now the light took the daytime picture's pattern (bright roofs and roads), which the owner's picture shows
+  is a sepia photograph of the day: forest canopy lit, the whole basin amber.
+- Now, closer than about 100 m a pixel: Black Marble still says HOW MUCH light leaves each 500 m; OpenStreetMap
+  says where streets, buildings and commercial ground are; and the light is put along the streets as lamps (a rule:
+  one to a 30 m square on main streets, a 54 m square on side streets, a quarter of them white), in car parks and
+  yards, a trace on roofs, none in parks or on water. Seen at Raleigh, Paris and Manhattan at 5 to 20 m a pixel:
+  avenues are strings of lamps, Central Park and the Seine are dark, a campus car park is a field of points.
+- Where the tiles hold only main roads (zoom 12 and coarser, from about 30 m a pixel outwards) a tenth of the
+  measured light at most is left as a glow under them. At seven tenths the metropolis was one slab of gold again.
+- "Unmapped" is asked over 10 km, not 600 m: asked over 600 m every park fell back to the even glow (blobs).
+- **Not conserved.** The lamps' light is not made to add up to Black Marble's amount in each 500 m; a soft
+  correction for street density is all there is. Open as F16.
+
+**A16, the season close in: DELIVERED.**
+
+| at 23 places, July against January, April and October (`audit_closecolour.py`) | release 1.7 | release 1.8 |
+|---|---|---|
+| Blue Marble's own change of colour that FAILS to reach the close view, median of 53 place-months | 39% | 0.4% |
+| the close view's change across Blue Marble's direction | — | 0.8% |
+| the worst place-month | — | 51% short (Zermatt in January, half under snow) |
+| grey ground drawn off grey, eleven cities, mean | 5.2% | 5.4% |
+| the worst city | 7.3% | 9.1% (Amsterdam) |
+
+- `build/season_ref.py` writes `web/fields/albedo_ref.webp` (3.1 MB): Blue Marble at the Sentinel-2 picture's own
+  season, place by place. The season is fitted (the month whose Blue Marble is most like Sentinel-2 by the table,
+  smoothed over 60 km as a time of year): July and August for four cells in ten north of 25 N, December to March
+  for six in ten south of 25 S, and no month in particular in the tropics. It has no witness.
+- The window carries the reference's colour as two bytes packed with the lights' amount into the elevation
+  texture's fourth channel (three bytes in one 32-bit float, read by `texelFetch`): the sixteenth sampler holds.
+- The month's colour is applied as a SHIFT in albedo at the texel's own brightness, and the month's brightness is
+  joined in albedo. Three things were tried first and are why: a ratio in scene light (Iowa's bare April fields
+  purple: Sentinel-2's blue over green is 2.5 times Blue Marble's for the same field); the reference carried as a
+  display colour without its brightness (the albedo table is not linear: the close view kept anything from -90% to
+  +130%); the brightness joined in scene light (the air came with it: 100 to 250%).
+- **The two grey-cast numbers went backwards and that is the price**: with brightness joined in albedo, a roof in
+  a month darker than the picture stands a little bluer against the same air. Classified TRUE, small; re-set in
+  `audit_all.py` with this reason.
+- Seen at Ames, Iowa at 30 m a pixel: January dark grey-brown, April pale mauve-brown, July green, and April from
+  450 m a pixel the same mauve-brown (close 106, 95, 104; far 107, 95, 99 in display levels).
+
+**B1, clouds: two of its parts DELIVERED, by a helper session on its own branch (`clouds-b1`), read and merged.**
+
+*The summer Southern Ocean.* Measured first on 48 VIIRS scenes of it (twelve places at 42-55 S, four days each,
+`cloud_budget.py --survey`): seen straight down the atlas was NOT short of light there. ISCCP's sheet light is
+0.136; VIIRS leaves room for 0.065 of it once the other cloud and the sea are taken out; the old law drew 0.056,
+but as a veil of reflectance 0.08 over everything. And EPIC's light over the storm belts is level from the disc's
+centre to a view cosine of 0.5, where the atlas doubled it (the slant law that closes broken cloud's gaps).
+
+| December, open water, 40-65 S (two EPIC frames) | EPIC | release 1.7 | release 1.8 |
+|---|---|---|---|
+| spread, display levels | 41.9, 40.9 | 31 | 38, 41 |
+| the brightest tenth (p90) | 183, 186 | 165, 162 | 175, 174 |
+| mean | 132, 138 | 128, 124 | 128, 124 |
+| white share of the whole frame | 23%, 22% | 15%, 18% | 17%, 21% |
+
+| eight EPIC frames (`audit_all.py`, `epic`) | release 1.7 | release 1.8 |
+|---|---|---|
+| lum_err | 2.67 | 2.32 |
+| contrast_err | 1.85 | 1.65 |
+| white_err | 0.028 | 0.018 |
+| disc_err | 4.17 | 3.75 |
+| limb_err | 0.118 | 0.111 |
+| ocean_rgb_err | 4.7 | 4.5 |
+| land_rgb_err | 11.9 | 12.3 |
+| glint_err | 0.13 | 0.16 |
+
+- What changed: a middling sheet share is weather and its light goes to the photograph's systems (`sheetLight`,
+  `deckShare`, `deckAt`); only heaped cloud closes its gaps at a slant (`heapedF`); layered cloud has a Sun-side
+  gain of its own, `CLOUD_OPP_FLAT = 0.75`, FITTED so the storm belts send EPIC's light at view cosines 0.5-0.9.
+- Of about 190 band-by-frame cells, 31 moved toward EPIC by more than 2 and 13 away. The 13 are listed in the
+  helper's report and classified TRUE except the subtropics' standing 9% shortfall (PRE-EXISTING): 50-60 N in June
+  and September lost slant gain they needed; weather sheets gathered into more white than EPIC had on three days.
+- **Backwards and re-set, with reasons in `audit_all.py`:** land 11.9 to 12.3 (TRUE, small: forests, through the
+  exact cross-fade; `LAND_CU_SHARE` not refitted), glint 0.13 to 0.16 (CANCELLATION: one frame, whose specular
+  point a veil used to dim).
+- **Still wrong:** the belt's level in December (5-12% under EPIC); the north's storm belt at the limb (1.18);
+  decks are a flat slab from far off; close in, layered cloud is cut into pieces as heaped cloud is.
+- Tried and dropped, each with its number: sheets as noise patches (white error 0.013, and cotton blobs on a dark
+  sea); all of ISCCP's sheet light; one weaker slant for all cloud; a Sun-and-view law for layered cloud.
+
+*Cumulus along the wind.* Checked first that the mechanism is real: in the audit's own VIIRS scenes the 4-32 km
+structure of broken low cloud runs within 1 to 41 degrees of the shipped monthly-mean wind (trades, Amazon), and
+fronts, clusters and sheets do not. Wind speed is not used: the Amazon's rows are as marked at 0.9 m/s as the
+trades' at 8.5.
+
+| fifteen VIIRS scenes at 2 km (`cloud-texture`) | release 1.7 | release 1.8 |
+|---|---|---|
+| sizes | 0.122 | 0.040 |
+| direction | 0.078 | 0.021 |
+| cover | 0.159 | 0.204 |
+| contrast | 0.058 | 0.033 |
+| the cumulus's axis off the wind, degrees (new) | 36.8 | 11.6 |
+
+- `streetAt`, `streetCell`, `windDir`: the cumulus grains are read with the tile's east along the wind, pressed
+  1.5 times together across it, in cells 6 degrees across each turned about its own centre. No new sampler.
+- **Backwards:** cover 0.159 to 0.204 (the Congo, PRE-EXISTING: it carried too much light before).
+- **The picture only modestly follows the number.** The trades lean with the wind and are not streets to the
+  eye: the grain's pieces are 10-30 km and real streets are rows of 2-5 km cells.
+- Tried and dropped: turning by the wind at each pixel (the Amazon as swirls of paint); stretching along the
+  wind; turning the photograph's heaped cloud over wet land too (the Congo 0.25 off).
+- A new check, `cloud-light` (`cloud_budget.py`): the sheet budget against the VIIRS survey, and EPIC's light by
+  view angle in the storm belts and the tropics.
+- NOT STARTED: the daily cycle over land and `LAND_CU_SHARE` from data.
+
+**A19, the air thinned close in: APPLIED, by eye (new item).** From 125 m a device pixel inwards four fifths of the
+air's own light is taken out and the picture's contrast is raised about a middle grey (`AIR_CUT`, `S2_FLOOR`,
+`S2_LIFT`, `S2_CONTRAST`). At 5 m a pixel a city seen through the whole atmosphere was a grey sheet; Sentinel-2's
+own picture is published with the air taken out. A fourth declared departure close in, said in the Finer ground
+card. Nothing measures it.
+
 ## APPLIED (ninth round, 2026-11-11)
 
 Release 1.7. The owner asked for three things: "let's do the colors and then the JRC water host. And let's find a
@@ -775,17 +910,20 @@ texture is a magnified photograph, and vegetated land still reads darker than EP
 | A11 | — | **DELIVERED 2026-11-11 (seventh round).** Sentinel-2 cloudless 2016 (EOX, CC BY 4.0; the owner approved the host) is streamed where the view wants a texel finer than 0.45 km, down to 19 m, and the zoom floor is 20 m a pixel | `detail.js` S2, `camera.MIN_KM_PER_PX` | sixth round |
 | A12 | — | **DELIVERED 2026-11-11 (eighth and ninth rounds).** Close in, land and water are told apart texel by texel: since the ninth round by JRC's record (A15), 2.19% of texels wrong at 23 places against ESA WorldCover; release 1.6's rule (`water.js`: NASA's mask and the picture's colour, 3.21% by the same witness) stands in polewards of 78 N and 59 S. What is left is A17 (water that has moved) and, under the stand-in only, tower shadows and rivers the MODIS mask lacks | `detail.js _occurrence`, `water.js`, `audit_closewater.py` | seventh round |
 | A13 | — | **DELIVERED 2026-11-11 (ninth round).** Sentinel-2 is read by its own table, as scene light, and joined to the month there: ground it photographs grey is drawn 5.2% off grey at eleven city places, 48.4% before. Open parts moved to A16 (the season at half strength; winter snow close in is still the shipped field's 5 km patches over summer ground) | `earth.frag.glsl` s2Scene and the join, `s2_transfer.py`, `audit_closecolour.py` | seventh round |
-| A14 | P4 | Borders (Natural Earth 1:50m) and the coast outline are drawn for a view fifty times further out and are visibly coarse at 20 m a pixel; place names stop at Natural Earth's 1:10m populated places | `vectors.py`, `overlays.Labels` | seventh round |
+| A14 | P4 | Borders (Natural Earth 1:50m) and the coast outline are drawn for a view two hundred times further out and are visibly coarse at 5 m a pixel; place names stop at Natural Earth's 1:10m populated places (the street tiles carry names of districts and streets, unused) | `vectors.py`, `overlays.Labels` | seventh round |
 | A15 | — | **DELIVERED 2026-11-11 (ninth round); the owner approved the host.** JRC Global Surface Water's occurrence tiles are the window's land and water (`storage.googleapis.com`, one tile per elevation tile). The witness is now ESA WorldCover 2021 (`closewater_witness.py`). Table in APPLIED | `detail.js _occurrence`, `audit_closewater.py` | eighth round |
-| A16 | P3 | **The season close in is at half strength.** The month's colour over Sentinel-2's holds three things: the season, Blue Marble's standing warmth (taken out: `S2_WARM`), and Blue Marble's own colour for that ground (a city: olive). The last two are not seasons and cannot be told from the first without a reference: Blue Marble at the picture's own season. No sampler is left for one. A coarse table (1 degree, twelve months and the reference) sampled per window into a few uniforms would do it, and `S2_SEASON` could go to 1. Winter snow close in is still 5 km patches | `earth.frag.glsl` join, `detail.js uniforms` | ninth round |
+| A16 | — | **DELIVERED 2026-11-11 (tenth round).** The month's colour reaches the close view whole: Blue Marble's month against Blue Marble at the Sentinel-2 picture's own season (`albedo_ref.webp`, `build/season_ref.py`), applied as a shift in albedo; 0.4% of Blue Marble's change fails to arrive at 23 places (39% by release 1.7's rule). Open: the reference month is a fit with no witness; the picture's FORM is one season's (a ploughed field is ploughed all year); winter snow close in is still the shipped field's 5 km patches, and half-snow months are the worst scored (Zermatt, 51% short) | `earth.frag.glsl` join, `detail.js _season`, `audit_closecolour.py` | ninth round |
 | A17 | P3 | **Water that has moved is drawn where it was.** JRC's occurrence is 1984-2021: Lake Mead and the Dead Sea are drawn wider than the 2016 picture under them (2.8% and 1.4% of their boxes wrong against 0.6% and 0.7% for the rule that followed the picture). The picture's colour deciding everywhere, or wherever the record says sometimes, lost elsewhere (APPLIED, ninth round). JRC's `seasonality` (months of water in the last year) or `transitions` tiles are the same host and would mark exactly the ground in doubt | `detail.js _occurrence`, `water.js` | ninth round |
 | A18 | P4 | **The full elevation is the last thing to arrive from 100 m a pixel outwards**: up to 96 terrain tiles over HTTP/1.1 and as many JRC tiles, 2 to 4 s. The quick pass covers the wait at a quarter of the resolution. Painting it in as the imagery is, or asking for one level less where the relief is not read (a flat plain), are the routes. Sentinel-2's own queue (45 tiles a second) bounds the imagery; EOX also serves from lettered subdomains, which would be new hostnames and the owner's call | `detail.js _ground`, `PAR` | ninth round |
+| A19 | P3 | **The air is thinned close in, by eye.** Four fifths of the air's own light out and the picture's contrast up from 125 m a device pixel inwards (`AIR_CUT`, `S2_FLOOR`, `S2_LIFT`, `S2_CONTRAST`), only inside a Sentinel-2 window. No measurement holds it; a reference would be Sentinel-2's own published picture at matched scale, which is what the table was fitted FROM at 5 km and so is not independent at 10 m. The far view's bare fields are mauve (brown soil behind blue air) and the close view now matches that mauve by construction: whether the far view should be is A7's question | `earth.frag.glsl` airCut | tenth round |
+| A20 | P4 | **On a wide screen at high latitude the close grid is 4.8 m, not 2.4.** A window's grid has equal degrees a texel both ways, so at 49 N it is finer east-west than it needs to be by a third, and the 9 million texel budget drops it a whole level. Texels of unequal degrees (as the elevation grid has) would hold 2.4 m north-south within the budget | `detail.js albPlan` | tenth round |
+| A21 | P4 | **At the zoom floor a float32 place resolves 2.4 m of longitude**, one device pixel at 5 m a CSS pixel. No shimmer was seen in still frames; it has not been looked at in motion. A camera-relative ray cast would remove it | `earth.frag.glsl` main, `camera.js` | tenth round |
 
 ## B. Atmosphere
 
 | # | P | item | touches | from |
 |---|---|---|---|---|
-| B1 | P2 | **Clouds: amount and brightness from observation; fine structure from real cloud since 2026-11-10 (third round).** Three kinds (photograph for fronts and storms, sheets, broken low cloud), amount and light from ISCCP (2007-2016), and closer than 10 km a pixel the shape is cut from three VIIRS scenes' ordering fields (`build/cloud_grain.py`), scored against fifteen other VIIRS scenes (`cloud_texture.py`; tables in APPLIED). Open, in order of what the pairs and the numbers show: (1) the Amazon in the dry season is fine cumulus everywhere; since the fifth round the atlas has a land-cumulus grain and draws a fifth of wet-land cloud light as cumulus fields (`LAND_CU_SHARE`, fitted to four EPIC forest medians, one of which it makes worse), and still has too few small clouds and clusters too bright (size spectrum 0.45 against a floor of 0.39); the share should come from a cloud-type climatology that resolves small cumulus, not from one fitted number; two grain channels are spare (`cloudgrain2.jpg` G, B); (2) the trades' brightest tenth is 0.45 against 0.23, and cumulus does not line up along the wind (direction 0.03 against VIIRS's 0.13; the texture audit also carries about 0.05 of noise per scene from which part of a tile falls on it, and should average several layouts); (3) Congo carries 0.14 too much light and twice the bright cover (0.47 against 0.22): ISCCP's April mean against three afternoons, and no daily cycle in the photograph regime; (4) bright cloud over the summer Southern Ocean is short in EPIC's December frames (white share 15-18% against 22%); (5) one scene stands for each kind everywhere and repeats every 2048 km; (6) no towers, no cloud shadows at an offset, no clearings along rivers and coasts; (7) sheet share under a fifth of the sky is not drawn; (8) positions are still one 2002 photograph carried on a monthly-mean wind; (9) the Sun-side brightening is pinned at two angles only; (10) between 4 and 11 km a pixel the grain fades into the 10 km photograph and the view is soft; (11) ISCCP shows a faint ring at the GOES-West sub-satellite point | `cloudAt()`, `pieces()`, `grainAt()`, `deckAt()`, `cumulusAt()`, `build/cloud_grain.py` | interview |
+| B1 | P2 | **Clouds: amount and brightness from observation; fine structure from real cloud since 2026-11-10 (third round).** Three kinds (photograph for fronts and storms, sheets, broken low cloud), amount and light from ISCCP (2007-2016), and closer than 10 km a pixel the shape is cut from three VIIRS scenes' ordering fields (`build/cloud_grain.py`), scored against fifteen other VIIRS scenes (`cloud_texture.py`; tables in APPLIED). Open, in order of what the pairs and the numbers show: (1) the Amazon in the dry season is fine cumulus everywhere; since the fifth round the atlas has a land-cumulus grain and draws a fifth of wet-land cloud light as cumulus fields (`LAND_CU_SHARE`, fitted to four EPIC forest medians, one of which it makes worse), and still has too few small clouds and clusters too bright (size spectrum 0.45 against a floor of 0.39); the share should come from a cloud-type climatology that resolves small cumulus, not from one fitted number; two grain channels are spare (`cloudgrain2.jpg` G, B); (2) the trades' brightest tenth is 0.45 against 0.23; **since the tenth round cumulus is read along the monthly-mean wind** (`streetAt`: 11.6 degrees off the wind over the scored scenes, 36.8 before; sizes 0.122 to 0.040, direction 0.078 to 0.021), but the grain's pieces are 10 to 30 km and real streets are rows of 2 to 5 km cells, so the trades lean and are not yet streets to the eye: a real street scene in one of the two spare grain channels is the next step (the texture audit also carries about 0.05 of noise per scene from which part of a tile falls on it, and should average several layouts); (3) Congo carries 0.14 too much light and twice the bright cover (0.47 against 0.22): ISCCP's April mean against three afternoons, and no daily cycle in the photograph regime; (4) **the summer Southern Ocean, since the tenth round**: a middling sheet share is weather and its light goes to the photograph's systems (`sheetLight`, `deckShare`), and only heaped cloud closes its gaps at a slant (`heapedF`, `CLOUD_OPP_FLAT`, one fitted number); 40-65 S in December has EPIC's spread (38 and 41 levels against 41.9 and 40.9; 31 before) and white share 17 and 21% against 23 and 22% (15 and 18 before), but its LEVEL is still 5-12% under EPIC (128 and 124 against 132 and 138), a residual slope with Sun height; the storm belts still rise toward the limb in the north (1.18 at view cosines 0.3-0.5); decks are a flat slab from far off and the Californian one has a harder outline than before; close in, layered cloud is cut into pieces as heaped cloud is; (5) one scene stands for each kind everywhere and repeats every 2048 km; (6) no towers, no cloud shadows at an offset, no clearings along rivers and coasts; (7) sheet share under a fifth of the sky is not drawn; (8) positions are still one 2002 photograph carried on a monthly-mean wind; (9) the Sun-side brightening is pinned at two angles only; (10) between 4 and 11 km a pixel the grain fades into the 10 km photograph and the view is soft; (11) ISCCP shows a faint ring at the GOES-West sub-satellite point; (12) NOT STARTED in the tenth round: a daily cycle for convective cloud over land, and `LAND_CU_SHARE` from data (it now sits 2.0 further from the four forest medians in total, 51.7 to 53.7, because the exact cross-fade it is drawn through changed and it was not refitted) | `cloudAt()`, `pieces()`, `grainAt()`, `deckAt()`, `cumulusAt()`, `build/cloud_grain.py` | interview |
 | B2 | P2 | No independent witness for wind, temperature, pressure or precipitation. Score the shipped means against ERA5 monthly means (measure-against only) | new `Research/modeling/audit_climate.py` | SOURCE-SURVEY §5 |
 | B3 | P2 | The daily temperature cycle is a three-parameter model with no check. Compare its range against a station or reanalysis diurnal-range climatology | `airTemp()` in shader and `cards.js` | SCOPE §4 |
 | B4 | P3 | The lapse-rate correction is a constant 6.5 K/km; winter inversions over ice sheets and basins are wrong in sign | same | SOURCE-SURVEY |
@@ -828,10 +966,13 @@ texture is a magnified photograph, and vegetated land still reads darker than EP
 | F8 | P3 | Feature, volcano and power-station cards are generic tier; no curated text exists for any physical feature | `cards.js` | card contract |
 | F9 | P3 | Country tints are a 4 km raster sampled nearest: stair-stepped along borders when zoomed in (hidden under the vector line at most scales) | `fields_human.step_countries` | build notes |
 | F10 | P4 | Time zones (Natural Earth, public domain) are downloaded and unused | — | fetch list |
-| F11 | P4 | **Mostly answered 2026-11-11 by modelling.** Every 500 m night product on GIBS is at full scale across a metropolis, so the light's street pattern is taken from the daytime picture below about 300 m a pixel (amount measured, pattern modelled, labelled so). Between 300 m and 2 km a pixel a large city is still one even field of gold. Radiance with range exists (VNP46A4) behind an Earthdata login | `earth.frag.glsl` nightTex, ramp | sixth round |
+| F11 | — | **DELIVERED 2026-11-11 (tenth round)** closer than about 100 m a pixel: the measured amount (Black Marble, 500 m) is put where OpenStreetMap says a city's light comes from, as lamps along streets (table in APPLIED). Between 100 m and 2 km a pixel a large city is still one field of gold, and the step in brightness between that and the street view is abrupt. Radiance with range exists (VNP46A4) behind an Earthdata login | `earth.frag.glsl` streetLit, `streets.js` | sixth round |
 | F12 | P3 | Ship tracers run on lanes that are under ice in that month (the Kara Sea in February): the shipping field is one average year. Gate lane tracers on the month's ice | `particles.laneAccept`, `fields.climate` | sixth round |
 | F13 | P4 | Aircraft and tracer styling is by eye; nothing measures clutter. The ocean-current streaks are long white arcs at 3 to 5 km a pixel (seen off the Amazon's mouth) and may want the same treatment the aircraft got | `main.buildTracers` | sixth round |
 | F14 | P4 | Other far parts are still named for their state when the mainland is out of view: Svalbard and Jan Mayen (Norway), the Azores and Madeira (Portugal), the Caribbean Netherlands; Alaska and Hawaii, which Natural Earth does not hold as map units. `build/units.py` SPLIT is the one place to add them; whether to is a naming decision | `build/units.py` | eighth round |
+| F15 | — | **DELIVERED 2026-11-11 (tenth round); the owner approved the host.** OpenStreetMap's roads, buildings and commercial ground from OpenFreeMap, closer than 120 m a pixel: a day overlay on Sentinel-2, the night's light pattern, and a street plan in the Atlas style. Footprints sit within 12 m of WorldCover's built-up ground at eight cities (`audit_streets.py`). Open: the ROADS have no witness; shadows are for Sentinel-2's Sun, not the hour shown; heights are known for few buildings; nothing checks the drawing itself (widths, clipping) but the eye; a dense city's tiles are large (central Paris 10 MB) and the tile carries names and addresses the atlas does not use; no street names | `streets.js`, `streets.worker.js`, `detail.js _streets` | tenth round |
+| F16 | P3 | **The street lamps' light is not conserved.** Black Marble's amount in each 500 m should equal what the lamps there emit; today the lamp rule's light is scaled only by a soft correction for street density, so a dense grid is a little too bright in total and a single road in the dark too dim. Which streets are lit is not known at all (OpenStreetMap's `lit` tag is not in these tiles): a motorway is given less than a high street by rule. A per-window normalisation (the rule's mean light per 500 m, from the pattern's mipmaps with the lamp density by class) would close the first; the second needs data | `earth.frag.glsl` streetLit | tenth round |
+| F17 | P4 | The Atlas style's street plan has no street names, no casing on its roads, and draws rail not at all; the plan's road widths are the night pattern's (the road plus a lamp's reach), a little wide | `earth.frag.glsl` atlas block, `streets.worker.js` | tenth round |
 
 ## G. Engine, delivery and verification
 
