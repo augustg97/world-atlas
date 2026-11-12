@@ -72,10 +72,11 @@ The general protocol lives in `~/Modeling Studio`. Its skills apply here:
     or freely licensed goes in the tree: `reference/` (the National Geographic sheet, EPIC and VIIRS frames),
     `data/` and `scratchpad/` stay ignored. A NEW outside host, a new data licence, or anything about the
     owner beyond what is already in the tree is the owner's call first. Hosts the page talks to, each approved:
-    NASA GIBS, AWS Terrain Tiles, the live feeds, and since 2026-11-11 EOX (`tiles.maps.eox.at`, layer
+    NASA GIBS, AWS Terrain Tiles, the live feeds, since 2026-11-11 Google's storage (`storage.googleapis.com`, JRC Global
+    Surface Water's `tiles2021/occurrence` tiles only; approved that day, register A15), and EOX (`tiles.maps.eox.at`, layer
     `s2cloudless` ONLY: the 2016 mosaic is CC BY 4.0; the later years are non-commercial and not approved).
-    `storage.googleapis.com` (JRC Global Surface Water) is asked by `closewater_fetch.py` for the audit's witness
-    only; the PAGE asking it for water tiles is register A15 and is not approved.
+    The audits fetch into the ignored `reference/` from those hosts and, for the close-water witness only, from
+    ESA WorldCover's public bucket (`esa-worldcover.s3.eu-central-1.amazonaws.com`, CC BY 4.0): the page never asks it.
 
 ---
 
@@ -116,7 +117,7 @@ node build/test_app_math.mjs                     # ephemeris vs almanac, project
 # the list of political units is build/units.py (France's overseas departments are their own): `political`, `places`
 # and fields_human.py `countries` must be rebuilt TOGETHER when it changes, because a unit's id is its index
 
-# the whole audit suite against its baselines (fifteen checks, about 6 min; --quick skips the browser checks)
+# the whole audit suite against its baselines (sixteen checks, about 7 min; --quick skips the browser checks)
 ./venv/bin/python Research/modeling/audit_all.py
 # score against NASA EPIC by hand: render (headless), then compare
 "$HOME/Modeling Studio/.venv/bin/python" Research/modeling/epic_render.py cur
@@ -131,9 +132,15 @@ node build/test_app_math.mjs                     # ephemeris vs almanac, project
 ./venv/bin/python Research/modeling/cloud_texture.py --tag cur    # pairs land in Research/figures/clouds/
 # the page on this machine's own GPU against the accepted software frames (needs the dev server; exit 3 = no GPU)
 "$HOME/Modeling Studio/.venv/bin/python" Research/modeling/audit_gpu.py
-# land or water close in: the app's own rule (web/js/water.js, under node) at 23 places against a 30 m witness
-./venv/bin/python Research/modeling/closewater_fetch.py         # once: 23 places and eight witness tiles (520 MB, reference/)
+# land or water close in: JRC's tiles (the page's source) and the stand-in rule (web/js/water.js, under node) at 23 places
+./venv/bin/python Research/modeling/closewater_fetch.py         # once: 23 places and eight of the record's own files (520 MB, reference/)
+./venv/bin/python Research/modeling/closewater_fetch.py --jrc   # once: the record's TILES onto each place's grid, as the page reads them
+./venv/bin/python Research/modeling/closewater_witness.py       # once: the witness, ESA WorldCover 2021, by range requests (16 MB)
 ./venv/bin/python Research/modeling/audit_closewater.py --register
+# the colours close in: Sentinel-2's own table. Refit after ANY change to the shader's air or land lighting, paste the four lines
+./venv/bin/python Research/modeling/s2_transfer.py --fetch      # once: Sentinel-2 at 5 km, whole Earth (8 MB, reference/s2global)
+./venv/bin/python Research/modeling/s2_transfer.py              # prints S2_CURVE, the gains (S2_WARM), AIR_LT, AIR_I
+./venv/bin/python Research/modeling/audit_closecolour.py
 # build the published site (audits first; stamps code and data; never pushes)
 ./venv/bin/python build/build_site.py
 # the visual ratchet alone; accept a moved frame only with a reason
@@ -145,6 +152,24 @@ node build/test_app_math.mjs                     # ephemeris vs almanac, project
 
 ## Traps that have each cost real time here
 
+- **A join that matches a coarse mean hands the coarse picture's colour to every texel.** Close in, Sentinel-2 was
+  multiplied by Blue Marble's 5 km colour over its own, and Blue Marble's colour for a city is olive: grey roofs
+  came out yellow, 48% off grey. Fitting Sentinel-2 its own per-channel table against Blue Marble reproduced the
+  cast. One curve for the three channels, read as scene light, with the shader's own air taken out, did not.
+- **An albedo table holds the air it was fitted through.** `AIR_LT` and `AIR_I` are the shader's lighting and
+  atmosphere at a standard Sun, as two constants. Retune `TAU_R`, `SKY_L`, `SUN_E` and the like and they are stale:
+  `audit_closecolour.py` recomputes them from the shader's source and fails. Refit with `s2_transfer.py`.
+- **A source cannot be its own witness.** JRC scored release 1.6's water rule; made the page's source it would
+  have scored itself at zero. The witness was replaced first (ESA WorldCover), and by it the old rule's 2.5% was 3.2%.
+- **A record of 37 years is not the picture of one.** JRC's water at Lake Mead and the Dead Sea is wider than the
+  2016 picture under it. Sharpening the record with the picture fixed those and broke four other places.
+- **A tile set's edge is not its dataset's.** JRC is described as 80 N to 60 S; its tiles stop at 78.0 N and 59.1 S.
+  Every request past the edge is a console error, so the plan is checked against the edge before anything is asked.
+- **The slow part was one host's queue, and the fix was the order.** 110 small tiles eight at a time was 5.4 of
+  5.8 s. Sixteen at a time halves it and more does nothing (the server). A pass a sixteenth the size first, then
+  the middle of the screen first, is what a viewer feels.
+- **Transparent tiles drawn into a shared decode canvas show the last tile through.** The water record's tiles are
+  mostly transparent; they get a canvas of their own, cleared for each.
 - **NASA's MODIS water mask holds most of Manhattan as water.** As a seed for learning a window's water colour it
   taught the rule that roofs are water. The mask is doubted wherever it has far more water than the shipped field
   over 8 km (`water.js`). Any new use of that mask needs the same doubt.

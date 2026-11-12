@@ -45,7 +45,8 @@ CHECKS = [
     ("selftests", [[PY, "-W", "ignore", M("epic_compare.py"), "--selftest"], [PY, "-W", "ignore", M("epic_clearsky.py"), "--selftest"], [PY, "-W", "ignore", M("cloud_texture.py"), "--selftest"],
                    [PY, M("audit_ice.py"), "--selftest"], [PY, M("audit_population.py"), "--selftest"], [PY, "-W", "ignore", B("cloud_grain.py"), "--selftest"],
                    [PY, M("audit_water.py"), "--selftest"], [PY, M("audit_lakeice.py"), "--selftest"], [SPY, M("audit_gpu.py"), "--selftest"],
-                   [PY, "-W", "ignore", M("audit_closewater.py"), "--selftest"], [PY, B("units.py")]],
+                   [PY, "-W", "ignore", M("audit_closewater.py"), "--selftest"], [PY, B("units.py")],
+                   [PY, "-W", "ignore", M("s2_transfer.py"), "--selftest"], [PY, "-W", "ignore", M("audit_closecolour.py"), "--selftest"], [PY, "-W", "ignore", M("closewater_witness.py"), "--selftest"]],
      {"failures": 0}, False, "an audit that has stopped measuring what it says it measures"),
     # The water mask against ETOPO 2022's ocean-connected sea, north of 60 S (register A5). Before the mask was
     # rebuilt from a coastline (2026-11-10) these were 5.27, 0.11 and 460: Blue Marble paints every shelf sea in a
@@ -93,13 +94,25 @@ CHECKS = [
     # not unnamed. By the old count the whole-Earth sheet named 129, 22 of them under the dashboard where no
     # one could read them. By the new one it named 106 of 176 in view and now names 125 of 177 (107 on the map,
     # 18 more in the insets). Of all 198: 73 unnamed, 21 of those hidden.
-    # Land or water inside the streamed window (register A12): the app's own rule (web/js/water.js, under node) at
-    # 23 places against JRC Global Surface Water, a 30 m Landsat record none of its inputs come from. Needs
-    # reference/closewater (closewater_fetch.py). For scale: NASA's 250 m mask alone gets 4.48% of texels wrong
-    # and the shipped 5 km field 10.2%. worse_than_mask is 1 and known: Venice's tidal flats at a 494 m texel.
+    # Land or water inside the streamed window (registers A12, A15), at 23 places.
+    # THE SCORE CHANGED MEANING on 2026-11-11 (ninth round) and the numbers before it do not compare. The page's
+    # source is now JRC Global Surface Water itself (its map tiles), which until then was this check's witness; the
+    # witness is ESA WorldCover 2021 (10 m, class 80). By the old witness release 1.6's rule was 2.50% wrong; by the
+    # new one it is 3.21% (rule_wrong_pct: it is still the stand-in polewards of the record), NASA's mask alone
+    # 5.58%, the shipped 5 km field 11.2%, and the tiles 2.19%. tiles_vs_file_pct is the FRAME check: the tiles
+    # taken onto the grid against the record's own 30 m file, the worst place. Needs reference/closewater
+    # (closewater_fetch.py, closewater_fetch.py --jrc, closewater_witness.py).
     ("close-water", [[PY, "-W", "ignore", M("audit_closewater.py"), "--json", "--register"]],
-     {"wrong_pct": 2.5, "iou_short_pct": 24.9, "worse_than_mask": 1, "manhattan_false_pct": 2.1}, False,
-     "close in, water drawn where the land is or land where the water is; the MODIS mask's flooded Manhattan coming back"),
+     {"wrong_pct": 2.19, "iou_short_pct": 18.3, "worse_than_mask": 0, "manhattan_false_pct": 0.4, "tiles_vs_file_pct": 1.28, "rule_wrong_pct": 3.21}, False,
+     "close in, water drawn where the land is or land where the water is; the water record read in the wrong frame"),
+    # Close in, is a grey thing grey (register A13)? Sentinel-2's own table (s2_transfer.py) against the shader's
+    # constants, and what the join does to ground Sentinel-2 photographs grey, at eleven city places: 5.2% off grey
+    # in scene light (release 1.6: 48.4%, the worst place 66%). air_drift and table_drift are tolerances of one
+    # thousandth (the constants are printed to three places): retune the shader's air and forget the table, and
+    # air_drift fails. Needs reference/s2global (s2_transfer.py --fetch) and reference/closewater.
+    ("close-colour", [[PY, "-W", "ignore", M("audit_closecolour.py"), "--json"]],
+     {"air_drift_e3": 1.0, "table_drift_e3": 1.0, "fit_outside_pct": 22.8, "grey_cast_pct": 5.2, "grey_cast_worst_pct": 7.3, "mean_shift_pct": 1.1}, False,
+     "close in, grey ground drawn in colour; the Sentinel-2 table drifting from the shader's own air"),
     ("labels", [[SPY, M("audit_labels.py"), "--selftest"], [SPY, M("audit_labels.py"), "--json"]],
      {"sheet_states198_unnamed": 52, "globe_states198_unnamed": 59, "regional12_states198_unnamed": 300, "regional6_states198_unnamed": 38,
       "overlaps": 0, "under_9px": 0, "misplaced": 0, "hit_wrong": 0, "under_panel": 0, "sheet_drag_flips": 0, "sheet_zoom_in_losses": 4}, True,

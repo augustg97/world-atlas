@@ -1,4 +1,8 @@
-// Land or water, close in (register A12): the rule the focus window uses to tell them apart, texel by texel.
+// Land or water, close in (register A12): the STAND-IN rule for telling them apart, texel by texel.
+// Since release 1.7 the window's land and water are JRC Global Surface Water's record (detail.js, _occurrence);
+// this rule is used only where that record has no tiles, polewards of 78 N and 59 S. The numbers in the notes
+// below are release 1.6's, against JRC as the witness; against the witness used now (ESA WorldCover) the rule
+// is 3.2% wrong, NASA's mask alone 5.6% and the record 2.2% (Research/modeling/audit_closewater.py).
 // Pure arithmetic on typed arrays, with no DOM and no GL, so it runs in a worker (water.worker.js) off the frame
 // loop, under node for the tests (build/test_app_math.mjs) and for the audit that scores it on real places
 // (Research/modeling/audit_closewater.py). detail.js fetches its inputs and uses its answer.

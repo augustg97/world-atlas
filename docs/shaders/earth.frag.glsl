@@ -358,6 +358,36 @@ vec3 albedoOf(vec3 c) {
   return mix(a, vec3(SNOW_ALB), smoothstep(0.80, 0.96, min(c.r, min(c.g, c.b))));
 }
 
+// ---- the ground's albedo from Sentinel-2 cloudless (register A13) -----------------------------
+// Sentinel-2 cloudless is a photograph: white-balanced, tone-mapped, the air's haze largely in it. It is read as
+// SCENE LIGHT, the light the atlas would send to the camera, by one curve for the three channels (so a grey in the
+// picture is a grey on the screen), and the albedo is whatever gives that light through the atlas's OWN air at a
+// standard Sun: scene = albedo * AIR_LT + AIR_I. The curve is fitted against Blue Marble through its table above
+// on 270,000 20 km cells of land (89% of cells within 10% in green and blue, 77% in red); AIR_LT and AIR_I are
+// this shader's own land lighting and atmosphere for sea-level ground, the Sun 30 degrees from the zenith, seen
+// straight down. Research/modeling/s2_transfer.py makes all three; audit_closecolour.py fails if AIR_LT or AIR_I
+// here drift from the constants they are made of (TAU_R, TAU_A, SKY_L, TRANS_K, SUN_E, AIR_MS, AER_W, LAND_LS).
+const float S2_CURVE[9] = float[](0.069, 0.126, 0.160, 0.207, 0.246, 0.278, 0.310, 0.336, 0.382);
+const vec3 AIR_LT = vec3(1.311, 1.246, 1.093);
+const vec3 AIR_I = vec3(0.031, 0.056, 0.105);
+// S2_WARM: Blue Marble's land, by its table, is warmer than Sentinel-2's by the curve: 13% more red and 13% less
+// blue, the median of those cells (the fit's three gains, green held at 1; divided by their luminance). That is a
+// standing difference between two cameras and no season: it is taken OUT of the month's colour before the month's
+// colour is applied, so that what Sentinel-2 photographs grey is drawn grey.
+const vec3 S2_WARM = vec3(1.131, 1.000, 0.871) / 1.018;
+// S2_SEASON: how much of the month's remaining colour (the shipped month over the picture, both at 5 km, less
+// S2_WARM) is applied, as a power. BY EYE, on New York, Paris, Los Angeles, Cairo and the Po valley in July and
+// January. At 1 the fields brown in winter as they do from further out, and New York is green-grey: Blue Marble's
+// colour for a city is not Sentinel-2's, and that difference is no season either, but nothing here can tell the
+// two apart cell by cell. At 0 a city is the photograph's grey and the year has no colour. One half.
+const float S2_SEASON = 0.5;
+float s2Curve1(float x) {
+  float t = clamp(x, 0.0, 1.0) * 8.0;
+  int i = int(min(floor(t), 7.0));
+  return mix(S2_CURVE[i], S2_CURVE[i + 1], t - float(i));
+}
+vec3 s2Scene(vec3 c) { return vec3(s2Curve1(c.r), s2Curve1(c.g), s2Curve1(c.b)); }
+
 vec3 palette(float v) { return texture(uLut, vec2(clamp(v, 0.002, 0.998), (uLensRow + 0.5) / 16.0)).rgb; }
 
 // stars, the Sun and the Moon, for rays that leave the planet
@@ -453,6 +483,7 @@ void main() {
   float fineWt = inWin * uDetWaterW;
   float fineW = fineWt > 0.0 ? smoothstep(0.3, 0.7, texture(uDetElev, dw).b) : 0.0;
   float nightFine = 0.0, nightTex = 1.0;
+  vec3 albFine = vec3(0.0); float albFineW = 0.0;   // the ground's albedo read from Sentinel-2 by its own table, and how far it is used (register A13)
   if (inWin * uDetAlbW > 0.0) {
     // Frequency split. The month's colour stays the shipped field's (it is the right SEASON); the fine
     // structure is the streamed picture's, with its own coarse part taken out so nothing is counted twice.
@@ -474,6 +505,7 @@ void main() {
     //    across land and that fill turned Manhattan and both its rivers olive.
     float boost = uDetS2 > 0.5 ? clamp(uDetAlbLod - 3.0, 1.0, 3.0) : 0.0;
     vec3 lowDet = textureLod(uDetAlb, dw, uDetAlbLod).rgb;
+    vec3 lowDet0 = lowDet;
     vec3 joined = bm + fineT.rgb - lowDet;
     if (uDetS2 > 0.5) {
       vec2 lod = boost + log2(vec2(float(textureSize(uAlbA, 0).x), float(textureSize(uAlbB, 0).x)) / 8192.0);   // a preview month is a smaller texture
@@ -498,6 +530,25 @@ void main() {
       // and takes the land's change of brightness, so the river is as dark against its banks as it was photographed
       joined = fineT.rgb * mix(ratio, vec3(lum), fineW * fineWt);
       lowDet = mix(lowDet, detC, nearWater);
+      // THE ALBEDO ITSELF IS NOT MADE FROM `joined` (register A13). That value is Blue Marble's kind (it still feeds the
+      // lenses and the night's texture below); read through Blue Marble's table it gave every texel Blue Marble's
+      // 5 km colour, and Blue Marble's colour for a city is olive: New York, Paris and Los Angeles were khaki from
+      // edge to edge, their roofs pale yellow, where Sentinel-2 photographs them grey. The picture is read by its
+      // own table instead, as scene light, and joined to the shipped month THERE:
+      //  - brightness: the month's over the picture's, both at 5 km (land over land, as above), always;
+      //  - colour: the month's over the picture's less the two cameras' standing difference (S2_WARM), at half
+      //    strength (S2_SEASON). Not on water, and not where a cell is nearly all sea.
+      // Then the atlas's standard air is taken out, and what is left is albedo. At eleven city places ground the
+      // picture shows grey is drawn 5% off grey in scene light; by `joined` it was 48% (audit_closecolour.py).
+      float land1 = max(1.0 - flagged * wsh, 0.15);
+      vec3 shipLand = landShip / land1, detLand = max(lowDet0 - flagged * wsh * uDetWaterC, vec3(0.0)) / land1;
+      vec3 sB = albedoOf(shipLand) * AIR_LT + AIR_I, sL = s2Scene(detLand);
+      float lumS = luma(sB) / luma(sL);
+      float lumC = luma(albedoOf(shipC) * AIR_LT + AIR_I) / luma(s2Scene(detC));
+      float coloured = (1.0 - nearWater) * (1.0 - fineW * fineWt);
+      vec3 sF = s2Scene(fineT.rgb) * clamp(mix(lumS, lumC, nearWater), 0.5, 2.0) * mix(vec3(1.0), pow(clamp(sB / (sL * lumS * S2_WARM), 0.7, 1.4), vec3(S2_SEASON)), coloured);
+      albFine = max((sF - AIR_I) / AIR_LT, vec3(0.004));
+      albFine /= max(1.0, max(albFine.r, max(albFine.g, albFine.b)) / 0.95);
     }
     // past full scale, come back along the colour's own line: clamping each channel alone turned pale sand green
     if (uDetS2 > 0.5) joined /= max(1.0, max(joined.r, max(joined.g, joined.b)) / 0.97);
@@ -505,6 +556,7 @@ void main() {
     // not under snow: the streamed picture is one month, and summer ground does not show through winter snow
     float snowy = smoothstep(0.70, 0.90, min(bm.r, min(bm.g, bm.b)));
     bm = clamp(mix(bm, joined, inWin * uDetAlbW * (1.0 - snowy)), 0.0, 1.0);
+    albFineW = uDetS2 * inWin * uDetAlbW * (1.0 - snowy);
     // What a city's light falls on. From above, a lit city is its streets and roofs sending the light back, so
     // where the ground is drawn finer than the lights are known (0.5 km) the light takes the ground's own pattern:
     // brighter on pale roofs and roads, darker on parks, by the ground's brightness against its surroundings'.
@@ -521,6 +573,7 @@ void main() {
     nightTex *= 1.0 - 0.85 * fineW * fineWt * texT;
   }
   vec3 alb = albedoOf(bm);
+  alb = mix(alb, albFine, albFineW);
   vec3 wn = tex(uWaterNight, uv).rgb;
   float water = uHasWater > 0.5 ? smoothstep(0.35, 0.65, wn.r) : 0.0;
   float wasWater = water;                                            // by the shipped field: where the picture's water is the ocean fill

@@ -1,28 +1,37 @@
-"""Close in, is the atlas's water where the water is? (register A12)
+"""Close in, is the atlas's water where the water is? (registers A12, A15)
 
-Inside the streamed window the app decides land or water texel by texel (web/js/detail.js :: waterFlag): NASA's
-MODIS mask says roughly where, the streamed picture's colour says exactly where. This scores that rule, THE
-APP'S OWN FUNCTION run under node, at 23 places against a witness none of its inputs come from: JRC Global
-Surface Water (Landsat, 30 m, 1984-2021; water = water at least half the time). Fetch the set once with
-closewater_fetch.py.
+Inside the streamed window land or water is decided texel by texel. Since release 1.7 the answer is a RECORD: JRC
+Global Surface Water (Landsat 30 m, 1984-2021), water where the place was water in at least half of it, read from
+the record's map tiles (web/js/detail.js :: _occurrence). Polewards of the record the stand-in is release 1.6's
+rule: NASA's 250 m MODIS mask sharpened by the picture's colour (web/js/water.js :: waterFlag).
 
-    wrong_pct        texels the rule gets wrong (water called land or land called water), mean over the 23, percent
-    iou_short_pct    100 x (1 - intersection over union of the rule's water and the witness's), mean over the 23
-    worse_than_mask  places where the rule is wrong on more texels than the MODIS mask alone (by over 0.4 points),
-                     at 19 m or at any of four coarser texels (76, 152, 304, 494 m: the picture pooled, as a
-                     wider view streams it)
-    manhattan_false_pct   land the rule calls water at Manhattan, where the mask holds most of the island as water
-                     (15% of the box); the worst of the five texel sizes
-The MODIS mask alone and the shipped 5 km field are scored beside it, for scale.
+Both are scored here at 23 places against a WITNESS neither is made from: ESA WorldCover 2021 v200 (10 m, from
+Sentinel-1 and Sentinel-2; class 80, permanent water bodies), fetched by closewater_witness.py. Until release 1.7
+the witness was JRC itself; a source cannot be its own witness.
 
-WHAT THIS DOES NOT CHECK. The weights of the rule's first guess were fitted to these 23 places (the fit, with
-each half scored by the other half's weights, gave 2.80% wrong against 2.77% with all: the fit is not what the
-number rests on). The grids are built here (nearest terrain texel, the mask's nearest cell); the app builds its
-own from the same tiles (elevation area-averaged and despiked, the picture drawn down by the browser). The
-Blue Marble windows (0.5 km and coarser) are not scored at all: the pooled grids here are Sentinel-2's colours.
-And the witness is a 38-year record against one 2016 picture: a reservoir that fell (Lake Mead) and tidal flats
-(Venice, Chittagong) are counted against the rule where it follows the picture.
+    wrong_pct        texels the record's tiles get wrong against the witness (water called land or land called
+                     water), mean over the 23 places at 19 m a texel, percent
+    iou_short_pct    100 x (1 - intersection over union of the tiles' water and the witness's), mean over the 23
+    worse_than_mask  places where the tiles are wrong on more texels than the MODIS mask alone (by over 0.4 points),
+                     at 19 m or at any of four coarser texels (76, 152, 304, 494 m: pooled, as a wider view has it)
+    manhattan_false_pct   land called water at Manhattan, where the MODIS mask holds most of the island as water;
+                     the worst of the five texel sizes
+    tiles_vs_file_pct     THE FRAME CHECK: texels where the tiles, taken onto the grid as the page takes them, differ
+                     from the record's own 30 m file sampled directly; the worst place. A shifted or flipped frame
+                     conversion shows here as tens of percent; resampling along shores is about one.
+    rule_wrong_pct   the stand-in (the app's own waterFlag, run under node) against the same witness, mean of the 23
+The MODIS mask alone and the shipped 5 km field are scored beside them, for scale.
 
+WHAT THIS DOES NOT CHECK, AND WHAT THE WITNESS IS. The grids are built here (the tiles bilinear, pooled by averaging
+for the coarser texels); the page builds its own from the same tiles by area-weighted taps, at the elevation's zoom.
+The witness is one year, 2021, and stricter than "half the time": seasonally flooded ground is wetland in it
+(Manaus, Santarem), a reservoir or a lake that fell is bare (Lake Mead, the Dead Sea), bridges, piers and ships at
+berth are built-up, tidal flats are not water, and it calls a little false water in mountain shadow (Zermatt). The
+record itself lies about one texel west of the picture across Europe and the north-eastern United States
+(closewater_witness.py measured it): that is in every number here.
+
+    ./venv/bin/python Research/modeling/closewater_fetch.py && ./venv/bin/python Research/modeling/closewater_fetch.py --jrc
+    ./venv/bin/python Research/modeling/closewater_witness.py
     ./venv/bin/python Research/modeling/audit_closewater.py [--json] [--register]
     ./venv/bin/python Research/modeling/audit_closewater.py --selftest
 """
@@ -90,53 +99,75 @@ def shipped_water(lons, lats):
     return nd.map_coordinates(_SHIP, [Y, X], order=1, mode="nearest") / 255
 
 
-def audit():
-    names = sorted(f[:-4] for f in os.listdir(REF) if f.endswith(".npz")) if os.path.isdir(REF) else []
+def places():
+    """The 23 places: {name: (the grids, the witness's water share, the tiles' occurrence share)}. Fails loudly if any part is missing."""
+    names = sorted(f[:-4] for f in os.listdir(REF) if f.endswith(".npz") and "." not in f[:-4]) if os.path.isdir(REF) else []
     if len(names) < 23:
         raise SystemExit(f"audit_closewater: the reference set is not there ({len(names)} of 23 places in reference/closewater). Run Research/modeling/closewater_fetch.py")
-    data = {n: np.load(os.path.join(REF, f"{n}.npz")) for n in names}
-    jobs, truth, maskp = [], {}, {}
+    out = {}
     for n in names:
-        d = data[n]; ship = shipped_water(d["lons"], d["lats"])
+        for ext, tool in ((".wc.npz", "closewater_witness.py"), (".jrc.npz", "closewater_fetch.py --jrc")):
+            if not os.path.exists(os.path.join(REF, n + ext)):
+                raise SystemExit(f"audit_closewater: reference/closewater/{n}{ext} is missing. Run Research/modeling/{tool}")
+        d = np.load(os.path.join(REF, f"{n}.npz")); wc = np.load(os.path.join(REF, f"{n}.wc.npz")); occ = np.load(os.path.join(REF, f"{n}.jrc.npz"))["occ"]
+        if wc["water"].shape != d["truth"].shape or occ.shape != d["truth"].shape:
+            raise SystemExit(f"audit_closewater: {n}: the witness or the tiles are not on the place's grid")
+        if not wc["valid"].all():
+            raise SystemExit(f"audit_closewater: {n}: the witness has no data over {100 * (1 - wc['valid'].mean()):.1f}% of the box")
+        out[n] = (d, wc["water"], occ)
+    return out
+
+
+def audit():
+    data = places(); names = list(data)
+    jobs, truth, maskp, tiles = [], {}, {}, {}
+    for n in names:
+        d, wc, occ = data[n]; ship = shipped_water(d["lons"], d["lats"])
         for k in POOLS:
             key = f"{n}@{k}"
             m = pool(d["mask"].astype(np.float32), k) > 0.5
-            truth[key] = pool(d["truth"].astype(np.float32), k) > 0.5; maskp[key] = m
+            truth[key] = pool(wc, k) >= 0.5; maskp[key] = m; tiles[key] = pool(occ, k) >= 0.5
             jobs.append(dict(name=key, rgb=np.clip(np.round(pool(d["s2"], k)), 0, 255).astype(np.uint8), elev=pool(d["elev"], k), mask=m, ship=pool(ship, k),
                              mx=float(d["mx"]) * k, my=float(d["my"]) * k, cell=max(1.0, 250.0 / (float(d["my"]) * k))))
     flags, done = run_rule(jobs)
     rows, worse = [], []
     for n in names:
-        d = data[n]; key = f"{n}@1"
-        r = score(flags[key], truth[key]); m = score(maskp[key], truth[key]); s = score(shipped_water(d["lons"], d["lats"]) > 0.5, truth[key])
-        rows.append(dict(name=n, water=float(truth[key].mean()), rule=r, mask=m, shipped=s, ms=done[key]["ms"], seeds=done[key].get("seedWater")))
+        d, wc, occ = data[n]; key = f"{n}@1"
+        rows.append(dict(name=n, water=float(truth[key].mean()), tiles=score(tiles[key], truth[key]), rule=score(flags[key], truth[key]), mask=score(maskp[key], truth[key]),
+                         shipped=score(shipped_water(d["lons"], d["lats"]) > 0.5, truth[key]), frame=float(((occ >= 0.5) != d["truth"]).mean()), ms=done[key]["ms"]))
         for k in POOLS:
-            kk = f"{n}@{k}"; a = score(flags[kk], truth[kk]); b = score(maskp[kk], truth[kk])
+            kk = f"{n}@{k}"; a = score(tiles[kk], truth[kk]); b = score(maskp[kk], truth[kk])
             if 100 * (a[0] + a[1]) > 100 * (b[0] + b[1]) + MARGIN:
                 worse.append(f"{n} at {19 * k} m: {100 * (a[0] + a[1]):.1f}% against {100 * (b[0] + b[1]):.1f}%")
     mean = lambda f: float(np.mean([f(r) for r in rows]))
-    by_pool = {19 * k: 100 * float(np.mean([sum(score(flags[f"{n}@{k}"], truth[f"{n}@{k}"])[:2]) for n in names])) for k in POOLS}
-    man = max(100 * score(flags[f"manhattan@{k}"], truth[f"manhattan@{k}"])[0] for k in POOLS)
-    summary = dict(manhattan_false_pct=round(man, 1), wrong_pct=round(100 * mean(lambda r: r["rule"][0] + r["rule"][1]), 2), iou_short_pct=round(100 * (1 - mean(lambda r: r["rule"][2])), 1), worse_than_mask=len(worse),
-                   mask_wrong_pct=round(100 * mean(lambda r: r["mask"][0] + r["mask"][1]), 2), shipped_wrong_pct=round(100 * mean(lambda r: r["shipped"][0] + r["shipped"][1]), 2),
-                   mask_iou=round(mean(lambda r: r["mask"][2]), 3), shipped_iou=round(mean(lambda r: r["shipped"][2]), 3), rule_iou=round(mean(lambda r: r["rule"][2]), 3),
-                   false_water_pct=round(100 * mean(lambda r: r["rule"][0]), 2), missed_water_pct=round(100 * mean(lambda r: r["rule"][1]), 2),
+    wrong = lambda r, w: r[w][0] + r[w][1]
+    by_pool = {19 * k: 100 * float(np.mean([sum(score(tiles[f"{n}@{k}"], truth[f"{n}@{k}"])[:2]) for n in names])) for k in POOLS}
+    man = max(100 * score(tiles[f"manhattan@{k}"], truth[f"manhattan@{k}"])[0] for k in POOLS)
+    summary = dict(wrong_pct=round(100 * mean(lambda r: wrong(r, "tiles")), 2), iou_short_pct=round(100 * (1 - mean(lambda r: r["tiles"][2])), 1), worse_than_mask=len(worse),
+                   manhattan_false_pct=round(man, 1), tiles_vs_file_pct=round(100 * max(r["frame"] for r in rows), 2), rule_wrong_pct=round(100 * mean(lambda r: wrong(r, "rule")), 2),
+                   tiles_iou=round(mean(lambda r: r["tiles"][2]), 3), rule_iou=round(mean(lambda r: r["rule"][2]), 3),
+                   mask_wrong_pct=round(100 * mean(lambda r: wrong(r, "mask")), 2), shipped_wrong_pct=round(100 * mean(lambda r: wrong(r, "shipped")), 2),
+                   mask_iou=round(mean(lambda r: r["mask"][2]), 3), shipped_iou=round(mean(lambda r: r["shipped"][2]), 3),
+                   false_water_pct=round(100 * mean(lambda r: r["tiles"][0]), 2), missed_water_pct=round(100 * mean(lambda r: r["tiles"][1]), 2),
                    by_texel_m={k: round(v, 2) for k, v in by_pool.items()}, slowest_ms=max(r["ms"] for r in rows))
     return summary, rows, worse
 
 
 def register(summary, rows, worse):
-    L = ["# Close in: land or water (register A12)", "",
-         "The app's rule (`web/js/detail.js :: waterFlag`, run under node) at 23 places, 19 m a texel, against JRC Global Surface Water (30 m, water at least half of 1984-2021).",
-         "Wrong = texels called water that are land, plus texels called land that are water, as a share of all texels in the box.", "",
-         "| place | water | rule: false | missed | IoU | MODIS alone: wrong | IoU | shipped 5 km: wrong | IoU |", "|---|---|---|---|---|---|---|---|---|"]
+    w = lambda r, k: 100 * (r[k][0] + r[k][1])
+    L = ["# Close in: land or water (registers A12, A15)", "",
+         "At 23 places, 19 m a texel, against ESA WorldCover 2021 (10 m; class 80, permanent water). **Tiles**: JRC Global Surface Water as the page reads it (water in at least half of 1984-2021), the page's source since release 1.7. **Rule**: NASA's MODIS mask sharpened by the picture (`water.js :: waterFlag`, run under node), release 1.6's source and the stand-in where the record has no tiles.",
+         "Wrong = texels called water that are land, plus texels called land that are water, as a share of all texels in the box. Frame = texels where the tiles differ from the record's own 30 m file.", "",
+         "| place | water | tiles: false | missed | IoU | rule: wrong | IoU | MODIS alone: wrong | IoU | shipped 5 km: wrong | frame |", "|---|---|---|---|---|---|---|---|---|---|---|"]
     for r in rows:
-        L.append(f"| {r['name']} | {100 * r['water']:.1f}% | {100 * r['rule'][0]:.1f}% | {100 * r['rule'][1]:.1f}% | {r['rule'][2]:.2f} | {100 * (r['mask'][0] + r['mask'][1]):.1f}% | {r['mask'][2]:.2f} | {100 * (r['shipped'][0] + r['shipped'][1]):.1f}% | {r['shipped'][2]:.2f} |")
-    L += [f"| **mean** | | {summary['false_water_pct']}% | {summary['missed_water_pct']}% | {summary['rule_iou']:.2f} | {summary['mask_wrong_pct']}% | {summary['mask_iou']:.2f} | {summary['shipped_wrong_pct']}% | {summary['shipped_iou']:.2f} |", "",
-          "Wrong texels by texel size (the picture pooled): " + ", ".join(f"{k} m {v}%" for k, v in summary["by_texel_m"].items()) + ".",
-          f"Places where the rule is worse than the mask alone at any texel size: {len(worse)}" + (": " + "; ".join(worse) if worse else "") + ".",
-          f"Slowest place: {summary['slowest_ms']} ms for about a million texels.", "",
-          "Read the low rows for what they are. Paris, Lyon, Cremona, Dhaka, Zermatt: rivers and tarns MODIS has little or none of; the rule adds no water there by design. Manhattan: MODIS holds most of the island as water and the rule takes it back. Port Said, Venice, Chittagong, Lake Mead: salt pans, tidal flats and a fallen reservoir, where a 38-year record and one 2016 picture are different things."]
+        L.append(f"| {r['name']} | {100 * r['water']:.1f}% | {100 * r['tiles'][0]:.1f}% | {100 * r['tiles'][1]:.1f}% | {r['tiles'][2]:.2f} | {w(r, 'rule'):.1f}% | {r['rule'][2]:.2f} | {w(r, 'mask'):.1f}% | {r['mask'][2]:.2f} | {w(r, 'shipped'):.1f}% | {100 * r['frame']:.2f}% |")
+    L += [f"| **mean** | | {summary['false_water_pct']}% | {summary['missed_water_pct']}% | {summary['tiles_iou']:.2f} | {summary['rule_wrong_pct']}% | {summary['rule_iou']:.2f} | {summary['mask_wrong_pct']}% | {summary['mask_iou']:.2f} | {summary['shipped_wrong_pct']}% | worst {summary['tiles_vs_file_pct']}% |", "",
+          "The tiles' wrong texels by texel size (pooled): " + ", ".join(f"{k} m {v}%" for k, v in summary["by_texel_m"].items()) + ".",
+          f"Places where the tiles are worse than the MODIS mask alone at any texel size: {len(worse)}" + (": " + "; ".join(worse) if worse else "") + ".", "",
+          "Places where the tiles are worse than release 1.6's rule by over 0.4 points, each a difference of DATE and not of place: " +
+          ("; ".join(f"{r['name']} ({w(r, 'tiles'):.1f}% against {w(r, 'rule'):.1f}%)" for r in rows if w(r, "tiles") > w(r, "rule") + MARGIN) or "none") +
+          ". The record's shore there is the 1984-2021 majority; the witness (2021) and the picture (2016) both have the water lower (Lake Mead, the Dead Sea) or the ground reworked (Cairo's canals). The rule followed the picture.", "",
+          "Read the low rows for what they are. Manaus, Santarem: seasonally flooded forest, wetland to the witness and water to the record. Port Said: salt pans and basins flooded since. Venice, Chittagong: tidal flats. Zermatt: 0.3% of the box is water, and as much again is the witness's own false water in mountain shadow."]
     open(os.path.join(os.path.dirname(__file__), "REGISTER-closewater.md"), "w").write("\n".join(L) + "\n")
 
 
@@ -193,7 +224,7 @@ if __name__ == "__main__":
         register(summary, rows, worse)
     if not a.json:
         for r in rows:
-            print(f"  {r['name']:11s} water {100 * r['water']:5.1f}%  rule false {100 * r['rule'][0]:4.1f}% missed {100 * r['rule'][1]:4.1f}% IoU {r['rule'][2]:.2f} | MODIS wrong {100 * (r['mask'][0] + r['mask'][1]):4.1f}% IoU {r['mask'][2]:.2f} | shipped wrong {100 * (r['shipped'][0] + r['shipped'][1]):4.1f}% IoU {r['shipped'][2]:.2f} | {r['ms']} ms")
+            print(f"  {r['name']:11s} water {100 * r['water']:5.1f}%  tiles false {100 * r['tiles'][0]:4.1f}% missed {100 * r['tiles'][1]:4.1f}% IoU {r['tiles'][2]:.2f} | rule wrong {100 * (r['rule'][0] + r['rule'][1]):4.1f}% | MODIS wrong {100 * (r['mask'][0] + r['mask'][1]):4.1f}% | shipped wrong {100 * (r['shipped'][0] + r['shipped'][1]):4.1f}% | frame {100 * r['frame']:.2f}%")
         for wline in worse:
             print("  WORSE THAN THE MASK:", wline)
     print(json.dumps(summary))

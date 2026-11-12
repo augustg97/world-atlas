@@ -89,7 +89,35 @@ def site(lon, lat, km):
     return dict(s2=s2, elev=elev.astype(np.float32), mask=mask, lons=lons, lats=lats)
 
 
+def jrc_tiles(lons, lats):
+    """JRC Global Surface Water occurrence as the PAGE gets it: the map tiles (Web Mercator, zoom 12, PNG; alpha is
+    the share of the record in which the place was water, and open sea beyond the record is drawn as all water),
+    taken bilinearly onto the grid. Returns float32 0..1."""
+    from scipy import ndimage as nd
+    n = 256 * 2 ** Z
+    gx = (lons / 360 + 0.5) * n; gy = (0.5 - np.log(np.tan(np.pi / 4 + np.radians(lats) / 2)) / (2 * np.pi)) * n
+    tx0, tx1, ty0, ty1 = int((gx.min() - 1) // 256), int((gx.max() + 1) // 256), int((gy.min() - 1) // 256), int((gy.max() + 1) // 256)
+    a = mosaic(lambda r, c: f"https://storage.googleapis.com/global-surface-water/tiles2021/occurrence/{Z}/{c}/{r}.png", lambda r, c: f"jrc_{Z}_{c}_{r}.png", 256, ty0, ty1, tx0, tx1, "RGBA")[..., 3].astype(np.float32) / 255
+    X, Y = np.meshgrid(gx - tx0 * 256 - 0.5, gy - ty0 * 256 - 0.5)
+    return nd.map_coordinates(a, [Y, X], order=1, mode="nearest").astype(np.float32)
+
+
+def main_jrc():
+    """The page's source, on every place's grid: reference/closewater/<name>.jrc.npz {occ}."""
+    os.makedirs(TILES, exist_ok=True)
+    for n in SITES:
+        out = os.path.join(OUT, f"{n}.jrc.npz")
+        if os.path.exists(out):
+            continue
+        d = np.load(os.path.join(OUT, f"{n}.npz"))
+        occ = jrc_tiles(d["lons"], d["lats"])
+        np.savez_compressed(out, occ=occ)
+        print(f"  {n:11s} water {100 * (occ >= 0.5).mean():.1f}% by the tiles, {100 * d['truth'].mean():.1f}% by the record's own file; they differ on {100 * ((occ >= 0.5) != d['truth']).mean():.2f}% of texels")
+
+
 def main():
+    if "--jrc" in sys.argv:
+        return main_jrc()
     import tifffile
     os.makedirs(TILES, exist_ok=True); os.makedirs(GSW, exist_ok=True)
     todo = [n for n in (sys.argv[1:] or SITES) if not os.path.exists(os.path.join(OUT, f"{n}.npz"))]

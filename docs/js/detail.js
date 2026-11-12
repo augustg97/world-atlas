@@ -14,6 +14,10 @@
 //              carried in the imagery texture's fourth channel (there is no seventeenth sampler: fields.js UNIT).
 //   elevation  Terrain Tiles on AWS (Mapzen/Tilezen "terrarium" PNG), Web Mercator 256 px tiles,
 //              resampled here to the atlas's equirectangular frame.
+//   water      JRC Global Surface Water (EC JRC/Google; Pekel et al. 2016), occurrence 1984-2021 from Landsat at
+//              30 m, as map tiles on Google's storage: the same Web Mercator tiling as the elevation, tile for tile.
+//              The owner approved the host on 2026-11-11 (register A15). Land or water inside the window is this
+//              record's; NASA's 250 m MODIS mask and the picture's colour (water.js) stand in polewards of it (78 N, 59 S).
 //
 // The top half of this file is pure mathematics (no DOM, no GL) and is tested by
 // build/test_app_math.mjs: tile <-> lon/lat for both tilings, the Mercator row resampling, the
@@ -21,10 +25,10 @@
 // class of bug in this project (CLAUDE.md, "The canonical frame"); change nothing here without
 // running that test.
 
-import { UNIT } from './fields.js?v=20261111T235202Z';
-import { stamped } from './gl.js?v=20261111T235202Z';
-import { R_KM } from './camera.js?v=20261111T235202Z';
-import { WATER_RULE, boxMean, waterFlag, runRule } from './water.js?v=20261111T235202Z';
+import { UNIT } from './fields.js?v=20261112T020725Z';
+import { stamped } from './gl.js?v=20261112T020725Z';
+import { R_KM } from './camera.js?v=20261112T020725Z';
+import { WATER_RULE, boxMean, waterFlag, runRule } from './water.js?v=20261112T020725Z';
 
 const D2R = Math.PI / 180, R2D = 180 / Math.PI;
 export const KM_PER_DEG = R_KM * D2R;                       // 111.195 km on the atlas's sphere
@@ -124,6 +128,20 @@ export const terrDecode = (r, g, b) => r * 256 + g + b / 256 - 32768;
 export const terrTexelDeg = (z) => 360 / (TERRAIN.tilePx * 2 ** z);
 export const terrTexelKm = (lat, z) => terrTexelDeg(z) * Math.cos(lat * D2R) * KM_PER_DEG;
 
+// =================================================== JRC Global Surface Water (occurrence), Web Mercator
+// https://global-surface-water.appspot.com : 256 px PNG tiles, zoom 0-13, the same x/y as the terrain tiles. A
+// pixel's ALPHA is the share of the record (1984-2021) in which the place was water: 0 never, 250 always (2.5 a
+// percent); open sea beyond Landsat's coverage is drawn as 255. The tile set stops at 78.0 N and 59.1 S (probed at zooms
+// 5 to 12 on 2026-11-11: every tile wholly beyond those is a 404), so a tile is asked for only if it lies inside JRC.north..south.
+// Read on 2026-11-11 against the record's own 30 m files at 23 places: the two disagree on 0.1-1.3% of texels, all
+// along shores (Research/modeling/closewater_fetch.py --jrc).
+export const JRC = {
+  maxZoom: 13, water: 0.5,                 // water where the tile's alpha is half of full scale or more: water in 51% of the record
+  north: 77.9, south: -59.0,               // a window with any tile beyond these takes its water from the stand-in (water.js)
+  url: (z, x, y) => `https://storage.googleapis.com/global-surface-water/tiles2021/occurrence/${z}/${x}/${y}.png`,
+  credit: 'Water: EC JRC/Google Global Surface Water', link: 'https://global-surface-water.appspot.com',
+};
+
 // ===================================================================================== resampling
 /**
  * The source pixels that make one output sample, and their weights: a tent centred at source
@@ -199,6 +217,49 @@ export function despike(d, w, h, thr) {
 const smooth = (a, b, x) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
 
 /**
+ * Web Mercator tiles -> one equirectangular grid, by area-weighted taps (tentTaps), rows first. `win`, `w`, `h` as
+ * for compositeElevation below; `getTile(x, y)` returns 65536 values (any typed array). Throws on a missing tile.
+ * The elevation and the water record both come through here: one frame conversion, tested once.
+ */
+export function resampleMercator(win, z, w, h, getTile) {
+  const T = TERRAIN.tilePx, n = T * 2 ** z, nt = 2 ** z, src = terrTexelDeg(z);
+  const dLon = win.lonSpan / w, dLat = win.latSpan / h;
+  const xt = new Array(w), yt = new Array(h);
+  let gx0 = Infinity, gx1 = -Infinity, gy0 = Infinity, gy1 = -Infinity;
+  for (let i = 0; i < w; i++) {
+    const t = tentTaps(((win.west + (i + 0.5) * dLon) / 360 + 0.5) * n, dLon / src);
+    xt[i] = t; gx0 = Math.min(gx0, t[0]); gx1 = Math.max(gx1, t[t.length - 2]);
+  }
+  for (let j = 0; j < h; j++) {
+    const lat = win.north - (j + 0.5) * dLat, la = Math.max(-TERRAIN.latMax, Math.min(TERRAIN.latMax, lat));
+    const t = tentTaps(mercY(la) * n, dLat / (src * Math.cos(la * D2R)));
+    for (let k = 0; k < t.length; k += 2) { t[k] = Math.max(0, Math.min(n - 1, t[k])); gy0 = Math.min(gy0, t[k]); gy1 = Math.max(gy1, t[k]); }   // no row beyond the square
+    yt[j] = t;
+  }
+  // the part of the mosaic the taps touch, copied out of the tiles (longitude wraps, latitude does not)
+  const mw = gx1 - gx0 + 1, mh = gy1 - gy0 + 1, mos = new Float32Array(mw * mh);
+  for (let ty = Math.floor(gy0 / T); ty <= Math.floor(gy1 / T); ty++) {
+    for (let tx = Math.floor(gx0 / T); tx <= Math.floor(gx1 / T); tx++) {
+      const tile = getTile(((tx % nt) + nt) % nt, ty);
+      if (!tile) throw new Error(`tile ${z}/${((tx % nt) + nt) % nt}/${ty} is missing`);
+      const xa = Math.max(gx0, tx * T), xb = Math.min(gx1, tx * T + T - 1), ya = Math.max(gy0, ty * T), yb = Math.min(gy1, ty * T + T - 1);
+      for (let y = ya; y <= yb; y++) mos.set(tile.subarray((y - ty * T) * T + (xa - tx * T), (y - ty * T) * T + (xb - tx * T) + 1), (y - gy0) * mw + (xa - gx0));
+    }
+  }
+  // rows first (Mercator y -> latitude), then columns
+  const tmp = new Float32Array(mw * h), out = new Float32Array(w * h);
+  for (let j = 0; j < h; j++) {
+    const t = yt[j], o = j * mw;
+    for (let k = 0; k < t.length; k += 2) { const wgt = t[k + 1], s = (t[k] - gy0) * mw; for (let x = 0; x < mw; x++) tmp[o + x] += wgt * mos[s + x]; }
+  }
+  for (let i = 0; i < w; i++) {
+    const t = xt[i];
+    for (let k = 0; k < t.length; k += 2) { const wgt = t[k + 1], s = t[k] - gx0; for (let j = 0; j < h; j++) out[j * w + i] += wgt * tmp[j * mw + s]; }
+  }
+  return out;
+}
+
+/**
  * Mercator tiles -> one equirectangular grid of metres. `win` = {west, north, lonSpan, latSpan} in
  * degrees (west may lie outside -180..180: the window is in unwrapped longitude); the grid is w x h,
  * pixel-centre registered, row 0 north. `getTile(x, y)` returns a Float32Array of 256 x 256 metres.
@@ -218,41 +279,10 @@ const smooth = (a, b, x) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a
  * shipped height and slope there.
  */
 export function compositeElevation(win, z, w, h, getTile, shipped, water, own) {
-  const T = TERRAIN.tilePx, n = T * 2 ** z, nt = 2 ** z, src = terrTexelDeg(z);
   const dLon = win.lonSpan / w, dLat = win.latSpan / h;
-  const xt = new Array(w), yt = new Array(h), lats = new Float64Array(h);
-  let gx0 = Infinity, gx1 = -Infinity, gy0 = Infinity, gy1 = -Infinity;
-  for (let i = 0; i < w; i++) {
-    const t = tentTaps(((win.west + (i + 0.5) * dLon) / 360 + 0.5) * n, dLon / src);
-    xt[i] = t; gx0 = Math.min(gx0, t[0]); gx1 = Math.max(gx1, t[t.length - 2]);
-  }
-  for (let j = 0; j < h; j++) {
-    const lat = win.north - (j + 0.5) * dLat, la = Math.max(-TERRAIN.latMax, Math.min(TERRAIN.latMax, lat));
-    lats[j] = lat;
-    const t = tentTaps(mercY(la) * n, dLat / (src * Math.cos(la * D2R)));
-    for (let k = 0; k < t.length; k += 2) { t[k] = Math.max(0, Math.min(n - 1, t[k])); gy0 = Math.min(gy0, t[k]); gy1 = Math.max(gy1, t[k]); }   // no row beyond the square
-    yt[j] = t;
-  }
-  // the part of the mosaic the taps touch, copied out of the tiles (longitude wraps, latitude does not)
-  const mw = gx1 - gx0 + 1, mh = gy1 - gy0 + 1, mos = new Float32Array(mw * mh);
-  for (let ty = Math.floor(gy0 / T); ty <= Math.floor(gy1 / T); ty++) {
-    for (let tx = Math.floor(gx0 / T); tx <= Math.floor(gx1 / T); tx++) {
-      const tile = getTile(((tx % nt) + nt) % nt, ty);
-      if (!tile) throw new Error(`elevation tile ${z}/${((tx % nt) + nt) % nt}/${ty} is missing`);
-      const xa = Math.max(gx0, tx * T), xb = Math.min(gx1, tx * T + T - 1), ya = Math.max(gy0, ty * T), yb = Math.min(gy1, ty * T + T - 1);
-      for (let y = ya; y <= yb; y++) mos.set(tile.subarray((y - ty * T) * T + (xa - tx * T), (y - ty * T) * T + (xb - tx * T) + 1), (y - gy0) * mw + (xa - gx0));
-    }
-  }
-  // rows first (Mercator y -> latitude), then columns
-  const tmp = new Float32Array(mw * h), out = new Float32Array(w * h);
-  for (let j = 0; j < h; j++) {
-    const t = yt[j], o = j * mw;
-    for (let k = 0; k < t.length; k += 2) { const wgt = t[k + 1], s = (t[k] - gy0) * mw; for (let x = 0; x < mw; x++) tmp[o + x] += wgt * mos[s + x]; }
-  }
-  for (let i = 0; i < w; i++) {
-    const t = xt[i];
-    for (let k = 0; k < t.length; k += 2) { const wgt = t[k + 1], s = t[k] - gx0; for (let j = 0; j < h; j++) out[j * w + i] += wgt * tmp[j * mw + s]; }
-  }
+  const lats = new Float64Array(h);
+  for (let j = 0; j < h; j++) lats[j] = win.north - (j + 0.5) * dLat;
+  const out = resampleMercator(win, z, w, h, getTile);
   // single bad heights out (see despike): the threshold is 40 m at 30 m a texel and grows with the texel
   despike(out, w, h, Math.max(40, 1.5 * dLat * KM_PER_DEG * 1000));
   // the polar caps and the sea
@@ -291,6 +321,8 @@ export const PLAN = {
   margins: [0.25, 0.15, 0.05, -0.05, -0.12, -0.19, -0.26, -0.32, -0.38],
   fullView: 0.05,       // the least margin that still counts as covering the view (the shader's fade takes 6% of the window)
   slack: 0.10,          // how far, in view sizes, the view may move before a new window is fetched
+  quickSteps: 2,        // the quick first pass is this many levels coarser in both layers: a sixteenth of the requests
+  quickLeast: 24,       // a window of fewer requests than this has no quick pass
 };
 
 const LIST_MAX = 400;   // a plan with more tiles than this is only counted, never listed: it is about to be rejected
@@ -353,7 +385,8 @@ export function planDetail(view, kmPerPx, opts = {}) {
   const fits = (p) => !p || (p.count <= (p.z === undefined ? (p.src === 's2' ? P.maxS2Tiles : P.maxTiles) : P.maxElevTiles) && p.w <= P.maxTex && p.h <= P.maxTex);
   let src = 'bm';
   const make = (m, L, z) => {
-    const win = snap(grow(view, m), L !== null ? (src === 's2' ? s2TexelDeg(L) : gibsTexelDeg(L)) : 1 / 64);
+    // snapped to the grid of the quick pass (quickPlan), 2^quickSteps texels: both passes then cover one rectangle exactly
+    const win = snap(grow(view, m), L !== null ? (src === 's2' ? s2TexelDeg(L) : gibsTexelDeg(L)) * 2 ** P.quickSteps : 1 / 64);
     return { win, margin: m, alb: L !== null ? albPlan(win, L, src) : null, elev: z !== null ? elevPlan(win, z) : null, night: !!P.night && L !== null };
   };
   // the wanted level of each layer: the coarsest that meets the texel rule
@@ -378,6 +411,18 @@ function finish(p, want) {
   p.wantKm = want;
   p.key = `${p.win.west.toFixed(5)},${p.win.north.toFixed(5)},${p.win.lonSpan.toFixed(5)},${p.win.latSpan.toFixed(5)},${p.alb ? p.alb.src + p.alb.L : '-'},${p.elev ? p.elev.z : '-'},${p.night ? 'n' : '-'}`;
   return p;
+}
+
+/**
+ * The quick first pass of a plan: the same window, PLAN.quickSteps levels coarser in imagery and elevation. At 20 m
+ * a pixel the full window is 110 Sentinel-2 tiles and the quick one is 9: it is on screen in a fraction of the time
+ * and the full layers replace it one by one as they arrive. Null when the full plan is small enough not to need it.
+ */
+export function quickPlan(p, opts = {}) {
+  const P = { ...PLAN, ...opts };
+  if (!p || !p.alb || !p.elev || p.alb.count + p.elev.count < P.quickLeast || p.alb.L - P.quickSteps < 0) return null;
+  const q = { win: p.win, margin: p.margin, alb: albPlan(p.win, p.alb.L - P.quickSteps, p.alb.src), elev: elevPlan(p.win, Math.max(0, p.elev.z - P.quickSteps)), night: p.night, quick: true };
+  return finish(q, p.wantKm);
 }
 
 /**
@@ -448,7 +493,12 @@ export function viewBox(cam) {
 }
 
 // =================================================================================== the live part
-const FADE_MS = 300, RETRIES = 2, PARALLEL = 8;
+const FADE_MS = 300, RETRIES = 2;
+// Requests in flight at once, per host. EOX, GIBS and Google's storage speak HTTP/2 (one connection, many streams);
+// the terrain bucket speaks HTTP/1.1 and the browser itself holds it to six connections. Measured on EOX from one
+// place on 2026-11-11: 110 tiles took 5.4 s eight at a time and 2.3 s sixteen at a time; beyond that the server's
+// own queue is the limit.
+const PAR = { s2: 16, gibs: 12, terrain: 8, jrc: 16 };
 const CACHE_TILES = Math.ceil(Math.max(PLAN.maxTiles, PLAN.maxS2Tiles, PLAN.maxElevTiles) * 1.5);          // decoded tiles kept per layer: one window and half of the next
 
 /** A small LRU keyed by string: a Map keeps insertion order, so the first key is the oldest. */
@@ -458,12 +508,31 @@ class LRU {
   set(k, v) { this.m.delete(k); this.m.set(k, v); while (this.m.size > this.max) { const [ok, ov] = this.m.entries().next().value; this.m.delete(ok); if (this.drop) this.drop(ov); } }
 }
 
+/** Does the water record have every tile of an elevation plan? (JRC.north, JRC.south) */
+export function jrcCovers(p) {
+  const n = 2 ** p.z;
+  return p.tiles.length > 0 && p.tiles.every((t) => mercLat(t.y / n) <= JRC.north && mercLat((t.y + 1) / n) >= JRC.south);
+}
+
+/** The mean colour (0..1) of the water in a picture: `thumb` {w, h, d: RGBA bytes} over the window, `flag` (fw x fh, 1 = water) over the same window. */
+export function waterColour(thumb, flag, fw, fh) {
+  let r = 0, g = 0, b = 0, n = 0;
+  for (let j = 0; j < thumb.h; j++) {
+    const fo = Math.min(fh - 1, Math.floor(((j + 0.5) / thumb.h) * fh)) * fw;
+    for (let i = 0; i < thumb.w; i++) {
+      if (!flag[fo + Math.min(fw - 1, Math.floor(((i + 0.5) / thumb.w) * fw))]) continue;
+      const o = (j * thumb.w + i) * 4; r += thumb.d[o]; g += thumb.d[o + 1]; b += thumb.d[o + 2]; n++;
+    }
+  }
+  return n >= 20 ? [r / n / 255, g / n / 255, b / n / 255] : null;
+}
+
 export class Detail {
   /** onChange() asks for a redraw. opts.frozen: no fades and no retries by timer; a deterministic frame waits on `busy`. */
   constructor(gl, fields, onChange, opts = {}) {
     this.gl = gl; this.fields = fields; this.onChange = onChange || (() => {}); this.frozen = !!opts.frozen;
     this.enabled = false;
-    this.cur = null;          // the window on screen: {plan, alb: {tex, at}|null, elev: {tex, at}|null}
+    this.cur = null;          // the window on screen: {plan, alb: {tex, at, night, thumb}|null, elev: {tex, at, water, flag, w, h, waterC}|null, note, credit}
     this.job = null;          // the window on its way
     this.failedKey = '';      // a window whose tiles failed is not asked for again until the view asks for a different one
     this.error = null;        // why the last window has less than it should, or null
@@ -473,6 +542,7 @@ export class Detail {
     this.albCache = new LRU(CACHE_TILES, (b) => b.close && b.close());
     this.nightCache = new LRU(CACHE_TILES, (b) => b.close && b.close());
     this.elevCache = new LRU(CACHE_TILES);
+    this.occCache = new LRU(CACHE_TILES);
     this.floatLinear = !!gl.getExtension('OES_texture_float_linear');
     this.maxTex = Math.min(PLAN.maxTex, gl.getParameter(gl.MAX_TEXTURE_SIZE));
     this._lastView = '';
@@ -486,10 +556,13 @@ export class Detail {
   _set(state, note) { this.state = state; this.note = note; this.onChange(); }
 
   /** Call every frame. Plans a window when the camera has settled on a view the current one does not serve.
-   *  `sun`: the sub-solar point {lon, lat} while the night lights are shown, else null. */
-  update(cam, settled, on, sun = null) {
+   *  `sun`: the sub-solar point {lon, lat} while the night lights are shown, else null.
+   *  `flying`: the camera is on an animated flight. `aim`: this call is FOR the flight's destination (the camera has
+   *  been put there for the call): the window is fetched while the camera is still on its way. */
+  update(cam, settled, on, sun = null, flying = false, aim = false) {
     if (!on) { if (this.enabled) { this.enabled = false; this._cancel(); this._drop(); this.failedKey = ''; this.error = null; this._lastView = ''; this._set('off', ''); } return; }
     this.enabled = true;
+    if (flying && !aim && this.job && this.job.aim) return;               // the destination's window is on its way: leave it be
     const k = cam.kmPerPx();
     const sig = `${cam.view},${cam.w},${cam.h},${k.toFixed(4)},${cam.center().map((v) => v.toFixed(4))},${sun ? Math.round(sun.lon / 2) : 'x'}`;
     if (sig === this._lastView) return;
@@ -506,11 +579,11 @@ export class Detail {
     if (!plan) { this._cancel(); if (this.state !== 'idle') this._set('idle', ''); return; }
     // a window serves if it is at least as fine as the one wanted now and holds what that one was to cover, less the slack
     const serves = (p) => p && windowHolds(p.win, view, plan.margin - PLAN.slack) && (!plan.alb || (p.alb && p.alb.texelDeg <= plan.alb.texelDeg * 1.001)) && (!plan.elev || (p.elev && p.elev.z >= plan.elev.z)) && (!plan.night || p.night);
-    if (this.cur && serves(this.cur.plan)) { this._cancel(); return; }
+    if (this.cur && !this.cur.partial && serves(this.cur.plan)) { this._cancel(); return; }      // (a window whose imagery stopped half painted does not serve)
     if (this.job && serves(this.job.plan)) return;
     if (plan.key === this.failedKey) return;
     this._cancel();
-    this._start(plan, view);
+    this._start(plan, view, aim);
   }
 
   _cancel() { if (this.job) { this.job.ctl.abort(); this.job = null; if (this.state === 'loading') this._set(this.cur ? 'ready' : 'idle', this.cur ? this.cur.note : ''); } }
@@ -519,65 +592,118 @@ export class Detail {
     for (const [l, unit] of [[c.alb, 'detAlb'], [c.elev, 'detElev']]) if (l) { this.fields.tex[unit] = this.fields.placeholder[unit]; gl.deleteTexture(l.tex); }
     this.cur = null; this.canvas = null; this.cpu = null;
   }
+  _free(l) { if (l && !l.shown) this.gl.deleteTexture(l.tex); }
 
-  async _start(plan, view) {
-    const ctl = new AbortController(), job = { plan, ctl, t0: performance.now(), requests: 0, bytes: 0, hits: 0 };
+  /**
+   * Fetch a window and put it on screen. In two passes where the window is large (quickPlan): the same rectangle two
+   * levels coarser first, whole; then the full imagery and the full elevation, each replacing its quick layer as soon
+   * as it is ready. Where there is no quick pass (a small window, or the window on screen is already as fine as the
+   * quick pass would be) the full layers go up together, as one window.
+   */
+  async _start(plan, view, aim = false) {
+    const ctl = new AbortController(), job = { plan, ctl, aim, t0: performance.now(), requests: 0, bytes: 0, hits: 0, marks: {} };
     this.job = job;
     this._set('loading', 'Fetching finer tiles…');
+    const live = () => this.job === job, since = () => Math.round(performance.now() - job.t0);
+    let stepwise = false;                                                // this job's window is on screen: its layers can go up one at a time
+    const quick = this.frozen ? null : quickPlan(plan);
+    const cur = this.cur && this.cur.plan;
+    if (quick && !(cur && windowHolds(cur.win, view, 0) && cur.alb && cur.alb.texelDeg <= quick.alb.texelDeg * 1.001)) {
+      const got = await this._load(job, quick, []);
+      if (!live()) { this._free(got.alb); this._free(got.elev); return; }
+      if (got.alb && got.elev) { const seedCanvas = got.alb.canvas; this._show(quick, got, view, []); this.cur.quick = true; this.cur.alb.seed = seedCanvas; stepwise = true; job.marks.first = since(); this.onChange(); }
+      else { this._free(got.alb); this._free(got.elev); }
+    }
     const errs = [];
-    const [alb, grid, mask] = await Promise.all([
-      plan.alb ? this._imagery(job).catch((e) => { errs.push(`imagery: ${e.message || e}`); return null; }) : null,
-      plan.elev ? this._elevation(job).catch((e) => { errs.push(`elevation: ${e.message || e}`); return null; }) : null,
-      plan.elev ? this._mask(job).catch((e) => { if (e.name !== 'AbortError') errs.push(`water mask: ${e.message || e}`); return null; }) : null,
-    ]);
-    // land or water, texel by texel, on the elevation's grid (water.js, in a worker); then the elevation texture, which carries it
-    let flag = null;
-    if (this.job === job && grid && mask) {
-      try { flag = await this._flag(plan, grid, mask, alb ? alb.canvas : null); } catch (e) { errs.push(`water: ${e.message || e}`); }
-    }
-    if (this.job !== job) {                                                // the view moved on: nothing here is wanted
-      if (alb) this.gl.deleteTexture(alb.tex);
-      return;
-    }
+    const seed = stepwise && this.cur.alb ? this.cur.alb.seed : null;
+    const got = await this._load(job, plan, errs, stepwise ? (kind, layer, partial) => {
+      if (!live()) return;
+      this._showLayer(plan, kind, layer);
+      if (kind === 'alb') this.cur.partial = !!partial;                  // a live layer is on screen before all of it has come
+      job.marks[partial ? 'paint' : kind] = since();
+    } : null, seed);
+    if (!live()) { this._free(got.alb); this._free(got.elev); return; }
     this.job = null;
-    let elev = null;
-    if (grid) {
-      const t0 = performance.now();
-      elev = this._elevTexture(plan.elev, grid, flag ? flag.d : null);
-      elev.water = !!flag; elev.flag = flag ? flag.d : null; elev.waterC = flag ? flag.waterC : null;
-      job.flagMs = flag ? flag.ms : null;
-      job.compositeMs = (job.compositeMs || 0) + Math.round(performance.now() - t0);
-    }
-    // a layer whose tiles did not all arrive is left out whole (weight 0): the shipped field shows there, and says so
-    const now = performance.now(), keepFade = this.cur && windowHolds(this.cur.plan.win, view, -0.45);     // the old window was on screen: no second fade
-    const at = (had) => (this.frozen || (keepFade && had) ? -1e9 : now);
-    const next = { plan, alb: alb ? { tex: alb.tex, at: at(this.cur && this.cur.alb), night: alb.night } : null, elev: elev ? { tex: elev.tex, at: at(this.cur && this.cur.elev), water: elev.water, waterC: elev.waterC } : null };
-    if (alb && plan.night && !alb.night) errs.push(`lights: ${job.nightError || 'not fetched'}`);
-    this._drop();
-    this.cur = next;
-    if (alb) this.fields.tex.detAlb = alb.tex; if (elev) this.fields.tex.detElev = elev.tex;
-    if (this.keep) { this.canvas = alb ? alb.canvas : null; this.cpu = elev ? { w: plan.elev.w, h: plan.elev.h, d: elev.data, water: elev.flag, win: plan.win } : null; }
-    this.stats = { requests: job.requests, cached: job.hits, bytes: job.bytes, ms: Math.round(now - job.t0), compositeMs: job.compositeMs || 0, flagMs: job.flagMs || null, albTiles: plan.alb ? plan.alb.tiles.length : 0, elevTiles: plan.elev ? plan.elev.tiles.length : 0 };
+    if (!stepwise) this._show(plan, got, view, errs);
+    const c = this.cur;
+    c.quick = false; c.partial = !!c.partial && !got.alb;               // imagery that stopped half painted stays marked
+    if (got.alb && plan.night && !got.alb.night) errs.push(`lights: ${job.nightError || 'not fetched'}`);
+    if (this.keep) { this.canvas = got.alb ? got.alb.canvas : null; this.cpu = got.elev ? { w: plan.elev.w, h: plan.elev.h, d: got.elev.data, water: got.elev.flag, win: plan.win } : null; }
+    if (got.alb) got.alb.canvas = null;
+    this.stats = { requests: job.requests, cached: job.hits, bytes: job.bytes, ms: since(), firstMs: job.marks.first || null, paintMs: job.marks.paint || null, albMs: job.marks.alb || null, elevMs: job.marks.elev || null,
+      compositeMs: job.compositeMs || 0, flagMs: job.flagMs || null, water: got.elev ? got.elev.waterBy : null, albTiles: plan.alb ? plan.alb.tiles.length : 0, elevTiles: plan.elev ? plan.elev.tiles.length : 0 };
     this.error = errs.length ? errs.join('; ') : null;
     this.failedKey = errs.length ? plan.key : '';
-    const km = (v) => (v < 0.095 ? `${Math.round(v * 1000)} m` : `${v.toFixed(v < 0.95 ? 2 : 1)} km`);
-    const nightKm = plan.alb && plan.alb.src === 's2' ? gibsTexelDeg(GIBS.maxLevel) * KM_PER_DEG : plan.alb ? plan.alb.texelKm : 0;
-    const parts = [alb ? `imagery ${km(plan.alb.texelKm)}${plan.alb.src === 's2' ? ' (Sentinel-2)' : ''}` : null, alb && alb.night ? `night lights ${km(nightKm)}` : null,
-      elev ? `elevation ${km(terrTexelKm(view.lat, plan.elev.z))}` : null].filter(Boolean);
-    next.note = errs.length ? `Some tiles could not be fetched (${errs.join('; ')}). ${parts.length ? `Showing ${parts.join(', ')}; the rest is the shipped field.` : 'Showing the shipped fields.'}`
-      : `Streamed for this view: ${parts.join(', ')} a texel.`;
-    next.credit = alb && plan.alb.src === 's2' ? S2 : null;                 // EOX asks for its attribution on the map
-    this._set(errs.length ? (parts.length ? 'partial' : 'failed') : 'ready', next.note);
+    this._describe(stepwise ? c.plan : plan, c, errs, view);
+    this._set(errs.length ? (c.alb || c.elev ? 'partial' : 'failed') : 'ready', c.note);
   }
 
-  /** Fetch with retries; counts requests and bytes on the job. */
-  async _fetch(url, job) {
+  /** Fetch and build both layers of a plan. Never throws: a layer that failed, or was stopped, is null, and `errs`
+   *  says why. `onLayer(kind, layer)` is called as each layer is ready. */
+  async _load(job, plan, errs, onLayer, seed = null) {
+    const fail = (what) => (e) => { if (e.name !== 'AbortError') errs.push(`${what}: ${e.message || e}`); return null; };
+    const albP = plan.alb ? this._imagery(job, plan, seed, seed && onLayer ? (l) => onLayer('alb', l, true) : null).catch(fail('imagery')) : Promise.resolve(null);
+    const elevP = plan.elev ? this._ground(job, plan, albP, errs).catch(fail('elevation')) : Promise.resolve(null);
+    if (onLayer) { albP.then((l) => l && onLayer('alb', l)); elevP.then((l) => l && onLayer('elev', l)); }
+    const [alb, elev] = await Promise.all([albP, elevP]);
+    return { alb, elev };
+  }
+
+  /** Put a whole window on screen in place of the one there. */
+  _show(plan, got, view, errs) {
+    const now = performance.now(), prev = this.cur, keepFade = prev && windowHolds(prev.plan.win, view, -0.45);     // the old window was on screen: no second fade
+    const at = (had) => (this.frozen || (keepFade && had) ? -1e9 : now);
+    const next = { plan, alb: got.alb ? { ...got.alb, at: at(prev && prev.alb) } : null, elev: got.elev ? { ...got.elev, at: at(prev && prev.elev) } : null };
+    this._drop();
+    this.cur = next;
+    for (const l of [got.alb, got.elev]) if (l) l.shown = true;
+    if (next.alb) { next.alb.canvas = null; this.fields.tex.detAlb = next.alb.tex; }
+    if (next.elev) this.fields.tex.detElev = next.elev.tex;
+    this._waterColour();
+    this._describe(plan, next, errs, view);
+  }
+
+  /** Replace one layer of the window on screen with a finer one over the same rectangle. */
+  _showLayer(plan, kind, layer) {
+    const c = this.cur, gl = this.gl, old = c[kind];
+    layer.shown = true;
+    c[kind] = { ...layer, canvas: null, at: old ? old.at : (this.frozen ? -1e9 : performance.now()) };
+    if (old && old.tex !== layer.tex) gl.deleteTexture(old.tex);
+    this.fields.tex[kind === 'alb' ? 'detAlb' : 'detElev'] = layer.tex;
+    c.plan = { ...c.plan, [kind]: plan[kind], ...(kind === 'alb' ? { night: !!layer.night } : {}) };
+    this._waterColour();
+    this._describe(c.plan, c, [], null);
+    this.onChange();
+  }
+
+  /** The mean colour of the window's water, for the shader's join: from the imagery's thumbnail and the elevation's flag, whenever both are there. */
+  _waterColour() {
+    const c = this.cur;
+    if (c && c.alb && c.elev && c.elev.flag && c.alb.thumb) c.elev.waterC = waterColour(c.alb.thumb, c.elev.flag, c.elev.w, c.elev.h);
+  }
+
+  /** What is on screen, in words, and whose picture it is. */
+  _describe(plan, c, errs, view) {
+    const km = (v) => (v < 0.095 ? `${Math.round(v * 1000)} m` : `${v.toFixed(v < 0.95 ? 2 : 1)} km`);
+    const lat = view ? view.lat : plan.win.north - plan.win.latSpan / 2;
+    const nightKm = plan.alb && plan.alb.src === 's2' ? gibsTexelDeg(GIBS.maxLevel) * KM_PER_DEG : plan.alb ? plan.alb.texelKm : 0;
+    const parts = [c.alb && plan.alb ? `imagery ${km(plan.alb.texelKm)}${plan.alb.src === 's2' ? ' (Sentinel-2)' : ''}` : null, c.alb && c.alb.night ? `night lights ${km(nightKm)}` : null,
+      c.elev && plan.elev ? `elevation ${km(terrTexelKm(lat, plan.elev.z))}` : null].filter(Boolean);
+    c.note = errs.length ? `Some tiles could not be fetched (${errs.join('; ')}). ${parts.length ? `Showing ${parts.join(', ')}; the rest is the shipped field.` : 'Showing the shipped fields.'}`
+      : `Streamed for this view: ${parts.join(', ')} a texel.`;
+    if (c.elev && c.elev.water) c.note += c.elev.waterBy === 'jrc' ? ' Land and water: JRC Global Surface Water (EC JRC/Google).' : ' Land and water: NASA\u2019s MODIS mask and the picture\u2019s colour.';
+    c.credit = c.alb && plan.alb && plan.alb.src === 's2' ? S2 : null;      // EOX asks for its attribution on the map
+  }
+
+  /** Fetch with retries; counts requests and bytes on the job. With `mayMiss`, a 404 is an answer (null), not a failure. */
+  async _fetch(url, job, mayMiss = false) {
     let last;
     for (let a = 0; a <= RETRIES; a++) {
       if (job.ctl.signal.aborted) throw new DOMException('aborted', 'AbortError');
       try {
         job.requests++;
         const r = await fetch(url, { signal: job.ctl.signal, mode: 'cors', credentials: 'omit', referrerPolicy: 'no-referrer' });
+        if (mayMiss && r.status === 404) return null;
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const b = await r.blob(); job.bytes += b.size;
         return b;
@@ -589,18 +715,27 @@ export class Detail {
     }
     throw new Error(`tile ${url.split('/').slice(-3).join('/')}: ${last && last.message}`);
   }
-  /** Run `fn` over `items`, PARALLEL at a time; the first failure stops the rest. */
-  async _each(items, job, fn) {
+  /** Run `fn` over `items`, `par` at a time; the first failure stops the rest. */
+  async _each(items, job, fn, par = 8) {
     let i = 0, fail = null;
     const worker = async () => { while (i < items.length && !fail && !job.ctl.signal.aborted) { const it = items[i++]; try { await fn(it); } catch (e) { fail = fail || e; } } };
-    await Promise.all(Array.from({ length: Math.min(PARALLEL, items.length) }, worker));
+    await Promise.all(Array.from({ length: Math.min(par, items.length) }, worker));
     if (job.ctl.signal.aborted) throw new DOMException('aborted', 'AbortError');
     if (fail) throw fail;
   }
 
-  async _imagery(job) {
-    const gl = this.gl, p = job.plan.alb, bmp = new Map(), src = p.src === 's2' ? S2 : GIBS;
-    await this._each(p.tiles, job, async (t) => {
+  /**
+   * The imagery layer of a plan: {tex, night, thumb, canvas}. The canvas is for the water rule and is let go by the caller.
+   * With `seed` (the quick pass's picture of the same window) the layer is LIVE: the texture goes up at once holding
+   * the seed magnified, `onPaint(layer)` puts it on screen, and each tile is painted in as it arrives, the middle of
+   * the window first, so the view sharpens from where the eye is instead of all at once at the end.
+   */
+  async _imagery(job, plan, seed = null, onPaint = null) {
+    const gl = this.gl, p = plan.alb, W = plan.win, bmp = new Map(), src = p.src === 's2' ? S2 : GIBS;
+    let paint = null;                                                    // (tile) => void, once the live canvas exists
+    const order = seed ? [...p.tiles].sort((a, b) => Math.hypot(a.dx + p.tilePx / 2 - p.w / 2, a.dy + p.tilePx / 2 - p.h / 2) - Math.hypot(b.dx + p.tilePx / 2 - p.w / 2, b.dy + p.tilePx / 2 - p.h / 2)) : p.tiles;
+    const early = [];
+    const tilesP = this._each(order, job, async (t) => {
       const key = `${p.src}/${p.L}/${t.row}/${t.col}`;
       let b = this.albCache.get(key);
       if (b) job.hits++;
@@ -611,15 +746,18 @@ export class Detail {
         this.albCache.set(key, b);                                         // the cache holds more than one window's tiles, so none in use is evicted
       }
       bmp.set(key, b);
-    });
-    // The lights: Black Marble's tiles. Under Blue Marble they are the same rows and columns of another layer; under
-    // Sentinel-2 they are Black Marble's last level over the same window, magnified onto the finer grid below.
-    // A failure here costs the lights only: the imagery still shows.
+      if (paint) paint(t, b); else if (seed) early.push([t, b]);
+    }, p.src === 's2' ? PAR.s2 : PAR.gibs);
+    tilesP.catch(() => {});                                              // awaited further down; a failure before then is not an unhandled one
+    // The lights: Black Marble's tiles, fetched alongside. Under Blue Marble they are the same rows and columns of
+    // another layer; under Sentinel-2 they are Black Marble's last level over the same window, magnified onto the
+    // finer grid below. A failure here costs the lights only: the imagery still shows.
     let nbmp = null;
-    const np = p.src === 's2' ? albPlan(snap({ west: job.plan.win.west, east: job.plan.win.west + job.plan.win.lonSpan, north: job.plan.win.north, south: job.plan.win.north - job.plan.win.latSpan }, gibsTexelDeg(GIBS.maxLevel)), GIBS.maxLevel) : p;
-    if (job.plan.night) {
+    const np = p.src === 's2' ? albPlan(snap({ west: W.west, east: W.west + W.lonSpan, north: W.north, south: W.north - W.latSpan }, gibsTexelDeg(GIBS.maxLevel)), GIBS.maxLevel) : p;
+    let nightP = null;
+    if (plan.night) {
       nbmp = new Map();
-      await this._each(np.tiles, job, async (t) => {
+      nightP = this._each(np.tiles, job, async (t) => {
         const key = `${np.L}/${t.row}/${t.col}`;
         let b = this.nightCache.get(key);
         if (b) job.hits++;
@@ -629,7 +767,7 @@ export class Detail {
           this.nightCache.set(key, b);
         }
         nbmp.set(key, b);
-      }).catch((e) => { if (e.name === 'AbortError') throw e; job.nightError = e.message || String(e); nbmp = null; });
+      }, PAR.gibs).catch((e) => { if (e.name === 'AbortError') throw e; job.nightError = e.message || String(e); nbmp = null; });
     }
     // Equirectangular onto equirectangular at the same pixel size: every tile lands on whole pixels.
     const mosaic = (tiles, q, pre = '') => {
@@ -638,11 +776,21 @@ export class Detail {
       for (const t of q.tiles) g.drawImage(tiles.get(`${pre}${q.L}/${t.row}/${t.col}`), t.dx, t.dy);
       return c;
     };
-    const c = mosaic(bmp, p, `${p.src}/`);
+    await (seed ? nightP : Promise.all([tilesP, nightP]));               // a live layer waits for its lights only (a handful of tiles, most of them the quick pass's)
+    if (job.ctl.signal.aborted) { await tilesP.catch(() => {}); throw new DOMException('aborted', 'AbortError'); }
+    let c;
+    if (seed) {
+      c = new OffscreenCanvas(p.w, p.h);
+      const g = c.getContext('2d', { alpha: false, colorSpace: 'srgb' });
+      g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'medium';
+      g.drawImage(seed, 0, 0, seed.width, seed.height, 0, 0, p.w, p.h);
+      g.imageSmoothingEnabled = false;
+      for (const [t, b] of early) g.drawImage(b, t.dx, t.dy);
+    } else c = mosaic(bmp, p, `${p.src}/`);
     let nc = nbmp ? mosaic(nbmp, np) : null;
     if (nc && np !== p) {
       // the lights' mosaic covers the window snapped outwards to its own grid: take the window out of it, onto the imagery's grid
-      const t7 = gibsTexelDeg(GIBS.maxLevel), W = job.plan.win;
+      const t7 = gibsTexelDeg(GIBS.maxLevel);
       const sn = snap({ west: W.west, east: W.west + W.lonSpan, north: W.north, south: W.north - W.latSpan }, t7);
       const sx = (W.west - sn.west) / t7, sy = (sn.north - W.north) / t7, sw = W.lonSpan / t7, sh = W.latSpan / t7;
       const out = new OffscreenCanvas(p.w, p.h), g = out.getContext('2d', { alpha: false, colorSpace: 'srgb' });
@@ -651,17 +799,38 @@ export class Detail {
       nc = out;
     }
     const tex = gl.createTexture();
-    gl.bindTexture(gl.TEXTURE_2D, tex);
-    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1); gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false); gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.NONE);
-    gl.texImage2D(gl.TEXTURE_2D, 0, nbmp ? gl.RGBA8 : gl.RGB8, nbmp ? gl.RGBA : gl.RGB, gl.UNSIGNED_BYTE, c);
-    if (nc) this._writeLights(tex, nc, p.w, p.h);
-    gl.bindTexture(gl.TEXTURE_2D, tex);
-    gl.generateMipmap(gl.TEXTURE_2D);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    const ext = gl.getExtension('EXT_texture_filter_anisotropic');
-    if (ext) gl.texParameterf(gl.TEXTURE_2D, ext.TEXTURE_MAX_ANISOTROPY_EXT, Math.min(8, gl.getParameter(ext.MAX_TEXTURE_MAX_ANISOTROPY_EXT)));
-    return { tex, canvas: c, night: !!nbmp };                              // the canvas is read once more, for the water flag, then let go
+    let lastMs = 0, lastAt = 0, dirty = false;
+    // the canvas to the texture: colour, then the lights into alpha, then the mipmaps the join reads its 5 km means from
+    const upload = () => {
+      const t0 = performance.now();
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1); gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false); gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.NONE);
+      gl.texImage2D(gl.TEXTURE_2D, 0, nc ? gl.RGBA8 : gl.RGB8, nc ? gl.RGBA : gl.RGB, gl.UNSIGNED_BYTE, c);
+      if (nc) this._writeLights(tex, nc, p.w, p.h);
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.generateMipmap(gl.TEXTURE_2D);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      const ext = gl.getExtension('EXT_texture_filter_anisotropic');
+      if (ext) gl.texParameterf(gl.TEXTURE_2D, ext.TEXTURE_MAX_ANISOTROPY_EXT, Math.min(8, gl.getParameter(ext.MAX_TEXTURE_MAX_ANISOTROPY_EXT)));
+      lastAt = performance.now(); lastMs = lastAt - t0; dirty = false;
+    };
+    const layer = { tex, canvas: c, night: !!nc, thumb: null };
+    if (seed) {
+      const g = c.getContext('2d');
+      upload();
+      if (onPaint) onPaint(layer);
+      // tiles from here on are painted as they land; the texture follows at most four times a second, less often if an upload is slow
+      paint = (t, b) => { g.drawImage(b, t.dx, t.dy); dirty = true; if (!job.ctl.signal.aborted && performance.now() - lastAt > Math.max(250, 6 * lastMs)) { upload(); this.onChange(); } };
+      try { await tilesP; } finally { paint = null; if (dirty && !job.ctl.signal.aborted) { upload(); this.onChange(); } }
+    } else upload();
+    // a small copy of the picture, kept with the layer: the window's mean water colour is counted from it (_waterColour)
+    const tw = Math.min(256, p.w), th = Math.max(1, Math.min(256, Math.round((p.h * tw) / p.w)));
+    const tg = new OffscreenCanvas(tw, th).getContext('2d', { alpha: false, willReadFrequently: true, colorSpace: 'srgb' });
+    tg.imageSmoothingEnabled = true; tg.imageSmoothingQuality = 'high';
+    tg.drawImage(c, 0, 0, p.w, p.h, 0, 0, tw, th);
+    layer.thumb = { w: tw, h: th, d: tg.getImageData(0, 0, tw, th).data };
+    return layer;
   }
 
   /**
@@ -709,8 +878,40 @@ export class Detail {
     }
   }
 
-  async _elevation(job) {
-    const gl = this.gl, p = job.plan.elev, tiles = new Map();
+  /**
+   * The elevation layer of a plan, with land and water in its third channel: {tex, flag, w, h, water, waterBy, data}.
+   * Land or water is JRC's record where it has tiles for the whole window (waterBy 'jrc'); elsewhere NASA's MODIS
+   * mask sharpened by the picture's colour (water.js, waterBy 'rule'), which waits for the imagery.
+   */
+  async _ground(job, plan, albP, errs) {
+    const p = plan.elev;
+    const [grid, occ] = await Promise.all([this._elevation(job, plan),
+      this._occurrence(job, plan).catch((e) => { if (e.name === 'AbortError') throw e; console.warn('detail: the water record could not be read; NASA’s mask and the picture are used', e); return null; })]);
+    let flag = null, share = null, waterBy = null;
+    if (occ) {
+      // The texture carries the record's share itself, re-centred so that JRC.water sits at one half: the shader
+      // draws the shore where the filtered value crosses a half, which on a share places it within a texel. (As 0
+      // or 1 a river three texels wide was a staircase.) `flag` is the same thing decided, for counting on this side.
+      flag = new Uint8Array(p.w * p.h); share = occ;
+      const k = 0.5 / (JRC.water * 255), k1 = 0.5 / ((1 - JRC.water) * 255);
+      for (let i = 0; i < flag.length; i++) { const v = occ[i]; flag[i] = v >= JRC.water * 255 ? 1 : 0; share[i] = v < JRC.water * 255 ? v * k : 0.5 + (v - JRC.water * 255) * k1; }
+      waterBy = 'jrc';
+    } else {
+      const mask = await this._mask(job, plan).catch((e) => { if (e.name === 'AbortError') throw e; errs.push(`water mask: ${e.message || e}`); return null; });
+      const alb = albP ? await albP : null;
+      if (job.ctl.signal.aborted) throw new DOMException('aborted', 'AbortError');
+      if (mask) {
+        try { const f = await this._flag(plan, grid, mask, alb ? alb.canvas : null); flag = f.d; waterBy = 'rule'; job.flagMs = f.ms; } catch (e) { errs.push(`water: ${e.message || e}`); }
+      }
+    }
+    if (job.ctl.signal.aborted) throw new DOMException('aborted', 'AbortError');
+    const t0 = performance.now(), tex = this._elevTexture(p, grid, share || flag);
+    job.compositeMs = (job.compositeMs || 0) + Math.round(performance.now() - t0);
+    return { tex, flag, w: p.w, h: p.h, water: !!flag, waterBy, waterC: null, data: this.keep ? grid.data : null };
+  }
+
+  async _elevation(job, plan) {
+    const p = plan.elev, tiles = new Map();
     await this._each(p.tiles, job, async (t) => {
       const key = `${p.z}/${t.x}/${t.y}`;
       let d = this.elevCache.get(key);
@@ -726,18 +927,53 @@ export class Detail {
         this.elevCache.set(key, d);
       }
       tiles.set(`${t.x}/${t.y}`, d);
-    });
-    const ship = this.fields.cpu.elev, water = await this._water(job.plan.win, job).catch((e) => { console.error('detail: the water mask could not be read; the tiles\u2019 sea floor is used', e); return null; });
+    }, PAR.terrain);
+    const ship = this.fields.cpu.elev, water = await this._water(plan.win, job).catch((e) => { console.error('detail: the water mask could not be read; the tiles’ sea floor is used', e); return null; });
     if (job.ctl.signal.aborted) throw new DOMException('aborted', 'AbortError');
     const t0 = performance.now();
     const own = new Float32Array(p.w * p.h);
-    const data = compositeElevation(job.plan.win, p.z, p.w, p.h, (x, y) => tiles.get(`${x}/${y}`), ship ? (lon, lat) => shippedElevation(ship, lon, lat) : null, ship ? water : null, own);
-    job.compositeMs = Math.round(performance.now() - t0);
+    const data = compositeElevation(plan.win, p.z, p.w, p.h, (x, y) => tiles.get(`${x}/${y}`), ship ? (lon, lat) => shippedElevation(ship, lon, lat) : null, ship ? water : null, own);
+    job.compositeMs = (job.compositeMs || 0) + Math.round(performance.now() - t0);
     return { data, own, shipWater: water };
   }
 
+  /**
+   * JRC's water occurrence over the window, on the elevation's grid: Float32Array, 0..255 (JRC.water * 255 and over
+   * is water). The tiles are the elevation plan's own (the same zoom, x and y). Null where the record has no tile
+   * for some part of the window (polewards of 78 N and 59 S): nothing is asked for then.
+   */
+  async _occurrence(job, plan) {
+    const p = plan.elev, tiles = new Map();
+    if (p.z > JRC.maxZoom || !jrcCovers(p)) return null;
+    let missing = false;
+    await this._each(p.tiles, job, async (t) => {
+      if (missing) return;
+      const key = `${p.z}/${t.x}/${t.y}`;
+      let d = this.occCache.get(key);
+      if (d) job.hits++;
+      else {
+        const blob = await this._fetch(JRC.url(p.z, t.x, t.y), job, true);
+        if (!blob) { missing = true; return; }
+        const b = await createImageBitmap(blob, { colorSpaceConversion: 'none', premultiplyAlpha: 'none' });
+        if (b.width !== 256 || b.height !== 256) { b.close(); throw new Error(`water tile ${key} is ${b.width} x ${b.height}`); }
+        // a context of its own, cleared for every tile: these tiles are mostly transparent, and drawing one over another would leave the first showing through
+        this._decA ||= new OffscreenCanvas(256, 256).getContext('2d', { willReadFrequently: true, colorSpace: 'srgb' });
+        this._decA.clearRect(0, 0, 256, 256); this._decA.drawImage(b, 0, 0); b.close();
+        const px = this._decA.getImageData(0, 0, 256, 256).data;
+        d = new Uint8Array(65536);
+        for (let i = 0; i < 65536; i++) d[i] = px[i * 4 + 3];
+        this.occCache.set(key, d);
+      }
+      tiles.set(`${t.x}/${t.y}`, d);
+    }, PAR.jrc);
+    if (missing) return null;
+    const t0 = performance.now(), out = resampleMercator(plan.win, p.z, p.w, p.h, (x, y) => tiles.get(`${x}/${y}`));
+    job.compositeMs = (job.compositeMs || 0) + Math.round(performance.now() - t0);
+    return out;
+  }
+
   /** The elevation texture. R: metres. G: the share of the texel that is the tiles' (0 under the sea and beyond 85
-   *  degrees, where R holds the shipped field). B: 1 where the texel is water (waterFlag), when `flag` is given. */
+   *  degrees, where R holds the shipped field). B: water, when `flag` is given: 0 or 1, or a share whose half is the shore. */
   _elevTexture(p, grid, flag) {
     const gl = this.gl, n = p.w * p.h, rgb = new Float32Array(n * 3);
     for (let i = 0; i < n; i++) { rgb[i * 3] = grid.data[i]; rgb[i * 3 + 1] = grid.own[i]; rgb[i * 3 + 2] = flag ? flag[i] : 0; }
@@ -748,12 +984,12 @@ export class Detail {
     gl.texImage2D(gl.TEXTURE_2D, 0, this.floatLinear ? gl.RGB32F : gl.RGB16F, p.w, p.h, 0, gl.RGB, gl.FLOAT, rgb);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    return { tex, data: this.keep ? grid.data : null };
+    return tex;
   }
 
   /** NASA's MODIS water mask over the window, on the elevation's grid: {d: Uint8Array (1 = water), cell: the mask's cell in texels}. */
-  async _mask(job) {
-    const W = job.plan.win, e = job.plan.elev, mp = maskPlan(W, e);
+  async _mask(job, plan) {
+    const W = plan.win, e = plan.elev, mp = maskPlan(W, e);
     const bmp = new Map();
     await this._each(mp.tiles, job, async (t) => {
       const key = `w/${mp.L}/${t.row}/${t.col}`;
@@ -765,7 +1001,7 @@ export class Detail {
         this.nightCache.set(key, b);
       }
       bmp.set(key, b);
-    });
+    }, PAR.gibs);
     const c = new OffscreenCanvas(mp.w, mp.h), g = c.getContext('2d', { willReadFrequently: true, colorSpace: 'srgb' });
     g.imageSmoothingEnabled = false;
     for (const t of mp.tiles) g.drawImage(bmp.get(`w/${mp.L}/${t.row}/${t.col}`), t.dx, t.dy);

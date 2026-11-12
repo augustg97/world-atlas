@@ -17,8 +17,8 @@ Paste this whole file as the first message of a new session.
 
 ## The current task
 
-Kickoff, the first build, a verify round and eight build rounds are done, and the atlas is published. The
-contract is `SCOPE.md`; the open work is `Research/MODEL-GAPS.md` (48 items, none at P1). Against NASA's
+Kickoff, the first build, a verify round and nine build rounds are done, and the atlas is published. The
+contract is `SCOPE.md`; the open work is `Research/MODEL-GAPS.md` (50 items, none at P1). Against NASA's
 photographs the Space register is **close, with named exceptions**. Cloud close in now takes its fine
 structure from real cloud and reads as a satellite photograph; it is not the cloud of the place, and it is
 wrong in measured ways over the Amazon, the trades and the Congo (B1). The whole-Earth sheet carries a Europe
@@ -32,6 +32,11 @@ with three declared departures close in: cloud thins away, exposure rises, city 
 Since the eighth round land and water close in are told apart texel by texel (A12 mostly delivered: 2.5% of
 texels wrong at 23 places against a 30 m witness, 10.2% before), and French Guiana and France's four island
 departments are units of their own.
+Since the ninth round (release 1.7, the owner's three asks: "let's do the colors and then the JRC water host. And
+let's find a way to improve the loading time when zooming in"): Sentinel-2 is read by its own table and a city
+close in is grey (A13 delivered: 5% off grey where it was 48%); land and water close in are JRC Global Surface
+Water's record, streamed (A15 delivered: 2.2% wrong against a NEW witness, ESA WorldCover); and a view arrives in
+two passes, the first in 0.3-1.3 s, the full one painted in from the middle of the screen.
 
 ## Reference material and the measurement harness
 
@@ -67,7 +72,7 @@ The comparison is only meaningful at **matched scale**. All of this exists; reus
 
 ## State right now
 
-- Last live deploy: **2026-11-11**, release 1.6 (land and water told apart close in; French Guiana named); the stamps are in `docs/version.json` and must match the live `version.json`
+- Last live deploy: **2026-11-11**, release 1.7 (Sentinel-2's own colour table; JRC water streamed; two-pass loading); the stamps are in `docs/version.json` and must match the live `version.json`
 - Branch `main` is what is published; `verify-round` was merged into it at release 1.0
 - `data/` holds about 3.6 GB of sources and caches (gitignored); `python build/fetch_sources.py` rebuilds it,
   including 438 MB of NSIDC grids and 581 MB of ISCCP. Three reference sets live under `reference/`
@@ -76,20 +81,57 @@ The comparison is only meaningful at **matched scale**. All of this exists; reus
   records (`fetch_sources.py lakeice`); `data/hydrolakes/` lake depths (`fetch_sources.py hydrolakes`, then
   unzip it there); `data/ne/` now also Natural Earth's 1:10m land, lakes and river centrelines;
   `data/modiswater/` NASA's MODIS water mask in 128 pieces (`fetch_sources.py modiswater`, 20 MB).
-- `./venv/bin/python Research/modeling/audit_all.py` passes: fifteen checks, about 6 min. `gpu` needs this
-  machine's GPU and exits 3 without one. `close-water` needs `reference/closewater` (23 places, 112 MB) and
-  `reference/gsw` (eight 10-degree tiles of JRC Global Surface Water, 410 MB): `closewater_fetch.py` fetches both.
+- `./venv/bin/python Research/modeling/audit_all.py` passes: sixteen checks, about 7 min. `gpu` needs this
+  machine's GPU and exits 3 without one. `close-water` needs `reference/closewater` (23 places) and `reference/gsw`
+  (eight 10-degree files of JRC, 410 MB) from `closewater_fetch.py`, the record's TILES per place from
+  `closewater_fetch.py --jrc`, and the witness from `closewater_witness.py` (ESA WorldCover by range requests,
+  16 MB, cached in `reference/worldcover`). `close-colour` needs `reference/s2global` (`s2_transfer.py --fetch`, 8 MB).
 - **The app now talks to two outside hosts when zoomed in** (NASA GIBS, AWS Terrain Tiles), by default, and
   says so in About. Read register A2 before publishing: one line of the tile documentation needs the owner's eye.
 - **The earth shader uses 16 of 16 texture units.** See G7. The streamed lights share the imagery texture; the
   window's water flag is the elevation texture's third channel.
-- **A fourth fetch per window since the eighth round: NASA's MODIS water mask** (GIBS, `MODIS_Water_Mask`, 250 m).
-  Same host as the imagery. Said in the Finer ground card and in About.
+- **A FOURTH OUTSIDE HOST since the ninth round, approved by the owner on 2026-11-11: `storage.googleapis.com`**
+  (JRC Global Surface Water's occurrence tiles), one request per elevation tile, at the elevation's zoom. Said in
+  the Finer ground card and in About. NASA's MODIS water mask (GIBS) is now fetched only polewards of the record
+  (78 N, 59 S), where release 1.6's rule stands in.
+- **A window arrives in two passes** (`quickPlan`): the same rectangle two levels coarser, whole; then the full
+  layers, the imagery painted tile by tile from the middle. `detail.stats` has `firstMs`, `paintMs`, `albMs`,
+  `elevMs`. A frozen frame takes one pass.
 - **The app streams a third layer when zoomed in on the night side** (NASA GIBS, VIIRS_Black_Marble): same host
   as the imagery, said in the Night lights and Finer ground cards.
 - **A third outside host since 2026-11-11, approved by the owner: `tiles.maps.eox.at`** (Sentinel-2 cloudless 2016,
   CC BY 4.0), asked only closer in than about 0.6 km a pixel. EOX's attribution is on the map while its tiles are.
   Only the 2016 layer (`s2cloudless`) is CC BY; the later years are non-commercial and were NOT approved.
+
+## What the ninth round found (2026-11-11)
+
+1. **The yellow was not a tint to remove; it was the join.** Every texel took Blue Marble's 5 km colour, and Blue
+   Marble's colour for a city is olive (New York by the table: blue albedo a third of red). A per-channel table
+   for Sentinel-2 fitted to Blue Marble reproduced it. What worked: read the picture as SCENE LIGHT by ONE curve
+   for the three channels, take the shader's own air out, and join in scene light.
+2. **Blue Marble's land is warmer than Sentinel-2's everywhere** (13% more red, 13% less blue, the median of
+   270,000 cells), and a city more so. Neither is a season, and nothing in the shader can tell either from one
+   cell by cell: there is no sampler left for a reference month. So the month's colour is applied less the
+   standing warmth, at HALF strength, by eye. Full strength turns New York green-grey; none loses the year.
+3. **Two keys on saturation were tried and dropped.** By texel: a patchwork of grey and yellow roofs. By 5 km
+   mean: Los Angeles and the Po valley's fields have the same saturation (0.23-0.26) and want opposite answers.
+4. **The albedo table and the air are one system.** The Sentinel-2 table holds the shader's lighting and
+   atmosphere at a standard Sun as two constants; `audit_closecolour.py` recomputes them from the shader's own
+   constants and fails if they drift. Retune the air and it must be refitted (`s2_transfer.py`).
+5. **JRC's tiles are the whole answer where they exist.** Sharpening them with the picture's colour (two ways)
+   won at three places where the water has moved (Lake Mead, the Dead Sea, Cairo) and lost at four or five
+   others; the means tied. The record is used as it is, and the three are recorded.
+6. **JRC had been the witness; it needed replacing before it could be the source.** ESA WorldCover 2021, read by
+   HTTP range requests with tifffile (no GDAL): 16 MB for 23 places. By it release 1.6's rule is 3.2% wrong, not 2.5%.
+7. **JRC lies about one texel west of the picture** across Europe and the north-eastern United States, and not in
+   California. WorldCover sits on the picture. Found by a sub-agent set to build the witness.
+8. **The tile set stops at 78 N and 59 S** although the record is described as 80 N to 60 S. Asking beyond it is
+   a console error per tile, so the plan is checked against the edge first.
+9. **Loading was one host's queue.** 110 Sentinel-2 tiles eight at a time was 5.4 of 5.8 s. Sixteen at a time is
+   about 45 tiles a second and more does not help: the server is the limit. What changed the experience is the
+   order: a quick pass a sixteenth the size, then the middle of the screen first.
+10. **A share makes a better shoreline than a flag.** The record's occurrence, filtered, crosses a half within a
+    texel; as 0 or 1 a river three texels wide was a staircase.
 
 ## What the eighth round found (2026-11-11)
 
@@ -281,12 +323,13 @@ Plus the standing ones:
 
 ## The work queue
 
-1. **A13** - a colour table for Sentinel-2 (a city close in is too yellow, and now uniformly so), and winter
-   close in.
-2. **B1** - bright cloud over the summer Southern Ocean; cumulus along the wind; a daily cycle for convective
+1. **B1** - bright cloud over the summer Southern Ocean; cumulus along the wind; a daily cycle for convective
    cloud over land; the land-cumulus share from data, not one fitted number.
-3. **A15** - the owner's call: JRC Global Surface Water as a streamed 30 m water source (a new host). It would
-   find the rivers the MODIS mask lacks. **A12**'s remainder (tower shadows, Blue Marble windows unscored).
+2. **A16** - the season close in at full strength: a reference month per place for Sentinel-2 (a coarse table of
+   Blue Marble at the picture's own season, sampled per window into uniforms), so the month's colour change can
+   be told from the two cameras' standing difference. Today it is applied at half strength, by eye.
+3. **A17** - water that has moved: Lake Mead, the Dead Sea. JRC's `seasonality` or `transitions` tiles would say
+   where the record itself is in doubt; there the picture could decide. **A12**'s remainder with it.
 4. **C4, C5** - small lakes' depths, part-frozen great lakes, Issyk-Kul; river ice scored against river records.
 5. **F2** - population by polygon, not by the country raster.
 6. **A10** - the Parana and the Congo; Canada's part-water cells; a width dataset as an independent witness.

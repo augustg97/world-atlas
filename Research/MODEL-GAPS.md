@@ -24,6 +24,68 @@ IDs are referenced from code comments and commit messages. **Never recycle one.*
 | stale-data guard | `web/version.json` stamp on every fetch | a cached two-key `climate.json` had crashed the tracers once |
 | ephemeris check | `build/test_app_math.mjs` | Sun declination within 0.004° at the four 2026 seasonal instants |
 
+## APPLIED (ninth round, 2026-11-11)
+
+Release 1.7. The owner asked for three things: "let's do the colors and then the JRC water host. And let's find a
+way to improve the loading time when zooming in".
+
+**A13, the colours close in: DELIVERED, with one setting made by eye.**
+
+| | release 1.6 | release 1.7 |
+|---|---|---|
+| ground Sentinel-2 photographs grey, drawn off grey in scene light (eleven city places, mean) | 48.4% | 5.2% |
+| the worst place | 66.0% (Rotterdam) | 7.3% (Dhaka) |
+| a 5 km cell's brightness against the shipped month's | not measured | moved 1.1% |
+
+- The cause was the join, not a tint: every texel took Blue Marble's 5 km colour through Blue Marble's table, and
+  that colour for a city is olive. Sentinel-2 is now read by its own table (`S2_CURVE`: one curve to scene light;
+  `AIR_LT`, `AIR_I`: the shader's own air at a standard Sun, taken out again) and joined to the month in scene light.
+- The fit (`s2_transfer.py`): 271,775 cells of land at 20 km; Sentinel-2 by the table against Blue Marble by its
+  own, in scene light, within 10% on 77% of cells in red and 89% in green and blue.
+- **By eye:** `S2_SEASON = 0.5`, how much of the month's colour change is applied. See finding 2 in HANDOFF.md.
+- **What is still wrong.** Fields and forest are greener in winter close in than from above 0.6 km a pixel, and
+  land is a little cooler in colour there (Blue Marble's standing warmth is not applied): **A16**. The picture is
+  flatter than Sentinel-2's own, as the atlas's whole view from space is. Sentinel-2's grey is taken as grey;
+  nothing independent says so. The audit emulates the join in Python from the shader's constants.
+
+**A15, JRC Global Surface Water as the streamed water source: DELIVERED.** The owner approved the host.
+
+Against ESA WorldCover 2021 (the new witness), 23 places, 19 m a texel, texels wrong:
+
+| the shipped 5 km field | NASA's MODIS mask | release 1.6's rule | JRC's tiles (release 1.7) |
+|---|---|---|---|
+| 11.2% | 5.58% | 3.21% | **2.19%** (IoU 0.817 against 0.726) |
+
+- No place is worse than the MODIS mask at any texel size (`worse_than_mask` 0; it was 1). Manhattan's false
+  water: 0.4%.
+- **Three places are worse than release 1.6's rule, each by date and not by place:** Lake Mead 2.8% against 0.6%,
+  the Dead Sea 1.4% against 0.7%, Cairo 1.3% against 0.9%. The record's shore is the 1984-2021 majority; the
+  picture (2016) and the witness (2021) have the water lower. Recorded, and stated in the layer's card: **A17**.
+- **Tried and not kept:** the record sharpened by the picture's colour. As release 1.6's rule with JRC as its
+  prior: mean 2.18%, better at Mead, the Dead Sea and Cairo, worse by 0.2 to 1.2 points at Venice, Port Said, San
+  Diego, Boston. With the picture deciding only texels the record calls sometimes-water (10-90%): mean 2.11%,
+  worse by over 0.2 points at five places (Port Said by 1.8). A tie on the mean and regressions by place: no.
+- The frame check: the tiles taken onto the grid against the record's own 30 m file differ on 0.07-1.28% of
+  texels, along shores.
+- The record is about one texel west of the picture in Europe and the north-eastern United States.
+- Polewards of 78 N and 59 S the record has no tiles: release 1.6's rule stands in, unchanged.
+
+**Loading close in.** Measured in the browser pane from one place, fresh tiles each time:
+
+| view | release 1.6: anything new on screen | release 1.7: first pass | release 1.7: full |
+|---|---|---|---|
+| 20 m a pixel (Sentinel-2 level 13, 110-120 tiles) | 5.8-7.0 s | 0.35-1.3 s | 2.4-4.3 s |
+| 100 m a pixel | 3.6 s | 0.5-0.7 s | 3.1-4.2 s |
+| 600 m a pixel (Blue Marble) | 2.5 s | 0.3-0.4 s | 1.7-2.9 s |
+
+- Release 1.6 at 20 m was 5.4 s of Sentinel-2 tiles eight at a time. Now: a quick pass two levels coarser (9-15
+  imagery tiles), sixteen requests at a time to the HTTP/2 hosts, the lights alongside the imagery, and the full
+  imagery painted from the middle of the window outwards.
+- The full pass is about 45 Sentinel-2 tiles a second from here and that is the server's queue.
+- At 100 m and coarser the ELEVATION is now last (70-96 terrain tiles from an HTTP/1.1 host, and as many JRC
+  tiles): the full time there has not improved. **A18.**
+- Not measured: other networks, a cold browser cache against a warm one, the flight prefetch's gain.
+
 ## APPLIED (eighth round, 2026-11-11)
 
 **A12, land or water close in: mostly DELIVERED.** Release 1.6. The owner asked for the round ("Yes, next round")
@@ -711,10 +773,13 @@ texture is a magnified photograph, and vegetated land still reads darker than EP
 | A9 | P3 | **The outermost ring of the disc is 5-10 levels too bright and too green** (cos 0.1-0.2: atlas 85, 94, 100; EPIC 80, 84, 95). Rayleigh scattering saturates there in the model as in a plane atmosphere; the real loss is probably ozone, which EPIC's product does not show elsewhere on the disc, so it was not added. Would need a spherical-shell treatment of the last 2% of the radius | shader air block | EPIC |
 | A10 | P3 | **Mostly DELIVERED 2026-11-10 (sixth round): wide rivers are water.** MODIS water (MOD44W) along Natural Earth's 1:10m river lines; nine wide reaches are drawn for 87% of their length on average (under 1% before). **Open:** the Parana (50%) and the Congo (71%), whose channels between islands are narrower than half a cell; Canada's inland water is now above the lake inventory (0.76 against 0.66 M km2 in lakes), because the mask takes the larger of three sources cell by cell; the river check is not independent of MODIS, and a width dataset (GRWL, Allen & Pavelsky 2018, CC BY 4.0, a new host) would make it so | `fields_surface.rivers8`, `audit_water.reaches` | fourth round |
 | A11 | — | **DELIVERED 2026-11-11 (seventh round).** Sentinel-2 cloudless 2016 (EOX, CC BY 4.0; the owner approved the host) is streamed where the view wants a texel finer than 0.45 km, down to 19 m, and the zoom floor is 20 m a pixel | `detail.js` S2, `camera.MIN_KM_PER_PX` | sixth round |
-| A12 | P3 | **Mostly DELIVERED 2026-11-11 (eighth round): close in, land and water are told apart texel by texel** (`water.js`), 2.5% of texels wrong at 23 places against 10.2% before; the coastal tint strip is gone with it. Open: rivers NASA's 250 m mask lacks stay land (see A15); tower shadows as water; tidal flats and reservoirs as the 2016 picture caught them; Blue Marble windows unscored; the audit's grids are not the app's compositor's | `water.js`, `detail.js _flag`, `earth.frag.glsl` join, `audit_closewater.py` | seventh round |
-| A13 | P3 | **Sentinel-2's colours go through a table fitted to Blue Marble** (`ALB_LUT`), and the picture is 2016 in one season: winter snow close in is the shipped field's 5 km patches over summer ground, and the Alps in January look it. A second table, or EOX's later mosaics (non-commercial licence: the owner's call), would be the routes | `earth.frag.glsl` albedoOf | seventh round |
+| A12 | — | **DELIVERED 2026-11-11 (eighth and ninth rounds).** Close in, land and water are told apart texel by texel: since the ninth round by JRC's record (A15), 2.19% of texels wrong at 23 places against ESA WorldCover; release 1.6's rule (`water.js`: NASA's mask and the picture's colour, 3.21% by the same witness) stands in polewards of 78 N and 59 S. What is left is A17 (water that has moved) and, under the stand-in only, tower shadows and rivers the MODIS mask lacks | `detail.js _occurrence`, `water.js`, `audit_closewater.py` | seventh round |
+| A13 | — | **DELIVERED 2026-11-11 (ninth round).** Sentinel-2 is read by its own table, as scene light, and joined to the month there: ground it photographs grey is drawn 5.2% off grey at eleven city places, 48.4% before. Open parts moved to A16 (the season at half strength; winter snow close in is still the shipped field's 5 km patches over summer ground) | `earth.frag.glsl` s2Scene and the join, `s2_transfer.py`, `audit_closecolour.py` | seventh round |
 | A14 | P4 | Borders (Natural Earth 1:50m) and the coast outline are drawn for a view fifty times further out and are visibly coarse at 20 m a pixel; place names stop at Natural Earth's 1:10m populated places | `vectors.py`, `overlays.Labels` | seventh round |
-| A15 | P3 | **A 30 m water record as a streamed source.** JRC Global Surface Water (EC JRC/Google; free with attribution) is served as map tiles from Google's storage. It is this round's WITNESS, and as a source it would find what the rule cannot (the Seine: 0.13 found now) and end the guessing. It is a NEW HOST for the page: the owner's call. If taken, a different witness is needed (ESA WorldCover's water class, or OSM water polygons) | `detail.js _mask`, `water.js` | eighth round |
+| A15 | — | **DELIVERED 2026-11-11 (ninth round); the owner approved the host.** JRC Global Surface Water's occurrence tiles are the window's land and water (`storage.googleapis.com`, one tile per elevation tile). The witness is now ESA WorldCover 2021 (`closewater_witness.py`). Table in APPLIED | `detail.js _occurrence`, `audit_closewater.py` | eighth round |
+| A16 | P3 | **The season close in is at half strength.** The month's colour over Sentinel-2's holds three things: the season, Blue Marble's standing warmth (taken out: `S2_WARM`), and Blue Marble's own colour for that ground (a city: olive). The last two are not seasons and cannot be told from the first without a reference: Blue Marble at the picture's own season. No sampler is left for one. A coarse table (1 degree, twelve months and the reference) sampled per window into a few uniforms would do it, and `S2_SEASON` could go to 1. Winter snow close in is still 5 km patches | `earth.frag.glsl` join, `detail.js uniforms` | ninth round |
+| A17 | P3 | **Water that has moved is drawn where it was.** JRC's occurrence is 1984-2021: Lake Mead and the Dead Sea are drawn wider than the 2016 picture under them (2.8% and 1.4% of their boxes wrong against 0.6% and 0.7% for the rule that followed the picture). The picture's colour deciding everywhere, or wherever the record says sometimes, lost elsewhere (APPLIED, ninth round). JRC's `seasonality` (months of water in the last year) or `transitions` tiles are the same host and would mark exactly the ground in doubt | `detail.js _occurrence`, `water.js` | ninth round |
+| A18 | P4 | **The full elevation is the last thing to arrive from 100 m a pixel outwards**: up to 96 terrain tiles over HTTP/1.1 and as many JRC tiles, 2 to 4 s. The quick pass covers the wait at a quarter of the resolution. Painting it in as the imagery is, or asking for one level less where the relief is not read (a flat plain), are the routes. Sentinel-2's own queue (45 tiles a second) bounds the imagery; EOX also serves from lettered subdomains, which would be new hostnames and the owner's call | `detail.js _ground`, `PAR` | ninth round |
 
 ## B. Atmosphere
 
@@ -779,15 +844,15 @@ texture is a magnified photograph, and vegetated land still reads darker than EP
 | G5 | P3 | **Mostly RESOLVED 2026-11-09.** Driven with real pointer and key events at 1440 x 900: drag turns the globe, wheel zooms both ways, G, A, space, N, / and Esc do what About says, a typed search flies to the place and opens its card (globe and sheet), both time sliders move the clock. One fault found and fixed (the fly-to clamp). **Still not done:** panel scrolling at small window sizes; satellites picked out by eye | `ui.js`, `main.js` | this session |
 | G6 | P3 | Headless Chromium under software GL loses its first WebGL context at boot nearly every time. The app now reloads itself (three tries) and the second boot renders; cause not investigated. A frozen frame takes about 18 s there **Seen again 2026-11-10 (fourth round):** one of about eight runs of the visual check timed out on `sheet-atlas` (the frame never reported ready in 240 s) inside `build_site.py`, and passed when run again at once with no change. The build refused, as it should; the cost is a five-minute re-run | `main.js` | this session |
 | G7 | — | **DELIVERED 2026-11-10 (sixth round).** `audit_gpu.py`: the six canonical frames on the machine's GPU (ANGLE Metal, 16 texture units) against the accepted software frames, worst 0.73 levels; and the lights-into-alpha write. The earth shader still uses 16 of 16 units: the next field that needs a sampler must share one (the streamed lights went into the imagery texture's alpha for that reason). The audit runs only where there is a GPU | `audit_gpu.py`, `fields.js` UNIT, `check_shaders.py` | fifth round |
-| G8 | P3 | The GPU audit covers the frozen frames and one GL path. The streamed window itself (tiles, fades, a failed fetch) is checked by hand on the live page, not by any audit: it needs the network. Since the eighth round one part of it is audited offline, from fetched reference tiles: where its water is (`audit_closewater.py`). Its colours and its relief are not | `audit_gpu.py`, `detail.js` | sixth round |
+| G8 | P3 | The GPU audit covers the frozen frames and one GL path. The streamed window itself (tiles, fades, a failed fetch) is checked by hand on the live page, not by any audit: it needs the network. Since the eighth round one part of it is audited offline, from fetched reference tiles: where its water is (`audit_closewater.py`); since the ninth, what its join does to grey ground, by an emulation of the join in Python (`audit_closecolour.py`). Its relief, its two-pass loading and the shader's own arithmetic are not | `audit_gpu.py`, `detail.js` | sixth round |
 
 ---
 
-**Count: 48 items; none open at P1** (A12 mostly delivered in the eighth round, 2026-11-11; A15 and F14 added). In order:
+**Count: 50 items; none open at P1** (A12, A13 and A15 delivered in the ninth round, 2026-11-11; A16, A17 and A18 added). In order:
 
-1. **A13** - a colour table for Sentinel-2. With the coast's tint gone the close-in picture is one colour across a view, and that colour is too yellow over a city: now the most visible fault close in. Winter close in.
-2. **B1** - bright cloud over the summer Southern Ocean; cumulus that lines up along the wind; a daily cycle for convective cloud over land; average the texture audit over several tile layouts.
-3. **A15** - the owner's call: a 30 m water record as a streamed source (a new host). Without it, A12's remainder stands.
+1. **B1** - bright cloud over the summer Southern Ocean; cumulus that lines up along the wind; a daily cycle for convective cloud over land; average the texture audit over several tile layouts.
+2. **A16** - the season close in at full strength: a reference month for Sentinel-2, by place.
+3. **A17** - water that has moved (Lake Mead, the Dead Sea): JRC's own layers say where the record is in doubt.
 4. **F2** - population by polygon.
 5. **A10** - what is left: the Parana and the Congo, Canada's part-water cells, an independent width dataset.
 6. **F12** - no ships on ice-bound lanes. **F1** - the sixteen European states the sheet still cannot name. **F14** - far parts named for their state.

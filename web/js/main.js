@@ -116,6 +116,13 @@ const pending = new Set();       // lazy data still on its way; a frozen frame w
 function flyTo(lon, lat, km) {
   const c = cam.center();
   fly = { t0: performance.now(), from: [c[0], c[1], cam.kmPerPx()], to: [lon, lat, km] };
+  // The flight takes 0.9 s and where it ends is known now: the focus window for the destination is asked for at once,
+  // with the camera put there for the asking and put back, so the finer ground is on its way before the view arrives.
+  if (state.layers.detail) {
+    cam.setKmPerPx(km); cam.lookAt(lon, lat);
+    detail.update(cam, true, true, state.layers.lights && state.layers.daylight ? astro.sun : null, true, true);
+    cam.setKmPerPx(fly.from[2]); cam.lookAt(fly.from[0], fly.from[1]);
+  }
 }
 
 function timeChanged() { astroUpdate(); earthDirty = labelsDirty = true; ui.clock(); if (state.layers.today) live.loadToday(state.t); feedStatus(); refreshCardSoon(); saveHash(); }
@@ -257,7 +264,9 @@ function tick(now) {
   // 3. the substrate, into the cache
   const settled = now - settledAt > 350;
   const det = fields.setMonths(astro.month, settled);
-  detail.update(cam, settled && !fly, !!state.layers.detail, state.layers.lights && state.layers.daylight ? astro.sun : null);
+  // the focus window is asked for sooner than the full month is (120 ms after the last movement against 350): a request that turns
+  // out early costs a few tiles and is stopped, and a late one is half a second of blur
+  detail.update(cam, now - settledAt > 120 && !fly, !!state.layers.detail, state.layers.lights && state.layers.daylight ? astro.sun : null, !!fly);
   if (detail.fading(performance.now())) earthDirty = true;           // a window that has just arrived fades in
   if (earthDirty) {
     earthDirty = false; lastEarthDraw = now; state.atNow = isNow();
@@ -559,7 +568,7 @@ function insetItems(def) {
 /** Every field and every lazy table the current layers need has arrived, the focus window included when its layer is on. */
 function allLoaded() {
   const h = fields.has;
-  if (state.layers.detail) detail.update(cam, !fly, true, state.layers.lights && state.layers.daylight ? astro.sun : null);            // the view may have moved since the last frame
+  if (state.layers.detail) detail.update(cam, !fly, true, state.layers.lights && state.layers.daylight ? astro.sun : null, !!fly);            // the view may have moved since the last frame
   return h.water && h.climate && h.ocean && h.relief && h.elev && h.countries && !!fields.cpu.lanes && !!fields.cpu.pop1 && !!fields.cpu.co21 && pending.size === 0
     && !(state.layers.detail && detail.busy);
 }

@@ -4,7 +4,7 @@
 import { sun, moon, dayLength, monthState, gmstDeg } from '../web/js/astro.js';
 import { wtForward, wtInverse, Camera } from '../web/js/camera.js';
 import { GIBS, gibsTileDeg, gibsTexelDeg, gibsMatrix, gibsPixel, gibsLonLat, gibsTile, gibsTileBounds, TERRAIN, mercY, mercLat, terrPixel, terrLonLat, terrTile,
-  terrTileBounds, terrDecode, terrTexelDeg, terrTexelKm, tentTaps, compositeElevation, shippedElevation, planDetail, viewBox, windowHolds, windowUniforms, PLAN, KM_PER_DEG, nightLight, NIGHT_SHIPPED, despike, S2, s2TileDeg, s2TexelDeg, s2Matrix, s2Tile, s2TileBounds, maskPlan, sampleMask, boxMean, waterFlag } from '../web/js/detail.js';
+  terrTileBounds, terrDecode, terrTexelDeg, terrTexelKm, tentTaps, compositeElevation, shippedElevation, planDetail, viewBox, windowHolds, windowUniforms, PLAN, KM_PER_DEG, nightLight, NIGHT_SHIPPED, despike, S2, s2TileDeg, s2TexelDeg, s2Matrix, s2Tile, s2TileBounds, maskPlan, sampleMask, boxMean, waterFlag, JRC, resampleMercator, quickPlan, waterColour, jrcCovers } from '../web/js/detail.js';
 import { INSETS, Inset, freeRect, fitInset, insetAlpha, INSET_FULL, INSET_GONE, INSET_PAD, MIN_GAIN } from '../web/js/insets.js';
 import { inflateSync } from 'node:zlib';
 import { readFileSync, existsSync } from 'node:fs';
@@ -436,6 +436,36 @@ if (online) {
   ok('waterFlag: the shore is where the picture has it, six texels from where the mask has it', wrong <= 0.002 * w * h && info.seedWater > 1000 && info.seedLand > 1000, `${wrong} texels of ${w * h} wrong`);
   ok('waterFlag: with no picture the mask is the answer', waterFlag({ w, h, rgba: null, elev, mask, mx: 19, my: 19, cell: 13 }).every((v, i) => v === mask[i]));
   ok('waterFlag: a window the mask has no water in has none', waterFlag({ w, h, rgba, elev, mask: new Uint8Array(w * h), mx: 19, my: 19, cell: 13 }).every((v) => v === 0));
+}
+
+// the water record's tiles (JRC), the quick first pass, and the window's water colour
+{
+  ok('water record: the tiles are Web Mercator x/y like the terrain, to zoom 13', JRC.url(12, 1206, 1539).endsWith('/tiles2021/occurrence/12/1206/1539.png') && JRC.maxZoom === 13);
+  // a tile whose west half is water (alpha 250), resampled onto an equirectangular grid inside it: the shore stays at the tile's middle longitude
+  const z = 10, tx = 301, ty = 384, b = terrTileBounds(tx, ty, z), tile = new Uint8Array(65536);
+  for (let y = 0; y < 256; y++) for (let x = 0; x < 128; x++) tile[y * 256 + x] = 250;
+  const win = { west: b.west + (b.east - b.west) * 0.25, north: b.north - (b.north - b.south) * 0.25, lonSpan: (b.east - b.west) * 0.5, latSpan: (b.north - b.south) * 0.5 };
+  const g = resampleMercator(win, z, 100, 60, (x, y) => (x === tx && y === ty ? tile : null));
+  let bad = 0; for (let j = 0; j < 60; j++) for (let i = 0; i < 100; i++) { const v = g[j * 100 + i]; if (i < 49 ? Math.abs(v - 250) > 1e-3 : i > 50 ? Math.abs(v) > 1e-3 : !(v >= 0 && v <= 250)) bad++; }
+  ok('water record: resampled through the elevation\'s own frame conversion, the shore is where the tile has it', bad === 0 && g[30 * 100 + 49] > g[30 * 100 + 50], `${bad} texels off`);
+  // the quick pass: the same rectangle, two levels coarser in both layers, on whole texels of both
+  const cam = new Camera(); cam.resize(1440, 900); cam.setView('globe'); cam.lookAt(2.35, 48.86); cam.setKmPerPx(0.02);
+  const p = planDetail(viewBox(cam), 0.02), q = quickPlan(p);
+  const whole = (v) => Math.abs(v - Math.round(v)) < 1e-6;
+  ok('quick pass: one rectangle for both passes, two levels coarser, a sixteenth of the imagery requests or fewer plus the edge', q && q.win === p.win && q.alb.L === p.alb.L - 2 && q.alb.src === p.alb.src && q.elev.z === p.elev.z - 2
+    && whole(p.win.lonSpan / q.alb.texelDeg) && whole(p.win.latSpan / q.alb.texelDeg) && q.alb.w * 4 === p.alb.w && q.alb.h * 4 === p.alb.h && q.alb.count <= p.alb.count / 16 + 12 && q.night === p.night,
+  q ? `full ${p.alb.count} + ${p.elev.count} requests (${p.alb.w} x ${p.alb.h}), quick ${q.alb.count} + ${q.elev.count} (${q.alb.w} x ${q.alb.h})` : 'no quick plan');
+  { const c2 = new Camera(); c2.resize(1440, 900); c2.setView('globe'); c2.setKmPerPx(0.3);
+    const at = (lon, lat) => { c2.lookAt(lon, lat); return jrcCovers(planDetail(viewBox(c2), 0.3).elev); };
+    ok('water record: asked for at Paris and Tierra del Fuego, not on Svalbard or the Antarctic Peninsula', at(2.35, 48.86) && at(-68.3, -54.8) && !at(16, 78.6) && !at(-62.9, -64.8)); }
+  cam.setKmPerPx(4.5); const far = planDetail(viewBox(cam), 4.5);
+  ok('quick pass: a window of few requests has none', far && (far.alb.count + far.elev.count >= PLAN.quickLeast || quickPlan(far) === null) && quickPlan({ ...p, alb: { ...p.alb, count: 4 }, elev: { ...p.elev, count: 4 } }) === null);
+  // the window's water colour: the mean of the picture where the flag is water, however the two grids differ
+  const th = { w: 8, h: 4, d: new Uint8ClampedArray(8 * 4 * 4) }, fl = new Uint8Array(16 * 12);
+  for (let j = 0; j < 4; j++) for (let i = 0; i < 8; i++) { const o = (j * 8 + i) * 4, wat = i < 4; th.d[o] = wat ? 20 : 200; th.d[o + 1] = wat ? 40 : 180; th.d[o + 2] = wat ? 60 : 150; th.d[o + 3] = 255; }
+  for (let j = 0; j < 12; j++) for (let i = 0; i < 16; i++) fl[j * 16 + i] = i < 8 ? 1 : 0;
+  const wc = waterColour({ w: 80, h: 40, d: (() => { const d = new Uint8ClampedArray(80 * 40 * 4); for (let j = 0; j < 40; j++) for (let i = 0; i < 80; i++) { const o = (j * 80 + i) * 4, s = (Math.floor(j / 10) * 8 + Math.floor(i / 10)) * 4; d[o] = th.d[s]; d[o + 1] = th.d[s + 1]; d[o + 2] = th.d[s + 2]; d[o + 3] = 255; } return d; })() }, fl, 16, 12);
+  ok('water colour: the picture\'s mean where the flag is water, and nothing for a window with no water', wc && Math.abs(wc[0] - 20 / 255) < 1e-6 && Math.abs(wc[1] - 40 / 255) < 1e-6 && Math.abs(wc[2] - 60 / 255) < 1e-6 && waterColour(th, new Uint8Array(16 * 12), 16, 12) === null);
 }
 
 console.log(bad ? `\napp math: ${bad} FAILURES` : '\napp math: ALL PASS');

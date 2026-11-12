@@ -1,5 +1,48 @@
 [
  {
+  "version": "1.7",
+  "date": "11 November 2026",
+  "title": "Truer colours and narrow rivers close in, and a view that arrives sooner",
+  "summary": "Close in, a city is grey where it used to be khaki, the Seine and rivers like it are water, and the first picture of a new view is on screen in about a second where it took three to seven.",
+  "sections": [
+   {
+    "name": "Colour",
+    "items": [
+     "Close in, what Sentinel-2 photographs grey is drawn grey: roofs, roads, runways, concrete. Before, every piece of ground took Blue Marble's 5 km colour, and Blue Marble's colour for a city is olive. New York, Paris and Los Angeles were khaki from edge to edge.",
+     "Measured at eleven city places, grey ground was drawn 48% off grey, toward yellow. It is now 5% off.",
+     "Sentinel-2's picture is read by a table of its own, fitted on 270,000 cells of land against the atlas's own scale. The month still sets how bright the ground is, and half of how its colour changes through the year.",
+     "Parks, fields and red roofs now stand apart from the streets around them."
+    ]
+   },
+   {
+    "name": "Land and water",
+    "items": [
+     "Where the water is, close in, now comes from a 30 m record of where water has been seen from orbit since 1984 (Global Surface Water, by the European Commission's Joint Research Centre). The Seine through Paris, the Vltava through Prague, the Isar, canals and dock basins are water.",
+     "Checked at 23 places against an independent 10 m map of land cover, the new source gets 2.2% of the ground wrong. The reading used in release 1.6 gets 3.2%, NASA's 250 m mask alone 5.6%.",
+     "Shores are smoother: a river three texels wide is no longer a staircase.",
+     "The page asks a fourth host for this, Google's storage, where the record's tiles are kept. The Finer ground card and About say so."
+    ]
+   },
+   {
+    "name": "Arriving at a view",
+    "items": [
+     "A new view close in now arrives in two passes. A coarse one is on screen in 0.3 to 1.3 seconds; the full picture then sharpens from the middle of the screen outwards. Before, nothing changed until everything had arrived, 2.5 to 7 seconds later.",
+     "The full picture arrives sooner as well, in 1.7 to 4.3 seconds: more tiles are asked for at once, and the night lights no longer wait for the imagery.",
+     "Flying to a place from search starts fetching its ground when the flight starts, not when it lands. After a zoom or a drag the fetch starts a quarter of a second sooner."
+    ]
+   },
+   {
+    "name": "Known to be wrong",
+    "items": [
+     "A reservoir or lake that has fallen is drawn at the shore it had for most of 1984 to 2021. Lake Mead and the Dead Sea are drawn wider than the 2016 picture under them shows.",
+     "The water record lies 10 to 30 m west of the picture across Europe and the north-eastern United States.",
+     "In winter, fields close in are greener than the same fields seen from further out: only half of the month's colour change is applied there.",
+     "The close-in picture is flatter and hazier than Sentinel-2's own. Its brightness follows the atlas's view from space, which is low in contrast."
+    ]
+   }
+  ]
+ },
+ {
   "version": "1.6",
   "date": "11 November 2026",
   "title": "Rivers, harbours and shores, close in",
