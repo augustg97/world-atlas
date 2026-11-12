@@ -47,6 +47,18 @@ SCENES = {
     "sepac_stratocu": (-85.0, -20.0, ["2024-09-10", "2024-09-18", "2024-10-01"]),
     "trades_cumulus": (-52.0, 14.0, ["2024-02-10", "2024-02-18", "2024-03-03"]),
 }
+# Two more, added in the tenth round and scored APART from the five (their sums are a history that must stay
+# comparable): the Southern Ocean in its summer. EPIC's December frames showed the atlas short of white there;
+# these say whether it is short of LIGHT seen straight down, which is what the cloud climatology is checked by.
+# They are rendered WITHOUT the atlas's air (cloud_scenes_render.py), so that mean light compares: VIIRS's
+# corrected reflectance has the air's scattering taken out, and the atlas's air is not one offset. Measured on
+# two scenes rendered both ways: it adds 0.026 to the mean over the mostly clear trades and takes 0.011 from the
+# mostly overcast Southern Ocean (it dims bright cloud by more than it adds). The five keep their air, as scored
+# since the second round; their mean light is printed raw.
+EXTRA = {
+    "socean_indian": (90.0, -52.0, ["2024-12-15", "2024-12-23", "2025-01-05"]),
+    "socean_pacific": (-130.0, -55.0, ["2024-12-15", "2024-12-23", "2025-01-05"]),
+}
 BANDS = [(4, 8), (8, 16), (16, 32), (32, 64), (64, 128), (128, 256)]
 LUMA = np.array([0.2126, 0.7152, 0.0722])
 
@@ -58,7 +70,7 @@ def bbox(lon, lat):
 
 def fetch():
     os.makedirs(REF, exist_ok=True)
-    for name, (lon, lat, days) in SCENES.items():
+    for name, (lon, lat, days) in {**SCENES, **EXTRA}.items():
         b = bbox(lon, lat)
         for d in days:
             out = os.path.join(REF, f"{name}_{d}.jpg")
@@ -123,7 +135,7 @@ def mu0_at(lon, lat, day):
 def run(tag, as_json=False):
     rows, out = {}, {}
     os.makedirs(FIG, exist_ok=True)
-    for name, (lon, lat, days) in SCENES.items():
+    for name, (lon, lat, days) in {**SCENES, **EXTRA}.items():
         refs = []
         for d in days:
             p = os.path.join(REF, f"{name}_{d}.jpg")
@@ -137,13 +149,19 @@ def run(tag, as_json=False):
         at = measures(atlas_reflectance(im, mu0_at(lon, lat, days[0])))
         mean = {k: (np.mean([r[k] for r in refs], 0).tolist() if k == "bands" else float(np.mean([r[k] for r in refs]))) for k in refs[0]}
         floor = {k: float(np.mean([dist(refs[i], refs[j])[k] for i in range(3) for j in range(i + 1, 3)])) for k in ("bands", "aniso", "cover", "contrast")}
+        floor["mean"] = float(np.mean([abs(refs[i]["mean"] - refs[j]["mean"]) for i in range(3) for j in range(i + 1, 3)]))
         d = dist(at, mean)
+        d["mean"] = at["mean"] - mean["mean"]                           # signed: the atlas's light less the photographs'
+
         rows[name] = dict(atlas=at, ref=mean, floor=floor, dist=d)
         pair = Image.new("RGB", (PX * 2, PX)); pair.paste(Image.open(os.path.join(REF, f"{name}_{days[0]}.jpg")), (0, 0)); pair.paste(im, (PX, 0))
         pair.resize((PX, PX // 2), Image.LANCZOS).save(os.path.join(FIG, f"{name}_{tag}.jpg"), quality=88)
     # the score: by how much each distance exceeds its noise floor, summed over the regimes (0 = inside the floor everywhere)
     for k in ("bands", "aniso", "cover", "contrast"):
-        out[f"texture_{k}_excess"] = round(float(sum(max(0.0, r["dist"][k] - r["floor"][k]) for r in rows.values())), 3)
+        out[f"texture_{k}_excess"] = round(float(sum(max(0.0, rows[n]["dist"][k] - rows[n]["floor"][k]) for n in SCENES)), 3)
+    # the Southern Ocean scenes, apart: how far the atlas's light and its bright cover sit outside the photographs' days
+    out["socean_light_excess"] = round(float(sum(max(0.0, abs(rows[n]["dist"]["mean"]) - rows[n]["floor"]["mean"]) for n in EXTRA)), 3)
+    out["socean_cover_excess"] = round(float(sum(max(0.0, rows[n]["dist"]["cover"] - rows[n]["floor"]["cover"]) for n in EXTRA)), 3)
     if not as_json:
         print("share of variance by wavelength (km), then anisotropy, cover, contrast;  ref = mean of three days, floor = day-to-day")
         for name, r in rows.items():
@@ -154,6 +172,8 @@ def run(tag, as_json=False):
                 print(f"  {who:6}  " + " ".join(f"{x:7.2f}" for x in m["bands"]) + f"   {m['aniso']:5.2f}  {m['cover']:5.2f}  {m['contrast']:6.3f}")
             print(f"  distance: bands {r['dist']['bands']:.2f} (floor {r['floor']['bands']:.2f})  aniso {r['dist']['aniso']:.2f} ({r['floor']['aniso']:.2f})"
                   f"  cover {r['dist']['cover']:.2f} ({r['floor']['cover']:.2f})  contrast {r['dist']['contrast']:.3f} ({r['floor']['contrast']:.3f})")
+            print(f"  mean light: photographs {r['ref']['mean']:.3f}, atlas {r['atlas']['mean']:.3f} ({r['dist']['mean']:+.3f}; day to day {r['floor']['mean']:.3f})"
+                  + ("" if name in EXTRA else "   [atlas with its air: about +0.03 over clear sea]"))
     with open(os.path.join(HERE, f"cloud_texture_{tag}.json"), "w") as fh:
         json.dump(dict(tag=tag, summary=out, scenes=rows), fh, indent=1)
     print(json.dumps(out))

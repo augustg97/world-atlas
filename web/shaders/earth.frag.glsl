@@ -217,9 +217,12 @@ const float CUMULUS_COVER = 0.20;  // fallback only (no cloud-kind field loaded)
 const float DECK_R = 0.50;         // reflectance of sheet cloud where there is one (ISCCP: sheet light over sheet share)
 const float LAND_CU_SHARE = 0.2;   // share of 'all other cloud' over heated wet land drawn as small cumulus. FITTED to EPIC's clear-ground medians over the Amazon and the Congo (four values); VIIRS is the check
 const float CU_FILL = 0.28;        // share of a satellite pixel called "cumulus" that cloud really fills: its 0.14 reflectance over a cell's 0.5
-const float CLOUD_SLANT = 0.5;     // how fast the gaps in broken cloud close as the view tilts (towers about half as tall as wide)
+const float CLOUD_SLANT = 0.5;     // how fast the gaps in HEAPED cloud close as the view tilts (towers about half as tall as wide)
+const vec2 HEAP_T = vec2(8.0, 18.0);     // surface air, C: the photograph's cloud over a colder surface is layered, over a warmer one heaped
 const float CLOUD_OPP = 0.50;      // extra brightness of broken cloud seen from the Sun's side. Amplitude from EPIC (4-12 degrees
                                    // from the Sun); it must be nearly gone by 30 degrees, where VIIRS looks and needs none: width 25
+const float CLOUD_OPP_FLAT = 0.75; // the same for layered cloud. FITTED (tenth round) so that the two storm belts, 45-65 degrees, send
+                                   // EPIC's light at view cosines 0.5-0.9 over eight frames: 1.01 of it (0.955 with CLOUD_OPP's 0.5)
 
 // ---- cloud grain ------------------------------------------------------------------------------
 // Closer than the cloud photograph resolves (10 km) the atlas knows how much cloud there is and not its
@@ -323,19 +326,32 @@ float cumulusAt(vec2 uv, float amount) {
   return a;                                                        // the light of the field; its pieces are cut by the caller
 }
 
-// Stratocumulus: the sheets that roof the cold eastern sides of the subtropical oceans. Seen from above
-// a sheet is a pavement of cells some 30 km across: closed where it is thick, open rings and scattered
-// cells where it thins. `amount` is the share of sky under sheet cloud (ISCCP); the cells are the grain's.
+// Stratocumulus and stratus. `amount` is the share of sky the satellite climatology (ISCCP) files under sheet
+// cloud. Two things are decided here, and each is measured.
+// HOW MUCH of that share is sheet. Not all of it: ISCCP files broken cumulus with thick cores under
+// stratocumulus, a tenth of the sky nearly everywhere, and VIIRS agrees without it (the trades, the North
+// Atlantic in September). Above 0.4 all of it is (the Peruvian, Namibian and Californian decks; ISCCP's sheet
+// light over its sheet share is 0.45-0.51 there, which is DECK_R). Between, measured in the tenth round on 48
+// VIIRS scenes of the Southern Ocean in summer (twelve places, 42-55 S, four days each; seen straight down;
+// mean reflectance less ISCCP's other cloud and the sea): there is room for 0.065 of sheet light where ISCCP
+// has 0.136, and this ramp draws 0.070 (52-55 S: 0.086 against 0.078; 42 S: 0.038 against 0.039).
+float sheetLight(float amount) { return DECK_R * amount * smoothstep(0.15, 0.40, amount); }
+// WHOSE it is. A share above a half is a DECK: a property of the place (cold water under a subsiding high), there
+// every day, and it is drawn here as its own pavement. A middling share is WEATHER: the sheets and stratus that
+// fill the cold air of the storm belts (the Southern Ocean all year, the northern seas in summer) and come and
+// go with the systems. Only the cloud photograph knows where the systems are, so that light is given to the
+// photograph (main, restLight) and takes its shapes. Until the tenth round it was laid here as a veil of
+// reflectance 0.08 over everything, and in December the Southern Ocean was a grey film where NASA EPIC shows
+// white systems with dark sea between (white share of open water at 50-70 S: EPIC 42-54%, the atlas 27-31%).
+// Drawing a middling share as PATCHES of whole sheet (a noise's rank, 500-1000 km) was tried first: EPIC's
+// white share matched in every frame (error 0.028 to 0.013) and the picture was cotton blobs on a dark sea.
+float deckShare(float amount) { return smoothstep(0.30, 0.55, amount); }
+// Seen from above a deck is a pavement of cells some 30 km across: closed where it is thick, open rings and
+// scattered cells where it thins. The cells are the grain's.
 float deckAt(vec3 Pd, float amount) {
-  if (amount < 0.02) return 0.0;
-  float c = clamp(amount * (0.55 + 0.9 * clumps3(Pd, 480.0)), 0.0, 1.0); // the sheet's own weather: pockets and clearings. MODELLED
-  // Light: the share of sky under sheet times the reflectance of a sheet where there is one. That is
-  // 0.50 in ISCCP wherever sheets cover more than 0.42 of the sky (0.45-0.51 over the Peruvian, Namibian
-  // and Californian decks). The law here before, written by eye, sent back 0.37 off Peru where ISCCP
-  // has 0.25, and the scene there was 0.12 brighter than VIIRS.
-  // A sheet thinner than a fifth of the sky is not drawn: ISCCP's thin-sheet share is everywhere, and
-  // VIIRS agrees without it.
-  return c * DECK_R * smoothstep(0.18, 0.42, c);
+  float a = sheetLight(amount) * deckShare(amount);
+  if (a < 0.004) return 0.0;
+  return min(a * (0.55 + 0.9 * clumps3(Pd, 480.0)), CLOUD_MAX);          // the deck's own weather: pockets and clearings. MODELLED
 }
 
 // ---- the ground's albedo from Blue Marble --------------------------------------------------
@@ -653,7 +669,8 @@ void main() {
     // shows cumulus and little besides), and drawn through the photograph that light gathers into a few bright
     // clusters with clear forest between. The total is unchanged.
     float moved = LAND_CU_SHARE * conv;
-    float restLight = kinds.z < 0.0 ? kinds.z : kinds.z * (1.0 - moved);
+    // and the sheet cloud that is weather, not a deck, is the photograph's too (deckAt)
+    float restLight = kinds.z < 0.0 ? kinds.z : kinds.z * (1.0 - moved) + sheetLight(kinds.x) * (1.0 - deckShare(kinds.x));
     cloud = cloudAt(uv, flowUV, restLight);
     float slant = 1.0 / max(mu0, 0.18);
     cloudSh = cloudAt(uv + sunStep * 0.0035 * slant, flowUV, restLight); // what stands between this ground and the Sun
@@ -780,6 +797,11 @@ void main() {
     float cloudFar = mix(cRef, tC / (max(mu0, 0.30) + tC), dayF); // below 17 degrees of Sun, broken cloud shades itself and the gain stops
     float cloudA = broken(rankMix(grain, vec3(landCu), conv).z, cloudFar, grainFade, conv);
     cloudA = 1.0 - (1.0 - cloudA) * (1.0 - lowCloud);              // sheets and cumulus under and between the larger systems
+    // HEAPED OR LAYERED. How much of this field stands up (cumulus, towers, with clear air between) and how much
+    // lies flat (the shields and sheets of the storm belts, the decks). Cumulus is heaped; a deck is flat; the
+    // photograph's cloud is heaped over a warm surface, where it is raised by convection, and layered over a
+    // cold one (HEAP_T). It decides how the view's slant is felt, below.
+    float heapedF = (cumFar + smoothstep(HEAP_T.x, HEAP_T.y, tAir) * cloudFar) / (cumFar + cloudFar + deckFar + 1e-4);
     cloudFar = 1.0 - (1.0 - cloudFar) * (1.0 - cumFar) * (1.0 - deckFar);
     // Two things the eye's position does to broken cloud, neither of which changes what the cloud is.
     // Seen at a slant, the gaps close: towers hide the clear air behind them. And seen from the Sun's
@@ -787,13 +809,20 @@ void main() {
     // the amount of cloud light is fixed by satellites looking straight down in the afternoon (ISCCP,
     // VIIRS), and NASA EPIC, which looks from within 4-12 degrees of the Sun, sees about a third more.
     // Solid cloud has no gaps and no flanks: both effects fade as the cover closes.
+    // THE SLANT IS FOR HEAPED CLOUD ONLY (tenth round). A tower hides the gap behind it; a sheet has no height to
+    // hide anything with. Measured on EPIC's eight frames as light sent back against the view's cosine, over
+    // open water (EPIC looks from the Sun's side, so the Sun's cosine is the view's): over the storm belts,
+    // 45-65 degrees, it is LEVEL from the centre of the disc to a cosine of 0.5 (0.50, 0.46, 0.51, 0.52, 0.50 in
+    // the south); over the tropics it doubles (0.20 to 0.38). With one slant for all cloud the atlas doubled in
+    // both, and the storm belts were 14% too bright at cosines 0.3-0.5 (the south 11%, the north 28%) while the
+    // Southern Ocean in December, near the centre, was 6-13% short. Now 5% (1% and 18%).
     // Both are statements about a FIELD of cloud, so the gain is worked out on the far view's light and
     // then given to whatever is drawn. Applied to each resolved piece instead, a bright core gained
     // nothing and a gap gained nothing, and the same sky came out dimmer the closer it was drawn.
     if (uView == 0 && cloudFar > 1e-3) {
       float nvC = max(dot(N, V), 0.35);
-      float seen = 1.0 - pow(1.0 - cloudFar, 1.0 + CLOUD_SLANT * (1.0 / nvC - 1.0));
-      float opp = 1.0 + CLOUD_OPP * exp(-(1.0 - dot(uSun, V)) / 0.094) * dayF;      // 0.094 = 1 - cos 25 degrees
+      float seen = 1.0 - pow(1.0 - cloudFar, 1.0 + CLOUD_SLANT * heapedF * (1.0 / nvC - 1.0));
+      float opp = 1.0 + mix(CLOUD_OPP_FLAT, CLOUD_OPP, heapedF) * exp(-(1.0 - dot(uSun, V)) / 0.094) * dayF;      // 0.094 = 1 - cos 25 degrees
       seen = seen * opp / (1.0 + seen * (opp - 1.0));
       cloudA = min(cloudA * seen / cloudFar, 0.98);
     }

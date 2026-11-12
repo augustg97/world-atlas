@@ -1,6 +1,7 @@
 """Run every validator against its recorded baseline and refuse to regress.
 
-    ./venv/bin/python Research/modeling/audit_all.py            # all fourteen (about four minutes)
+    ./venv/bin/python Research/modeling/audit_all.py            # all seventeen (about seven minutes)
+    ATLAS_PORT=8152 ./venv/bin/python Research/modeling/audit_all.py   # from a second checkout, on its own port
     ./venv/bin/python Research/modeling/audit_all.py --quick    # skip the ones that need a browser
 
 A build or a publish calls this and stops if a check moved backwards.
@@ -29,7 +30,7 @@ ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
 PY = os.path.join(ROOT, "venv", "bin", "python")
 STUDIO = os.path.expanduser("~/Modeling Studio")
 SPY = os.path.join(STUDIO, ".venv", "bin", "python")
-PORT = 8150
+PORT = int(os.environ.get("ATLAS_PORT", "8150"))   # a second checkout (a git worktree) serves and audits itself on its own port
 M = lambda f: os.path.join(HERE, f)
 B = lambda f: os.path.join(ROOT, "build", f)
 
@@ -46,7 +47,8 @@ CHECKS = [
                    [PY, M("audit_ice.py"), "--selftest"], [PY, M("audit_population.py"), "--selftest"], [PY, "-W", "ignore", B("cloud_grain.py"), "--selftest"],
                    [PY, M("audit_water.py"), "--selftest"], [PY, M("audit_lakeice.py"), "--selftest"], [SPY, M("audit_gpu.py"), "--selftest"],
                    [PY, "-W", "ignore", M("audit_closewater.py"), "--selftest"], [PY, B("units.py")],
-                   [PY, "-W", "ignore", M("s2_transfer.py"), "--selftest"], [PY, "-W", "ignore", M("audit_closecolour.py"), "--selftest"], [PY, "-W", "ignore", M("closewater_witness.py"), "--selftest"]],
+                   [PY, "-W", "ignore", M("s2_transfer.py"), "--selftest"], [PY, "-W", "ignore", M("audit_closecolour.py"), "--selftest"], [PY, "-W", "ignore", M("closewater_witness.py"), "--selftest"],
+                   [PY, "-W", "ignore", M("cloud_budget.py"), "--selftest"]],
      {"failures": 0}, False, "an audit that has stopped measuring what it says it measures"),
     # The water mask against ETOPO 2022's ocean-connected sea, north of 60 S (register A5). Before the mask was
     # rebuilt from a coastline (2026-11-10) these were 5.27, 0.11 and 460: Blue Marble paints every shelf sea in a
@@ -113,7 +115,7 @@ CHECKS = [
     ("close-colour", [[PY, "-W", "ignore", M("audit_closecolour.py"), "--json"]],
      {"air_drift_e3": 1.0, "table_drift_e3": 1.0, "fit_outside_pct": 22.8, "grey_cast_pct": 5.2, "grey_cast_worst_pct": 7.3, "mean_shift_pct": 1.1}, False,
      "close in, grey ground drawn in colour; the Sentinel-2 table drifting from the shader's own air"),
-    ("labels", [[SPY, M("audit_labels.py"), "--selftest"], [SPY, M("audit_labels.py"), "--json"]],
+    ("labels", [[SPY, M("audit_labels.py"), "--selftest"], [SPY, M("audit_labels.py"), "--json", "--port", str(PORT)]],
      {"sheet_states198_unnamed": 52, "globe_states198_unnamed": 59, "regional12_states198_unnamed": 300, "regional6_states198_unnamed": 38,
       "overlaps": 0, "under_9px": 0, "misplaced": 0, "hit_wrong": 0, "under_panel": 0, "sheet_drag_flips": 0, "sheet_zoom_in_losses": 4}, True,
      "states losing their names, or names overlapping, shrinking below 9 px or landing on the wrong country"),
@@ -151,8 +153,29 @@ CHECKS = [
      # minus EPIC, before and now: Amazon December -31 -> -13, Congo March -13 -> +6, Amazon March -5 -> +9, and
      # Congo December +10 -> +22, which is WORSE (sum of sizes 59 -> 50). And at 2 km VIIRS's Amazon scene now
      # matches in mean light (0.167 against 0.171).
-     {"lum_err": 2.67, "contrast_err": 1.85, "white_err": 0.028, "disc_err": 4.17, "limb_err": 0.118, "ocean_rgb_err": 4.7,
-      "land_rgb_err": 11.9, "halo_err": 0.2, "glint_err": 0.13, "epic_shift_px": 2}, True,
+     # RE-SET 2026-11-11 (tenth round: the Southern Ocean's cloud). Two changes, both in the register (B1) with their
+     # tables. (1) Sheet cloud of a middling share is weather and is drawn through the cloud photograph's systems, not
+     # as a veil over everything. (2) The slant that closes the gaps in broken cloud is for heaped cloud only; layered
+     # cloud gets none, and a Sun-side gain of its own (CLOUD_OPP_FLAT, fitted to the storm belts' level).
+     # Better and tightened: lum 2.67 -> 2.31, contrast 1.85 -> 1.64, white 0.028 -> 0.018, disc 4.17 -> 3.74, limb
+     # 0.118 -> 0.109, ocean 4.7 -> 4.6. December's white share, EPIC / atlas: 23 / 15 -> 17 and 22 / 18 -> 21.
+     # BACKWARDS, two:
+     #   glint 0.13 -> 0.16. ONE frame, 21 December 17:16 (1.72 -> 1.90 where EPIC has 1.51); the other four moved by
+     #     0.00-0.04. Its specular point lies under the margin of the Peruvian deck, where a sheet share of 0.3-0.45
+     #     was a veil that dimmed the glint. Classified CANCELLATION: in the four frames whose glint is under clear
+     #     sky the atlas's is 0.00-0.14 UNDER EPIC's, and the veil was hiding one that is not too strong.
+     #   land 11.9 -> 12.0. Classified TRUE, small: cloud over cool ground reads brighter from the Sun's side now
+     #     (the Sahara and Arabia in December, Australia in September: 0.4-0.9 each); the other eight values moved
+     #     by 0.1 or less.
+     # By frame, 47 measures moved past a tolerance: 32 better, 15 worse. The worse ones not above: p50 in three
+     # frames (1-3 levels: light gathered into systems leaves the middle of the distribution darker; December's
+     # median was 5-7 short and is 8), 21 June 22:35's top (p95 185 -> 192 where EPIC has 186, contrast 45 -> 47 for
+     # 44: the North Pacific's sheet share is weather too, and that day EPIC's was thinner), and the two December
+     # discs (disc 4.6 -> 5.1, 4.7 -> 5.4; clear ocean 2.7 -> 5.1, 3.2 -> 3.8: the darkest fifth of December's water
+     # is 2-4 levels darker than EPIC's without the veil). TRUE, each of them; taken for the white share and the
+     # spread (the Southern Ocean's standard deviation in December: EPIC 41-42, the atlas 31 -> 38-41).
+     {"lum_err": 2.31, "contrast_err": 1.64, "white_err": 0.018, "disc_err": 3.74, "limb_err": 0.109, "ocean_rgb_err": 4.6,
+      "land_rgb_err": 12.0, "halo_err": 0.2, "glint_err": 0.16, "epic_shift_px": 2}, True,
      "the lit globe moving away from the photograph: exposure, contrast, cloud, the disc profile, ocean, ground, glint"),
     # The ground alone: clouds off, against a cloud-free composite of about a hundred EPIC frames (register A7).
     # Needs reference/epic/clearsky (epic_clearsky.py --fetch, 300 MB). instrument_bias is the numpy copy of the
@@ -164,6 +187,17 @@ CHECKS = [
      # sorting give 0.7; with the new one 0.8. Mean absolute difference and the instrument check did not move.
      {"instrument_bias": 1.1, "clearsky_land_abs": 4.9, "clearsky_land_bias": 0.8}, True,
      "the cloud-free ground moving away from EPIC's, or the audit's copy of the shader drifting from the shader"),
+    # Where the cloud's light is and how it is seen (register B1; cloud_budget.py; tenth round). It reads the `cur`
+    # renders the epic check has just made. so_sheet_gap: the sheet light the shader draws at twelve places of the
+    # summer Southern Ocean against the room 48 VIIRS scenes leave for it, seen straight down (0.070 against 0.065).
+    # storm_level_err, storm_limb_err: the atlas's light over EPIC's across the two storm belts (45-65 degrees), less
+    # one, at view cosines 0.5-0.9 and 0.3-0.5. Before the slant was made the heaped cloud's alone: 0.005 and 0.143.
+    # tropics_level_err: the same for 8 S - 8 N. It was 0.066 and is 0.084, BACKWARDS and recorded: the sheet share
+    # of the equatorial cold tongues is weather now and draws a little more light. TRUE, small.
+    # Needs reference/gibs_clouds/so_survey (cloud_budget.py --survey --fetch, 6 MB) and the ISCCP cache.
+    ("cloud-light", [[PY, "-W", "ignore", M("cloud_budget.py"), "--json"]],
+     {"so_sheet_gap": 0.005, "storm_level_err": 0.010, "storm_limb_err": 0.048, "tropics_level_err": 0.084}, True,
+     "the Southern Ocean's sheet light drifting from what VIIRS leaves room for; layered cloud brightening toward the limb"),
     # Cloud at the zoom floor: five regimes at 2 km a pixel against three VIIRS days each (register B1). Each
     # number is how far the atlas sits OUTSIDE the day-to-day spread of the photographs, summed over the
     # regimes: 0 would mean indistinguishable by that measure. Needs reference/gibs_clouds (cloud_texture.py
@@ -183,7 +217,19 @@ CHECKS = [
      # Sixth round: sizes 0.152 -> 0.122 and contrast 0.059 -> 0.058 with no change to the cloud. The Amazon and
      # Congo scenes now have rivers in them, and the cumulus rank is mixed by the water fraction. Tightened, as the
      # rule says; it is within the 0.05 a scene that the tile layout alone is known to move this audit by.
-     {"texture_bands_excess": 0.122, "texture_aniso_excess": 0.078, "texture_cover_excess": 0.159, "texture_contrast_excess": 0.058}, True,
+     # Tenth round (weather sheets through the photograph). COVER 0.159 -> 0.167 and CONTRAST 0.058 -> 0.070, BACKWARDS,
+     # re-set on purpose. Cover: the North Atlantic scene, 0.12 -> 0.13 off (its sheet share of 0.15 now draws 0.004 of
+     # light; TRUE, small). Contrast: the SE Pacific deck, 0.012 -> 0.030 off (floor 0.018): the deck's margins, where
+     # the share falls below a half, are the photograph's broken systems now and not an even pavement. TRUE. Sizes
+     # and direction did not move.
+     # Two scenes more, scored APART so that the four sums above keep their history: the Southern Ocean in summer
+     # (Indian and Pacific sectors, three days each, rendered without the air). socean_light_excess: mean reflectance
+     # outside the photographs' day-to-day spread (0.000 before this round, 0.025 now: the Pacific scene carries
+     # 0.083 more light than VIIRS's three days against a spread of 0.058; the Indian one 0.068 less, inside its
+     # 0.089). socean_cover_excess 0.039 -> 0.033. NOT scored and wrong: both scenes are half again as contrasty as
+     # VIIRS at 2 km (0.30 against 0.20-0.23), before and after; in the register.
+     {"texture_bands_excess": 0.122, "texture_aniso_excess": 0.078, "texture_cover_excess": 0.167, "texture_contrast_excess": 0.07,
+      "socean_light_excess": 0.025, "socean_cover_excess": 0.033}, True,
      "close-in cloud drifting from real cloud's grain, direction, cover or contrast"),
     ("visual", [[SPY, os.path.join(STUDIO, "tools", "frame_baseline.py"), "check", "--project", ROOT]], {"failures": 0}, True,
      "any of the six canonical frames changing without a recorded reason (Research/baselines/FRAME-LOG.md)"),
@@ -195,7 +241,7 @@ CHECKS = [
     # update. The audit gates them itself, by a tolerance set five to ten times above the measurement ("broken" is
     # tens of levels), and counts a frame beyond it in gpu_broken.
     # It runs AFTER "visual", so the software frames it compares against are the accepted ones.
-    ("gpu", [[SPY, M("audit_gpu.py"), "--json"]], {"gpu_broken": 0}, True,
+    ("gpu", [[SPY, M("audit_gpu.py"), "--json", "--port", str(PORT)]], {"gpu_broken": 0}, True,
      "the page failing on real hardware while every software-GL audit passes (a seventeenth sampler, a driver's stricter GLSL)"),
 ]
 TOL = 1e-9
