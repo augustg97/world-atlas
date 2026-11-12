@@ -229,9 +229,12 @@ const float CUMULUS_COVER = 0.20;  // fallback only (no cloud-kind field loaded)
 const float DECK_R = 0.50;         // reflectance of sheet cloud where there is one (ISCCP: sheet light over sheet share)
 const float LAND_CU_SHARE = 0.2;   // share of 'all other cloud' over heated wet land drawn as small cumulus. FITTED to EPIC's clear-ground medians over the Amazon and the Congo (four values); VIIRS is the check
 const float CU_FILL = 0.28;        // share of a satellite pixel called "cumulus" that cloud really fills: its 0.14 reflectance over a cell's 0.5
-const float CLOUD_SLANT = 0.5;     // how fast the gaps in broken cloud close as the view tilts (towers about half as tall as wide)
+const float CLOUD_SLANT = 0.5;     // how fast the gaps in HEAPED cloud close as the view tilts (towers about half as tall as wide)
+const vec2 HEAP_T = vec2(8.0, 18.0);     // surface air, C: the photograph's cloud over a colder surface is layered, over a warmer one heaped
 const float CLOUD_OPP = 0.50;      // extra brightness of broken cloud seen from the Sun's side. Amplitude from EPIC (4-12 degrees
                                    // from the Sun); it must be nearly gone by 30 degrees, where VIIRS looks and needs none: width 25
+const float CLOUD_OPP_FLAT = 0.75; // the same for layered cloud. FITTED (tenth round) so that the two storm belts, 45-65 degrees, send
+                                   // EPIC's light at view cosines 0.5-0.9 over eight frames: 1.01 of it (0.955 with CLOUD_OPP's 0.5)
 
 // ---- cloud grain ------------------------------------------------------------------------------
 // Closer than the cloud photograph resolves (10 km) the atlas knows how much cloud there is and not its
@@ -278,6 +281,71 @@ vec3 grainAt(vec2 uvd, vec3 Pd, float row) {
   if (w < 0.004) return grainLay(uvd, false, row);
   if (w > 0.996) return grainLay(uvd, true, row);
   return rankMix(grainLay(uvd, false, row), grainLay(uvd, true, row), w);
+}
+// ---- cumulus along the wind (register B1, tenth round) ------------------------------------------
+// Broken low cloud is not scattered at random: the air under it overturns in long rolls that lie along the
+// wind, and the cells stand in rows over the rising side of each roll. CLOUD STREETS. Measured on the texture
+// audit's own VIIRS scenes as the axis the 4-32 km structure runs along, against the monthly-mean surface wind
+// the atlas ships: over the trades the two agree within 10 degrees on two days of three (the third is 41 off: that
+// day's wind was not the month's), over the Amazon within 20 on all three; over fronts, storm clusters and the
+// Southern Ocean's sheets they do not agree at all (38-86 degrees off), and nothing is turned there.
+// So the two cumulus grains are read ALONG THE WIND: the tile's own east is laid along the wind, and the tile
+// is pressed together across it (STREET), so that its cells stand closer side by side than end to end.
+// A tile cannot be turned by an angle that changes from place to place without tearing, so the turning is done
+// cell by cell: the sky is cut into cells 6 degrees across, each turns the tile about its own centre by the
+// wind AT that centre and starts somewhere else in the tile, and neighbours are faded into each other as the
+// bands of grainLay are. (Turning each cell by the wind at the pixel was tried first: where the wind is light
+// its direction swings within a cell, and the Amazon's cumulus was drawn as swirls of paint.) The wind's SPEED
+// is not used: the Amazon's streets are as marked at a mean wind of 1 m/s as the trades' at 8.
+const vec2 STREET = vec2(1.0, 1.5);   // a street's cells: (drawn out along the wind, pressed together across it). How one-directional the
+                                      // 4-32 km structure then is (cloud_texture.py): the trades 0.11 for VIIRS's 0.13, 8 degrees off the wind's
+                                      // axis; the Amazon 0.16 for 0.15, 15 off. Drawn out and not pressed (1.5, 1) gave the same direction
+                                      // and took the 4-8 km sizes with it (the Amazon's size spectrum 0.48 off; pressed, 0.42)
+// Two unrelated ranks cross-faded, and the result a rank again. The weighted sum of two evenly spread numbers
+// is spread as a trapezoid; its own cumulative curve puts it back on 0..1 evenly, so a cut at 1 - p still
+// covers p inside a fade (rankMix above keeps the spread's width and not its shape: 0.257 for 0.3 at the middle).
+float rankMix1(float r0, float r1, float w) {
+  float b = min(w, 1.0 - w), a = 1.0 - b, s = r0 * (1.0 - w) + r1 * w;
+  if (b < 1e-4) return s;
+  return s < b ? s * s / (2.0 * a * b) : (s > a ? 1.0 - (1.0 - s) * (1.0 - s) / (2.0 * a * b) : (s - 0.5 * b) / a);
+}
+// the month's surface wind at a place, as a direction (east, north)
+vec2 windDir(vec2 uvp) {
+  vec2 q = vec2(fract(uvp.x), uvp.y);
+  vec2 w = mix(textureLod(uAtmoA, vec3(q, uMonth.x), 0.0).rg, textureLod(uAtmoA, vec3(q, uMonth.z), 0.0).rg, uMonth.y);
+  w = vec2(dec(w.x, uE_u10), dec(w.y, uE_v10));
+  return w / max(length(w), 0.05);
+}
+// cell i of the m round the parallel of band j (centred at latitude 6 j degrees, longitude i / m of a turn).
+// `drift` is how far the cloud's frame has been carried east of the Earth's (a fraction of a turn).
+float streetCell(vec2 uvd, float j, float i, float m, float drift, float row) {
+  float cl = cos(radians(j * 6.0));
+  vec2 wd = uHasClimate > 0.5 ? windDir(vec2(i / m + drift, 0.5 - j / 30.0)) : vec2(1.0, 0.0);
+  float e = (fract(uvd.x - i / m + 0.5) - 0.5) * 40075.0 * cl, nn = (0.5 - j / 30.0 - uvd.y) * 20037.5;   // km east and north of the cell's centre
+  vec2 eD = vec2(gDx.x, gDy.x) * 40075.0 * cl, nD = -vec2(gDx.y, gDy.y) * 20037.5;                        // and how they change across the screen
+  float along = (e * wd.x + nn * wd.y) / (2048.0 * STREET.x) + hash12(vec2(i, j) + 0.5);
+  float across = (nn * wd.x - e * wd.y) * STREET.y / 2048.0 + hash12(vec2(j, i) + 7.5);
+  // (the squeeze is not told to the sampler: told, it reads a blurred rank at the zoom floor, a blurred rank is
+  // crowded toward its middle, and a cut covers too much where the cloud is dense)
+  vec2 dA = (eD * wd.x + nD * wd.y) / (2048.0 * STREET.x), dC = (nD * wd.x - eD * wd.y) / 2048.0;
+  float span = 0.5 - 2.0 * GRAIN_EDGE;
+  vec2 q = vec2(along * 0.25, row * 0.5 + GRAIN_EDGE + span * fract(across));
+  vec3 t = textureGrad(uClouds, q, vec2(dA.x * 0.25, dC.x * span), vec2(dA.y * 0.25, dC.y * span)).gba;
+  return row < 0.5 ? t.y : t.x;                                   // row 0: cumulus over the sea. row 1: cumulus over land
+}
+float streetBand(vec2 uvd, float j, float drift, float row) {
+  float m = max(1.0, floor(60.0 * cos(radians(j * 6.0)) + 0.5));
+  float x = fract(uvd.x) * m, i = floor(x), w = smoothstep(0.3, 0.7, x - i), i1 = mod(i + 1.0, m);
+  if (w < 0.004) return streetCell(uvd, j, i, m, drift, row);
+  if (w > 0.996) return streetCell(uvd, j, i1, m, drift, row);
+  return rankMix1(streetCell(uvd, j, i, m, drift, row), streetCell(uvd, j, i1, m, drift, row), w);
+}
+// the cumulus grain's rank at a place, read along the wind
+float streetAt(vec2 uvd, float drift, float row) {
+  float b = (0.5 - uvd.y) * 30.0, j = floor(b), w = smoothstep(0.3, 0.7, b - j);
+  if (w < 0.004) return streetBand(uvd, j, drift, row);
+  if (w > 0.996) return streetBand(uvd, j + 1.0, drift, row);
+  return rankMix1(streetBand(uvd, j, drift, row), streetBand(uvd, j + 1.0, drift, row), w);
 }
 // Cloud whose light, averaged over all the sky, is `a`: where it is, and how bright. r is the grain's
 // rank here. Two numbers describe a kind of cloud, both MEASURED on eighteen VIIRS scenes at 2 km a pixel,
@@ -335,19 +403,32 @@ float cumulusAt(vec2 uv, float amount) {
   return a;                                                        // the light of the field; its pieces are cut by the caller
 }
 
-// Stratocumulus: the sheets that roof the cold eastern sides of the subtropical oceans. Seen from above
-// a sheet is a pavement of cells some 30 km across: closed where it is thick, open rings and scattered
-// cells where it thins. `amount` is the share of sky under sheet cloud (ISCCP); the cells are the grain's.
+// Stratocumulus and stratus. `amount` is the share of sky the satellite climatology (ISCCP) files under sheet
+// cloud. Two things are decided here, and each is measured.
+// HOW MUCH of that share is sheet. Not all of it: ISCCP files broken cumulus with thick cores under
+// stratocumulus, a tenth of the sky nearly everywhere, and VIIRS agrees without it (the trades, the North
+// Atlantic in September). Above 0.4 all of it is (the Peruvian, Namibian and Californian decks; ISCCP's sheet
+// light over its sheet share is 0.45-0.51 there, which is DECK_R). Between, measured in the tenth round on 48
+// VIIRS scenes of the Southern Ocean in summer (twelve places, 42-55 S, four days each; seen straight down;
+// mean reflectance less ISCCP's other cloud and the sea): there is room for 0.065 of sheet light where ISCCP
+// has 0.136, and this ramp draws 0.070 (52-55 S: 0.086 against 0.078; 42 S: 0.038 against 0.039).
+float sheetLight(float amount) { return DECK_R * amount * smoothstep(0.15, 0.40, amount); }
+// WHOSE it is. A share above a half is a DECK: a property of the place (cold water under a subsiding high), there
+// every day, and it is drawn here as its own pavement. A middling share is WEATHER: the sheets and stratus that
+// fill the cold air of the storm belts (the Southern Ocean all year, the northern seas in summer) and come and
+// go with the systems. Only the cloud photograph knows where the systems are, so that light is given to the
+// photograph (main, restLight) and takes its shapes. Until the tenth round it was laid here as a veil of
+// reflectance 0.08 over everything, and in December the Southern Ocean was a grey film where NASA EPIC shows
+// white systems with dark sea between (white share of open water at 50-70 S: EPIC 42-54%, the atlas 27-31%).
+// Drawing a middling share as PATCHES of whole sheet (a noise's rank, 500-1000 km) was tried first: EPIC's
+// white share matched in every frame (error 0.028 to 0.013) and the picture was cotton blobs on a dark sea.
+float deckShare(float amount) { return smoothstep(0.30, 0.55, amount); }
+// Seen from above a deck is a pavement of cells some 30 km across: closed where it is thick, open rings and
+// scattered cells where it thins. The cells are the grain's.
 float deckAt(vec3 Pd, float amount) {
-  if (amount < 0.02) return 0.0;
-  float c = clamp(amount * (0.55 + 0.9 * clumps3(Pd, 480.0)), 0.0, 1.0); // the sheet's own weather: pockets and clearings. MODELLED
-  // Light: the share of sky under sheet times the reflectance of a sheet where there is one. That is
-  // 0.50 in ISCCP wherever sheets cover more than 0.42 of the sky (0.45-0.51 over the Peruvian, Namibian
-  // and Californian decks). The law here before, written by eye, sent back 0.37 off Peru where ISCCP
-  // has 0.25, and the scene there was 0.12 brighter than VIIRS.
-  // A sheet thinner than a fifth of the sky is not drawn: ISCCP's thin-sheet share is everywhere, and
-  // VIIRS agrees without it.
-  return c * DECK_R * smoothstep(0.18, 0.42, c);
+  float a = sheetLight(amount) * deckShare(amount);
+  if (a < 0.004) return 0.0;
+  return min(a * (0.55 + 0.9 * clumps3(Pd, 480.0)), CLOUD_MAX);          // the deck's own weather: pockets and clearings. MODELLED
 }
 
 // ---- the ground's albedo from Blue Marble --------------------------------------------------
@@ -768,7 +849,8 @@ void main() {
     // shows cumulus and little besides), and drawn through the photograph that light gathers into a few bright
     // clusters with clear forest between. The total is unchanged.
     float moved = LAND_CU_SHARE * conv;
-    float restLight = kinds.z < 0.0 ? kinds.z : kinds.z * (1.0 - moved);
+    // and the sheet cloud that is weather, not a deck, is the photograph's too (deckAt)
+    float restLight = kinds.z < 0.0 ? kinds.z : kinds.z * (1.0 - moved) + sheetLight(kinds.x) * (1.0 - deckShare(kinds.x));
     cloud = cloudAt(uv, flowUV, restLight);
     float slant = 1.0 / max(mu0, 0.18);
     cloudSh = cloudAt(uv + sunStep * 0.0035 * slant, flowUV, restLight); // what stands between this ground and the Sun
@@ -794,7 +876,16 @@ void main() {
     cumFar = cumulusAt(uv, cuAmt); deckFar = deckAt(Pd, kinds.x);
     cum = cumFar; deck = deckFar;
     if (grainFade < 0.99) {
-      float cuRank = rankMix(vec3(landCu), vec3(grain.y), water).x;        // the land's cumulus on land, the sea's at sea
+      // The fields of broken low cloud are read ALONG THE WIND (streetAt): the land's cumulus on land, the sea's at
+      // sea, each only where there is land or sea to need it and cloud to draw. The heaped cloud of the photograph
+      // (landCu, in `broken` below) is not: storm clusters do not line up with the surface wind (the Congo's
+      // 4-32 km structure lies 5-65 degrees off it).
+      float cuRank = 0.5;
+      if (cumFar > 0.002) {
+        float drift = fract(uHours * 2.2e-4);
+        float seaSt = (water > 0.01 || uHasGrain2 < 0.5) ? streetAt(uvd, drift, 0.0) : 0.5;
+        cuRank = rankMix1((uHasGrain2 > 0.5 && water < 0.99) ? streetAt(uvd, drift, 1.0) : seaSt, seaSt, water);
+      }
       cum = mix(pieces(cuRank, cumFar, mix(0.38, 0.33, water), mix(1.95, 1.8, water)), cumFar, grainFade);
       deck = mix(pieces(grain.x, deckFar, 0.35, 1.5), deckFar, grainFade);
     }
@@ -895,6 +986,11 @@ void main() {
     float cloudFar = mix(cRef, tC / (max(mu0, 0.30) + tC), dayF); // below 17 degrees of Sun, broken cloud shades itself and the gain stops
     float cloudA = broken(rankMix(grain, vec3(landCu), conv).z, cloudFar, grainFade, conv);
     cloudA = 1.0 - (1.0 - cloudA) * (1.0 - lowCloud);              // sheets and cumulus under and between the larger systems
+    // HEAPED OR LAYERED. How much of this field stands up (cumulus, towers, with clear air between) and how much
+    // lies flat (the shields and sheets of the storm belts, the decks). Cumulus is heaped; a deck is flat; the
+    // photograph's cloud is heaped over a warm surface, where it is raised by convection, and layered over a
+    // cold one (HEAP_T). It decides how the view's slant is felt, below.
+    float heapedF = (cumFar + smoothstep(HEAP_T.x, HEAP_T.y, tAir) * cloudFar) / (cumFar + cloudFar + deckFar + 1e-4);
     cloudFar = 1.0 - (1.0 - cloudFar) * (1.0 - cumFar) * (1.0 - deckFar);
     // Two things the eye's position does to broken cloud, neither of which changes what the cloud is.
     // Seen at a slant, the gaps close: towers hide the clear air behind them. And seen from the Sun's
@@ -902,13 +998,20 @@ void main() {
     // the amount of cloud light is fixed by satellites looking straight down in the afternoon (ISCCP,
     // VIIRS), and NASA EPIC, which looks from within 4-12 degrees of the Sun, sees about a third more.
     // Solid cloud has no gaps and no flanks: both effects fade as the cover closes.
+    // THE SLANT IS FOR HEAPED CLOUD ONLY (tenth round). A tower hides the gap behind it; a sheet has no height to
+    // hide anything with. Measured on EPIC's eight frames as light sent back against the view's cosine, over
+    // open water (EPIC looks from the Sun's side, so the Sun's cosine is the view's): over the storm belts,
+    // 45-65 degrees, it is LEVEL from the centre of the disc to a cosine of 0.5 (0.50, 0.46, 0.51, 0.52, 0.50 in
+    // the south); over the tropics it doubles (0.20 to 0.38). With one slant for all cloud the atlas doubled in
+    // both, and the storm belts were 14% too bright at cosines 0.3-0.5 (the south 11%, the north 28%) while the
+    // Southern Ocean in December, near the centre, was 6-13% short. Now 5% (1% and 18%).
     // Both are statements about a FIELD of cloud, so the gain is worked out on the far view's light and
     // then given to whatever is drawn. Applied to each resolved piece instead, a bright core gained
     // nothing and a gap gained nothing, and the same sky came out dimmer the closer it was drawn.
     if (uView == 0 && cloudFar > 1e-3) {
       float nvC = max(dot(N, V), 0.35);
-      float seen = 1.0 - pow(1.0 - cloudFar, 1.0 + CLOUD_SLANT * (1.0 / nvC - 1.0));
-      float opp = 1.0 + CLOUD_OPP * exp(-(1.0 - dot(uSun, V)) / 0.094) * dayF;      // 0.094 = 1 - cos 25 degrees
+      float seen = 1.0 - pow(1.0 - cloudFar, 1.0 + CLOUD_SLANT * heapedF * (1.0 / nvC - 1.0));
+      float opp = 1.0 + mix(CLOUD_OPP_FLAT, CLOUD_OPP, heapedF) * exp(-(1.0 - dot(uSun, V)) / 0.094) * dayF;      // 0.094 = 1 - cos 25 degrees
       seen = seen * opp / (1.0 + seen * (opp - 1.0));
       cloudA = min(cloudA * seen / cloudFar, 0.98);
     }

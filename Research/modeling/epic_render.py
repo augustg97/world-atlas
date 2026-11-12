@@ -10,12 +10,13 @@ Playwright lives in the Modeling Studio venv, not the project's. Software GL (sw
 pixels do not depend on the machine. Writes scratchpad/epic_<tag>_<frame>.jpg through the dev
 server's /__shot endpoint; epic_compare.py --tag <tag> scores them.
 """
+import os
 import sys
 from playwright.sync_api import sync_playwright
 
 tag = sys.argv[1] if len(sys.argv) > 1 else "cur"
 layers = sys.argv[2].split(",") if len(sys.argv) > 2 else None
-base = "http://localhost:8150"
+base = "http://localhost:" + os.environ.get("ATLAS_PORT", "8150")
 with sync_playwright() as pw:
     b = pw.chromium.launch(args=["--use-gl=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"])
     page = b.new_context(viewport={"width": 1024, "height": 1024}, device_scale_factor=2).new_page()

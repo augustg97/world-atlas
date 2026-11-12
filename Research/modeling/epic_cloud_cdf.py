@@ -6,10 +6,15 @@ wrong, without caring where any individual cloud is.
 
     ./venv/bin/python Research/modeling/epic_cloud_cdf.py r4 [--land]
     ./venv/bin/python Research/modeling/epic_cloud_cdf.py r4 --zonal     # mean brightness over water by 10-degree band
+    ./venv/bin/python Research/modeling/epic_cloud_cdf.py r4 --zonal --byframe   # the same frame by frame, with the white share
 
 --zonal asks a different question: is the cloud in the right LATITUDES? Eight single days are noisy
 for any one place but each band holds tens of thousands of pixels, so a band the atlas draws too
 clear or too cloudy shows as a signed difference. It is what the cloud-fraction climatology decides.
+
+--byframe: the eight frames are four seasons, and a band that is short in one season and long in another
+sums to nothing (the Southern Ocean in December against the same band in June). It prints each frame's
+bands from 70 S to 70 N, with the share of each band that reads as white (epic_compare's rule).
 """
 import sys, os
 import numpy as np
@@ -65,7 +70,31 @@ def zonal(tag):
             print(f"{b:4d}..{b+10:<4d} {int(cnt[i]):7d}  {se[i]/cnt[i]:5.0f}  {sa[i]/cnt[i]:5.0f}   {sa[i]/cnt[i]-se[i]/cnt[i]:+5.0f}")
 
 
+def zonal_byframe(tag):
+    bands = list(range(-70, 70, 10))
+    for fr in E.load_frames():
+        n = fr["image"][8:]
+        g = E.disc_geometry(fr["lon"], fr["lat"], fr["dist"])
+        water = np.where(g["hit"], E.sample_field("water.webp", g["lon"], g["lat"]), 0)
+        A = E.to_common(Image.open(os.path.join(E.REF, fr["image"] + ".png")).convert("RGB"), fr["cx"], fr["cy"], fr["r"])
+        m = Image.open(os.path.join(E.SHOTS, f"epic_{tag}_{n}.jpg")).convert("RGB")
+        B = E.to_common(m, m.width / 2, m.height / 2, fr["discFrac"] * m.height / 2)
+        sun = E.unit(*E.sub_solar(fr))
+        w = g["hit"] & (water > 0.98) & (g["mu"] > 0.35) & ((g["P"] @ sun) > 0.35)
+        white = lambda X: (X.min(2) > 150) & ((X.max(2) - X.min(2)) < 45)
+        wa, wb = white(A), white(B)
+        print(f"\n{n}  open water, view and Sun cosines > 0.35, tag {tag}")
+        print("band        px    lum EPIC atlas  diff    white% EPIC atlas  diff")
+        for b in bands:
+            k = w & (g["lat"] >= b) & (g["lat"] < b + 10)
+            if k.sum() > 1500:
+                le, la = (A[k] @ E.LUMA).mean(), (B[k] @ E.LUMA).mean()
+                print(f"{b:4d}..{b+10:<4d} {int(k.sum()):6d}     {le:5.0f} {la:5.0f}  {la-le:+5.0f}         {100*wa[k].mean():4.0f} {100*wb[k].mean():5.0f}  {100*(wb[k].mean()-wa[k].mean()):+5.0f}")
+
+
 if __name__ == "__main__":
+    if "--zonal" in sys.argv and "--byframe" in sys.argv:
+        sys.exit(zonal_byframe(sys.argv[1]))
     if "--zonal" in sys.argv:
         sys.exit(zonal(sys.argv[1]))
     main(sys.argv[1] if len(sys.argv) > 1 else "r0", land="--land" in sys.argv)
