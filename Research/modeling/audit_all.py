@@ -174,8 +174,16 @@ CHECKS = [
      # discs (disc 4.6 -> 5.1, 4.7 -> 5.4; clear ocean 2.7 -> 5.1, 3.2 -> 3.8: the darkest fifth of December's water
      # is 2-4 levels darker than EPIC's without the veil). TRUE, each of them; taken for the white share and the
      # spread (the Southern Ocean's standard deviation in December: EPIC 41-42, the atlas 31 -> 38-41).
-     {"lum_err": 2.31, "contrast_err": 1.64, "white_err": 0.018, "disc_err": 3.74, "limb_err": 0.109, "ocean_rgb_err": 4.6,
-      "land_rgb_err": 12.0, "halo_err": 0.2, "glint_err": 0.16, "epic_shift_px": 2}, True,
+     # RE-SET again in the tenth round (cumulus read along the wind; the grain is at 37% of its weight at the centre
+     # of these discs, 6 km a pixel). Ocean 4.6 -> 4.5. BACKWARDS: land 12.0 -> 12.3, and by a last digit lum 2.31 ->
+     # 2.32, contrast 1.64 -> 1.65, disc 3.74 -> 3.75, limb 0.109 -> 0.111. Land is the forest medians, atlas minus
+     # EPIC in luminance: Congo March +6.5 -> +7.2, Amazon March +9.0 -> +9.5, Congo December +22.7 -> +23.5, Amazon
+     # December -13.5 unmoved. Classified TRUE, small, and it is the fade: where two layouts of the cumulus grain meet
+     # the old cross-fade covered 0.257 of the sky when asked for 0.3; the new one (rankMix1) covers what is asked,
+     # so cumulus over wet land sends back a little more. LAND_CU_SHARE was fitted through the old fade and is left
+     # as it is: it should come from data, not be fitted a second time (register B1).
+     {"lum_err": 2.32, "contrast_err": 1.65, "white_err": 0.018, "disc_err": 3.75, "limb_err": 0.111, "ocean_rgb_err": 4.5,
+      "land_rgb_err": 12.3, "halo_err": 0.2, "glint_err": 0.16, "epic_shift_px": 2}, True,
      "the lit globe moving away from the photograph: exposure, contrast, cloud, the disc profile, ocean, ground, glint"),
     # The ground alone: clouds off, against a cloud-free composite of about a hundred EPIC frames (register A7).
     # Needs reference/epic/clearsky (epic_clearsky.py --fetch, 300 MB). instrument_bias is the numpy copy of the
@@ -228,8 +236,19 @@ CHECKS = [
      # 0.083 more light than VIIRS's three days against a spread of 0.058; the Indian one 0.068 less, inside its
      # 0.089). socean_cover_excess 0.039 -> 0.033. NOT scored and wrong: both scenes are half again as contrasty as
      # VIIRS at 2 km (0.30 against 0.20-0.23), before and after; in the register.
-     {"texture_bands_excess": 0.122, "texture_aniso_excess": 0.078, "texture_cover_excess": 0.167, "texture_contrast_excess": 0.07,
-      "socean_light_excess": 0.025, "socean_cover_excess": 0.033}, True,
+     # Tenth round, second change (cumulus along the wind: earth.frag.glsl streetAt). The two cumulus grains are read
+     # with the tile's east along the shipped wind and pressed together across it, cell by cell. Better and
+     # tightened: sizes 0.122 -> 0.040, direction 0.078 -> 0.021, contrast 0.070 -> 0.033, and a new number,
+     # street_off_wind_deg: how far the axis of the 4-32 km structure lies from the wind's, mean of the trades and
+     # the Amazon, 36.8 -> 11.6 degrees (the trades 63 -> 8; VIIRS's own days there are 10, 41 and 1 off).
+     # COVER BACKWARDS, 0.167 -> 0.204, re-set on purpose: the Congo scene, 0.15 -> 0.19 off (floor 0.05), its mean
+     # light 0.308 -> 0.323 against VIIRS's 0.216. PRE-EXISTING and now plainer: the scene carried 0.09 too much
+     # light before (ISCCP's April mean against three afternoons), and the cross-fade between layouts no longer
+     # loses a seventh of the cover asked for (see the epic note). By scene, also worse: the North Atlantic's
+     # direction 0.05 -> 0.07 off (floor 0.05; its cumulus lies along the westerlies now and the scene as a whole
+     # is less one-directional, 0.03 for VIIRS's 0.11: TRUE), the SE Pacific's sizes 0.42 -> 0.46 (floor 0.45).
+     {"texture_bands_excess": 0.04, "texture_aniso_excess": 0.021, "texture_cover_excess": 0.204, "texture_contrast_excess": 0.033,
+      "street_off_wind_deg": 11.6, "socean_light_excess": 0.022, "socean_cover_excess": 0.031}, True,
      "close-in cloud drifting from real cloud's grain, direction, cover or contrast"),
     ("visual", [[SPY, os.path.join(STUDIO, "tools", "frame_baseline.py"), "check", "--project", ROOT]], {"failures": 0}, True,
      "any of the six canonical frames changing without a recorded reason (Research/baselines/FRAME-LOG.md)"),

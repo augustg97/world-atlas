@@ -234,6 +234,22 @@ def selftest():
     # 4. pieces(): share and mean
     c = pieces(o, 0.15, 0.35, 1.5)
     assert abs((c > 0).mean() - 0.15 / 0.35) < 0.01 and abs(c.mean() - 0.15) < 0.005
+    # 5. the shader's rankMix1 (cumulus along the wind): two unrelated ranks faded with any weight are a rank again,
+    #    so a cut at 1 - p covers p inside a fade. The older rankMix keeps the spread's width only: 0.257 for 0.3.
+    r0, r1 = rng.random(400000), rng.random(400000)
+    def rank_mix1(r0, r1, w):
+        b = min(w, 1 - w); a = 1 - b; s_ = r0 * (1 - w) + r1 * w
+        if b < 1e-4:
+            return s_
+        return np.where(s_ < b, s_ * s_ / (2 * a * b), np.where(s_ > a, 1 - (1 - s_) ** 2 / (2 * a * b), (s_ - 0.5 * b) / a))
+    for w in (0.0, 0.1, 0.35, 0.5, 0.8):
+        m = rank_mix1(r0, r1, w)
+        for p_ in (0.05, 0.3, 0.6, 0.9):
+            assert abs((m > 1 - p_).mean() - p_) < 0.004, (w, p_, (m > 1 - p_).mean())
+    old = 0.5 + ((r0 - 0.5) * 0.5 + (r1 - 0.5) * 0.5) / np.sqrt(0.5)
+    assert abs((old > 0.7).mean() - 0.257) < 0.004
+    src = open(os.path.join(ROOT, "web", "shaders", "earth.frag.glsl")).read()
+    assert "s < b ? s * s / (2.0 * a * b) : (s > a ? 1.0 - (1.0 - s) * (1.0 - s) / (2.0 * a * b) : (s - 0.5 * b) / a)" in src, "rankMix1 in the shader is no longer the formula tested here"
     print("cloud_grain selftest: ok")
 
 
