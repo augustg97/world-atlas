@@ -10,8 +10,8 @@
 // never as HTML, and no image is taken (their licences vary). It is the LIVE tier: fetched now, credited, and not
 // the atlas's own words. If the host cannot be reached the card says so in one line and is otherwise as it was.
 
-import { getJSON } from './gl.js?v=20261112T060955Z';
-import { TIERS } from './catalog.js?v=20261112T060955Z';
+import { getJSON } from './gl.js?v=20261124T234638Z';
+import { TIERS } from './catalog.js?v=20261124T234638Z';
 
 export const WIKI_API = 'https://en.wikipedia.org/w/api.php';
 export const LEAD_CAP = 1500;          // characters of the lead shown; the cut is at the end of a sentence

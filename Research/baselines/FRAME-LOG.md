@@ -37,3 +37,21 @@ Every accepted change, with the reason. A baseline moved without a reason here i
 - **2026-11-10 19:12** · `sheet-atlas` — Sixth round. Wide rivers and the lakes strung along them are water in the mask: the Amazon, Congo, Ob, Yenisei and Lena draw as water with a shoreline in the Atlas register, and northern Canada has more lake. 0.28% of pixels, mean 0.09 levels.
 - **2026-11-11 20:09** · `globe-default` — Tenth round. Cloud only (3.2% of pixels, mean 0.71): sheet cloud of a middling share is drawn through the cloud photograph's systems and not as a veil, so the sea west of Europe, off north-west Africa and off Angola is clear between brighter systems; and layered cloud no longer brightens toward the limb as heaped cloud does. Ground, air, names unchanged; diff read in Research/baselines/_diff.
 - **2026-11-11 20:09** · `globe-motion-atlantic` — Tenth round. Cloud only (3.9% of pixels, mean 1.05): the same two changes. The North Atlantic storm south of Iceland is brighter and its surroundings clearer, the sheet off north-west Africa is the photograph's broken systems, and the far South Atlantic at the limb is dimmer. Tracers unchanged.
+
+The atlas interface refresh was captured in Chromium with SwiftShader at the configured 1440 × 900 viewport.
+
+- **2026-11-24** · `globe-default` — Stories and the daylight share replace the two open data panels. Africa, the Arabian Peninsula, and the transition into night remain legible.
+- **2026-11-24** · `globe-night-asia` — The smaller Planet panel exposes more of the eastern limb. City lights across South and East Asia and the sunlight at the limb remain visible.
+- **2026-11-24** · `globe-motion-atlantic` — The new rails frame the same wind, surface-current and shipping tracers. The cloud bands and both Atlantic coastlines are visible.
+- **2026-11-24** · `region-himalaya` — The shorter side panels expose more of the regional map. The snowy Himalayan arc, Tibetan lakes, and the Ganges plain retain their detail.
+- **2026-11-24** · `sheet-atlas` — Story and metric panels leave more room for the Winkel Tripel sheet. Both insets remain visible and the labels use the new panel bounds.
+- **2026-11-24** · `sheet-lens-temp` — The temperature legend moves to the center and carries the model and 1991–2020 baseline explanation. The same warm and cold regions are visible.
+
+The restored desktop layout was checked at 1440 × 900 in Chromium with SwiftShader.
+
+- **2026-11-24** · `globe-default` — The full Systems and Planet panels return alongside the globe. Coastlines, cloud bands and the transition into night remain legible.
+- **2026-11-24** · `globe-night-asia` — Lighter panels frame the dark globe. City lights and the sunlit limb remain visible.
+- **2026-11-24** · `globe-motion-atlantic` — The restored panels frame the wind, current and shipping layers at their original strengths.
+- **2026-11-24** · `region-himalaya` — The panels use the restored atlas layout. The Himalayan relief, rivers and regional labels remain visible in the map area.
+- **2026-11-24** · `sheet-atlas` — The Systems panel fits beside the Europe inset, and both regional insets remain visible alongside the political labels.
+- **2026-11-24** · `sheet-lens-temp` — The map retains the temperature scale and explanation alongside the full Systems and Planet panels.

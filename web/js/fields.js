@@ -47,6 +47,13 @@ export class Fields {
   async boot(tMs) {
     const gl = this.gl;
     const ms = monthState(tMs);
+    this._load('pop1', async () => {
+      const response = await fetch(stamped(F + 'pop_1deg.bin'));
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const bytes = await response.arrayBuffer();
+      if (bytes.byteLength !== 360 * 180 * 4) throw new Error('Unexpected population grid size');
+      this.cpu.pop1 = new Float32Array(bytes);
+    });
     const metas = Promise.all([getJSON(F + 'climate.json'), getJSON(F + 'human.json')])
       .then(([c, h]) => { this.meta.climate = c; this.meta.human = h; });
     const first = Promise.all([this._preview(ms.i0), this._preview(ms.i1)]);
@@ -142,7 +149,6 @@ export class Fields {
     for (let m = 0; m < 12; m++) await this._preview(m);       // the whole year at preview quality, so scrubbing never shows a hole
     for (const k of ['pop', 'co2', 'ships']) await this.loadStatic(k);
     this._load('lanes', async () => { const b = await loadBitmap(F + 'lanes.png'); this.cpu.lanes = { w: b.width, h: b.height, d: pixelsOf(b) }; b.close(); });
-    this._load('pop1', async () => { this.cpu.pop1 = new Float32Array(await (await fetch(stamped(F + 'pop_1deg.bin'))).arrayBuffer()); });
     this._load('co21', async () => { this.cpu.co21 = new Float32Array(await (await fetch(stamped(F + 'co2_1deg.bin'))).arrayBuffer()); });
   }
 
@@ -150,7 +156,14 @@ export class Fields {
     const a = this.albedo[m];
     if (a.preview || a.pLoading) return a.pLoading;
     a.pLoading = (async () => {
-      try { const b = await loadBitmap(`${F}albedo_${pad(m)}_p.webp`); a.preview = texFromImage(this.gl, b, { format: 'rgb' }); b.close(); this.onChange('albedo', 'preview'); }
+      try {
+        const b = await loadBitmap(`${F}albedo_${pad(m)}_p.webp`);
+        a.preview = texFromImage(this.gl, b, { format: 'rgb' });
+        const w = 512, h = 256, rgba = pixelsOf(b, w, h), d = new Int16Array(w * h);
+        for (let i = 0, j = 0; i < d.length; i++, j += 4) d[i] = 2 * rgba[j + 1] - rgba[j] - rgba[j + 2];
+        a.green = { w, h, d };
+        b.close(); this.onChange('albedo', 'preview');
+      }
       catch (e) { console.error('albedo preview', m, e); }
     })();
     return a.pLoading;
@@ -263,6 +276,12 @@ export class Fields {
   }
   waterFrac(lon, lat) { const f = this.cpu.water; return f ? f.d[this._px(f, lon, lat)] / 255 : NaN; }
   nightLight(lon, lat) { const f = this.cpu.night; if (!f) return NaN; const v = f.d[this._px(f, lon, lat)] / 255; return v * v; }
+  greenness(lon, lat, ms) {
+    const a = this.albedo[ms.i0].green, b = this.albedo[ms.i1].green;
+    if (!a || !b) return NaN;
+    const i = this._px(a, lon, lat), v = a.d[i] * (1 - ms.f) + b.d[i] * ms.f;
+    return Math.max(0, Math.min(1, v * 3.2 / 255));
+  }
   countryId(lon, lat) { const f = this.cpu.countries; return f ? f.d[this._px(f, lon, lat)] : 0; }
   isDisputed(lon, lat) { const f = this.cpu.disputed; return f ? f.d[this._px(f, lon, lat)] > 127 : false; }
   /** A log-companded static field decoded to physical units (people/km2, t CO2/km2/yr, AIS positions). */

@@ -18,11 +18,13 @@ export class Live {
     if (this.status.quakes === 'loading') return;
     this._set('quakes', 'loading');
     try {
-      const j = await (await fetch('https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/4.5_month.geojson')).json();
+      const response = await fetch('https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/4.5_month.geojson');
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const j = await response.json();
       this.quakes = { fetched: Date.now(), generated: j.metadata.generated,
         rows: j.features.map((f) => [new Date(f.properties.time).toISOString(), f.geometry.coordinates[0], f.geometry.coordinates[1], f.geometry.coordinates[2], f.properties.mag, f.properties.place || '', f.properties.time]) };
       this._set('quakes', 'ready', `USGS feed generated ${new Date(j.metadata.generated).toISOString().slice(0, 16).replace('T', ' ')} UTC`);
-    } catch (e) { this._set('quakes', 'unavailable', 'The USGS feed could not be reached.'); }
+    } catch (e) { this.quakes = null; this._set('quakes', 'unavailable', 'The USGS feed could not be reached.'); }
   }
 
   /** NOAA OVATION: [lon 0..359, lat -90..90, probability] on a 1-degree NODE grid -> canonical 360 x 180 cells. */

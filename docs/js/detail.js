@@ -29,11 +29,12 @@
 // class of bug in this project (CLAUDE.md, "The canonical frame"); change nothing here without
 // running that test.
 
-import { UNIT } from './fields.js?v=20261112T060955Z';
-import { stamped } from './gl.js?v=20261112T060955Z';
-import { R_KM } from './camera.js?v=20261112T060955Z';
-import { WATER_RULE, boxMean, waterFlag, runRule } from './water.js?v=20261112T060955Z';
-import { OFM, STREETS, streetPlan } from './streets.js?v=20261112T060955Z';
+import { UNIT } from './fields.js?v=20261124T234638Z';
+import { stamped } from './gl.js?v=20261124T234638Z';
+import { R_KM } from './camera.js?v=20261124T234638Z';
+import { WATER_RULE, boxMean, waterFlag, runRule } from './water.js?v=20261124T234638Z';
+import { OFM, STREETS, streetPlan } from './streets.js?v=20261124T234638Z';
+import { StreetWorker } from './street-client.js?v=20261124T234638Z';
 
 const D2R = Math.PI / 180, R2D = 180 / Math.PI;
 export const KM_PER_DEG = R_KM * D2R;                       // 111.195 km on the atlas's sphere
@@ -565,6 +566,7 @@ export class Detail {
   /** onChange() asks for a redraw. opts.frozen: no fades and no retries by timer; a deterministic frame waits on `busy`. */
   constructor(gl, fields, onChange, opts = {}) {
     this.gl = gl; this.fields = fields; this.onChange = onChange || (() => {}); this.frozen = !!opts.frozen;
+    this.streets = opts.streets || new StreetWorker();
     this.enabled = false;
     this.cur = null;          // the window on screen: {plan, alb: {tex, at, night, thumb}|null, elev: {tex, at, water, flag, w, h, waterC}|null, note, credit}
     this.job = null;          // the window on its way
@@ -598,7 +600,7 @@ export class Detail {
     this.enabled = true;
     if (flying && !aim && this.job && this.job.aim) return;               // the destination's window is on its way: leave it be
     const k = cam.kmPerPx();
-    const sig = `${cam.view},${cam.w},${cam.h},${k.toFixed(4)},${cam.center().map((v) => v.toFixed(4))},${sun ? Math.round(sun.lon / 2) : 'x'}`;
+    const sig = `${cam.view},${cam.w},${cam.h},${k.toFixed(4)},${cam.center().map((v) => v.toFixed(4))},${cam.pitch},${cam.bearing},${sun ? Math.round(sun.lon / 2) : 'x'}`;
     if (sig === this._lastView) return;
     if (!(k < PLAN.activeKm)) { this._lastView = sig; this._cancel(); if (this.state !== 'idle') this._set('idle', ''); return; }
     const view = viewBox(cam);
@@ -1036,26 +1038,10 @@ export class Detail {
 
   /** Streets and buildings for a plan, drawn by the worker: {overlay: ImageBitmap|null, pattern: ImageBitmap, ...}, or null where no worker can be had. */
   _streets(job, plan) {
-    if (this._sw === undefined) {
-      try {
-        const u = new URL('./streets.worker.js', import.meta.url); u.search = new URL(import.meta.url).search;   // the build's code stamp, if any
-        this._sw = new Worker(u, { type: 'module' });
-        this._sCalls = new Map(); this._sId = 0;
-        this._sw.onmessage = (ev) => {
-          const c = this._sCalls.get(ev.data.id); if (!c) { if (ev.data.overlay) ev.data.overlay.close(); if (ev.data.pattern) ev.data.pattern.close(); return; }
-          this._sCalls.delete(ev.data.id);
-          if (ev.data.error) c.reject(ev.data.error === 'aborted' ? new DOMException('aborted', 'AbortError') : new Error(ev.data.error)); else c.resolve(ev.data);
-        };
-        this._sw.onerror = () => { const cs = [...this._sCalls.values()]; this._sCalls.clear(); this._sw = null; for (const c of cs) c.reject(new Error('the streets worker failed')); };
-      } catch (e) { this._sw = null; }
-    }
-    if (!this._sw) return Promise.resolve(null);
-    const p = plan.alb, id = ++this._sId;
-    return new Promise((resolve, reject) => {
-      this._sCalls.set(id, { resolve, reject });
-      job.ctl.signal.addEventListener('abort', () => { if (this._sw && this._sCalls.has(id)) this._sw.postMessage({ cancel: id }); }, { once: true });
-      this._sw.postMessage({ id, win: plan.win, w: p.w, h: p.h, z: plan.streets.z, tiles: plan.streets.tiles, texelM: p.texelKm * 1000 });
-    });
+    const p = plan.alb;
+    return this.streets.request({
+      win: plan.win, w: p.w, h: p.h, z: plan.streets.z, tiles: plan.streets.tiles, texelM: p.texelKm * 1000,
+    }, job.ctl.signal);
   }
 
   async _elevation(job, plan) {

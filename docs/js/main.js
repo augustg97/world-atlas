@@ -3,26 +3,37 @@
 // The substrate is drawn into a cache whenever state or camera changes; things that move
 // (tracers, aircraft, satellites, pulses) are drawn over it every frame.
 
-import { Camera, R_KM } from './camera.js?v=20261112T060955Z';
-import { Fields, UNIT } from './fields.js?v=20261112T060955Z';
-import { Earth, LENSES } from './earth.js?v=20261112T060955Z';
-import { Detail } from './detail.js?v=20261112T060955Z';
-import { sun, moon, monthState, seasonName, D2R } from './astro.js?v=20261112T060955Z';
-import { program, setUniforms, texFromImage, loadVersion } from './gl.js?v=20261112T060955Z';
-import { LineBatch, PointBatch, Labels, segmentsFromLines, deq, graticule, parallels } from './overlays.js?v=20261112T060955Z';
-import { FlowTracers, Flights, makeSamplers, seedRandom } from './particles.js?v=20261112T060955Z';
-import { SYSTEMS, LAYERS, paletteCanvas, FUEL_COLORS } from './catalog.js?v=20261112T060955Z';
-import { Data } from './data.js?v=20261112T060955Z';
-import { INSETS, Inset, insetAlpha, INSET_PAD } from './insets.js?v=20261112T060955Z';
-import { Live, HOUR, DAY } from './live.js?v=20261112T060955Z';
-import { UI, SPEEDS } from './ui.js?v=20261112T060955Z';
-import * as Cards from './cards.js?v=20261112T060955Z';
-import { peopleBySun, iceExtents, meanTemps, mixMonth } from './dash.js?v=20261112T060955Z';
+import { Camera, R_KM } from './camera.js?v=20261124T234638Z';
+import { Fields, UNIT } from './fields.js?v=20261124T234638Z';
+import { Earth, LENSES } from './earth.js?v=20261124T234638Z';
+import { Detail } from './detail.js?v=20261124T234638Z';
+import { sun, moon, monthState, seasonName, D2R } from './astro.js?v=20261124T234638Z';
+import { program, setUniforms, texFromImage, loadVersion } from './gl.js?v=20261124T234638Z';
+import { LineBatch, PointBatch, Labels, segmentsFromLines, deq, graticule, parallels } from './overlays.js?v=20261124T234638Z';
+import { FlowTracers, Flights, makeSamplers, seedRandom } from './particles.js?v=20261124T234638Z';
+import { SYSTEMS, LAYERS, paletteCanvas, FUEL_COLORS } from './catalog.js?v=20261124T234638Z';
+import { Data } from './data.js?v=20261124T234638Z';
+import { INSETS, Inset, insetAlpha, INSET_PAD } from './insets.js?v=20261124T234638Z';
+import { Live, HOUR, DAY } from './live.js?v=20261124T234638Z';
+import { UI, SPEEDS } from './ui.js?v=20261124T234638Z';
+import { STORY_BY_ID } from './stories.js?v=20261124T234638Z';
+import { Buildings, CITY_CREDIT, CITY_EXAMPLES, CITY_START_KM } from './cities.js?v=20261124T234638Z';
+import { StreetWorker } from './street-client.js?v=20261124T234638Z';
+import * as Cards from './cards.js?v=20261124T234638Z';
+import { peopleBySun, iceExtents, meanTemps, mixMonth } from './dash.js?v=20261124T234638Z';
 
 const canvas = document.getElementById('gl');
 const gl = canvas.getContext('webgl2', { antialias: false, alpha: false, powerPreference: 'high-performance', preserveDrawingBuffer: true });
-const bootMsg = (s) => { document.getElementById('boot-msg').textContent = s; };
-if (!gl) { bootMsg('This atlas needs WebGL 2, which this browser does not provide.'); throw new Error('no webgl2'); }
+const boot = document.getElementById('boot');
+const bootMsg = (s) => { boot.querySelector('#boot-msg').textContent = s; };
+function showPreview(message) {
+  document.getElementById('ui').inert = true;
+  if (!boot.isConnected) document.body.append(boot);
+  boot.classList.remove('gone');
+  boot.classList.add('preview');
+  boot.querySelector('.fallback').hidden = false;
+  if (message) boot.querySelector('.fallback-copy > p:nth-of-type(2)').textContent = message;
+}
 
 // ?frozen=1 is the deterministic mode the visual ratchet needs (Research/baselines/frames.json):
 // the clock is pinned to #t=, nothing is driven by requestAnimationFrame or the wall clock, the
@@ -31,26 +42,34 @@ if (!gl) { bootMsg('This atlas needs WebGL 2, which this browser does not provid
 const FROZEN = new URLSearchParams(location.search).has('frozen');
 const FROZEN_T = Date.UTC(2026, 5, 21, 12, 0, 0);
 const FROZEN_STEPS = 240;
+const FEED_REFRESH = 10 * 60000;
 if (FROZEN) seedRandom(20261109);
 
+if (!gl) {
+  showPreview();
+} else {
 const cam = new Camera();
+const DEFAULT_LAYERS = Object.fromEntries(Object.values(LAYERS).map((l) => [l.id, !!l.on]));
 const state = {
   t: Date.now(), clock: 'live', speed: 'real', style: 'space', lens: 'none', selCountry: 0,
-  layers: Object.fromEntries(Object.values(LAYERS).map((l) => [l.id, !!l.on])),
+  layers: { ...DEFAULT_LAYERS }, story: null, city: false, pins: [],
 };
 let earthDirty = true, labelsDirty = true, lastEarthDraw = 0, selection = null, card = null, hashTimer = 0;
-const fields = new Fields(gl, () => { earthDirty = true; });
+let beforeStory = null, rotationEnd = null;
+const fields = new Fields(gl, () => { earthDirty = true; if (card) refreshCardSoon(); });
 const earth = new Earth(gl, fields);
 const data = new Data();
 const live = new Live(gl, fields, (k, s) => { earthDirty = true; feedStatus(); });
 // finer imagery and elevation for the part of the Earth in view, streamed when close in (register A2)
-const detail = new Detail(gl, fields, () => { earthDirty = true; window.__DETAIL_ERROR = detail.error || undefined; feedStatus(); }, { frozen: FROZEN });
+const streets = new StreetWorker();
+const detail = new Detail(gl, fields, () => { earthDirty = true; window.__DETAIL_ERROR = detail.error || undefined; feedStatus(); }, { frozen: FROZEN, streets });
+const buildings = new Buildings(gl, streets, () => { earthDirty = true; });
 const labels = new Labels(document.getElementById('labels'));
 // Insets of the whole-Earth sheet: second views of the same atlas over open water (insets.js). Each has its own
 // camera and its own label layer, which draws into its frame on the main layer's canvas.
 const insets = INSETS.map((def) => { const I = new Inset(def); I.labels = new Labels(labels.canvas, true); return I; });
 // The interface's panels, as rectangles of the window. No name is set under one and no inset is put under one.
-const PANELS = ['top', 'left', 'left-open', 'card', 'dash', 'legend', 'hud', 'time'], PANEL_PAD = 4;
+const PANELS = ['top', 'left', 'card', 'compare', 'dash', 'spotlight', 'legend', 'hud', 'time', 'map-tools', 'city-controls', 'mobile-nav', 'search-panel'], PANEL_PAD = 4;
 let panelRects = [], panelSig = '';
 const astro = { sun: sun(state.t), moon: moon(state.t), month: monthState(state.t) };
 let progs = {}, batches = {}, tracers = {}, flights = null, samplers = null, cache = null, dashCache = {}, ui = null;
@@ -60,23 +79,44 @@ const isNow = () => !FROZEN && (state.clock === 'live' || Math.abs(state.t - Dat
 
 // ------------------------------------------------------------------------------------ app API
 const app = {
-  state, cam, fields, earth, data, live, detail,
+  state, cam, fields, earth, data, live, detail, buildings,
   setLayer(id, on) {
     state.layers[id] = on; earthDirty = labelsDirty = true;
     if (on) ensureLayer(id);
     ui.syncControls(); feedStatus(); saveHash();
   },
   setLens(id) {
-    state.lens = id; earthDirty = true;
+    state.lens = id; earthDirty = labelsDirty = true;
     const L = LENSES[id]; if (L && L.static) { pending.add('lens'); fields.loadStatic(L.static).then(() => { pending.delete('lens'); earthDirty = true; }); }
-    ui.syncControls(); saveHash();
+    ui.syncControls(); refreshCard(); saveHash();
   },
-  setView(v) { cam.setView(v); earthDirty = labelsDirty = true; resetTracers(); ui.syncControls(); saveHash(); },
+  setView(v) {
+    if (v === 'sheet' && state.city) closeCity();
+    cam.setView(v); earthDirty = labelsDirty = true; resetTracers(); ui.syncControls(); saveHash();
+  },
   setStyle(s) { state.style = s; earthDirty = labelsDirty = true; buildStatic(); ui.syncControls(); saveHash(); },
-  setTime(t) { state.t = t; state.clock = 'paused'; timeChanged(); },
-  goLive() { state.t = Date.now(); state.clock = 'live'; state.speed = 'real'; timeChanged(); ui.syncControls(); },
-  togglePlay() { state.clock = state.clock === 'paused' ? 'run' : 'paused'; ui.clock(); },
-  setSpeed(id) { state.speed = id; if (state.clock !== 'paused') state.clock = id === 'real' && Math.abs(state.t - Date.now()) < 5000 ? 'live' : 'run'; ui.clock(); },
+  setTime(t) { rotationEnd = null; state.t = t; state.clock = 'paused'; timeChanged(); },
+  goLive() {
+    rotationEnd = null; state.t = Date.now(); state.clock = 'live'; state.speed = 'real';
+    timeChanged(); ui.syncControls();
+    if (ui.planetOpen()) app.showPlanet();
+  },
+  togglePlay() { state.clock = state.clock === 'paused' ? 'run' : 'paused'; ui.clock(); saveHash(); },
+  setSpeed(id) { rotationEnd = null; state.speed = id; if (state.clock !== 'paused') state.clock = id === 'real' && Math.abs(state.t - Date.now()) < 5000 ? 'live' : 'run'; ui.clock(); },
+  startStory, exitStory, storyAction,
+  rotationState: () => rotationEnd === null ? null : state.clock,
+  showPlanet() {
+    if (isNow() && (!live.quakes || Date.now() - live.quakes.fetched >= FEED_REFRESH)) live.loadQuakes();
+    updateDash(true);
+  },
+  comparePlaces: () => Cards.comparisonCard(ctx(), state.pins),
+  setPins(pins) { state.pins = pins; labelsDirty = true; },
+  zoom(factor) { fly = null; cam.zoom(factor); earthDirty = labelsDirty = true; settledAt = performance.now(); saveHash(); },
+  home() { fly = null; closeCity(); cam.home(); if (cam.view === 'globe') cam.lookAt(astro.sun.lon + 42, 18); resetTracers(); earthDirty = labelsDirty = true; saveHash(); },
+  openCity, closeCity,
+  setCityPitch(pitch) { if (state.city) setCityPose(pitch, cam.bearing); },
+  turnCity(delta) { if (state.city) setCityPose(cam.pitch, cam.bearing + delta); },
+  retryBuildings() { if (state.city) buildings.clear(); },
   search: (q) => data.search(q),
   pick(hit) { flyTo(hit.lon, hit.lat, Math.min(cam.kmPerPx(), hit.km)); openRef(hit.ref); },
   openRef(s) {
@@ -89,7 +129,7 @@ const app = {
   flyToSelection() { if (selection) flyTo(selection.lon, selection.lat, Math.min(cam.kmPerPx(), 4)); },
 };
 
-function ctx() { return { F: fields, D: data, astro, t: state.t }; }
+function ctx() { return { F: fields, D: data, astro, t: state.t, lens: state.lens }; }
 function openRef(ref) {
   const [kind, obj, extra] = ref;
   const build = {
@@ -108,12 +148,117 @@ function refreshCard() {
   if (!card) return;
   const c = card.build();
   selection = c.lon !== undefined ? { lon: c.lon, lat: c.lat } : null;
+  if (selection) c.lensReading = Cards.lensReading(ctx(), c.lon, c.lat);
   ui.showCard(c);
 }
 
 let fly = null;
 const pending = new Set();       // lazy data still on its way; a frozen frame waits for it
+const STORY_BASE = { ...DEFAULT_LAYERS, marks: false, borders: false, wind: false, currents: false, ships: false, flights: false, quakesLive: false };
+
+function setCityPose(pitch, bearing) {
+  cam.pitch = Math.max(0, Math.min(58, pitch));
+  cam.bearing = ((bearing + 180) % 360 + 360) % 360 - 180;
+  earthDirty = labelsDirty = true;
+  settledAt = performance.now();
+  ui.cityControls();
+  saveHash();
+}
+
+function openCity(place) {
+  if (state.story) exitStory();
+  if (cam.view !== 'globe') app.setView('globe');
+  if (place) {
+    const example = CITY_EXAMPLES.find((city) => city.name.toLowerCase() === place.title?.toLowerCase());
+    if (example) place = example;
+    app.closeCard();
+    buildings.clear();
+  }
+  state.city = true;
+  setCityPose(52, 0);
+  ui.syncPanels();
+  const [lon, lat] = place ? [place.lon, place.lat] : cam.center();
+  const km = cam.kmPerPx();
+  if (place || km > 0.014) flyTo(lon, lat, place ? CITY_START_KM : Math.min(km, CITY_START_KM));
+}
+
+function closeCity() {
+  if (!state.city) return;
+  state.city = false;
+  buildings.clear();
+  setCityPose(0, 0);
+  ui.syncPanels();
+}
+
+function startStory(id) {
+  const story = STORY_BY_ID[id];
+  if (!story || state.story?.id === id) return;
+  beforeStory ||= {
+    style: state.style, lens: state.lens, layers: state.layers, t: state.t, clock: state.clock,
+    speed: state.speed, view: cam.view, center: cam.center(), km: cam.kmPerPx(), city: state.city,
+    pitch: cam.pitch, bearing: cam.bearing,
+  };
+  closeCity();
+  rotationEnd = null;
+  app.closeCard();
+  state.story = { id, month: 5, pole: 'north', recent: true };
+  state.layers = { ...STORY_BASE, ...story.view.layers };
+  state.style = story.view.style;
+  cam.setView('globe'); cam.home();
+  for (const layer in state.layers) if (state.layers[layer] && !beforeStory.layers[layer]) ensureLayer(layer);
+  buildStatic(); resetTracers();
+  app.setLens(story.view.lens);
+  if (id === 'seasons') {
+    storyAction('month', '5');
+    flyTo(-35, 68, cam.kmPerPx());
+  } else {
+    app.goLive();
+    if (id === 'plates') flyTo(174, 8, cam.kmPerPx());
+    else flyTo(astro.sun.lon + 54, 12, cam.kmPerPx());
+  }
+  ui.syncControls();
+  updateDash(true);
+}
+function exitStory() {
+  if (!beforeStory) return;
+  const { style, lens, layers, t, clock, speed, view, center, km, city, pitch, bearing } = beforeStory;
+  beforeStory = null;
+  rotationEnd = null;
+  Object.assign(state, { story: null, style, lens, layers, t: clock === 'live' ? Date.now() : t, clock, speed, city });
+  cam.setView(view); cam.setKmPerPx(km);
+  setCityPose(pitch, bearing);
+  flyTo(...center, km);
+  buildStatic(); resetTracers(); timeChanged(); ui.syncControls();
+}
+function storyAction(action, value) {
+  const story = state.story;
+  if (action === 'rotation' && story?.id === 'daylight') {
+    if (rotationEnd !== null) { app.togglePlay(); return; }
+    rotationEnd = state.t + DAY;
+    state.speed = 'h1'; state.clock = 'run';
+    timeChanged(); ui.syncControls();
+  } else if (action === 'month' && story?.id === 'seasons') {
+    story.month = Number(value);
+    app.setTime(Date.UTC(new Date(state.t).getUTCFullYear(), story.month, 21, 12));
+    ui.syncControls();
+  } else if (action === 'pole' && story?.id === 'seasons') {
+    story.pole = value;
+    flyTo(-35, value === 'north' ? 68 : -68, cam.kmPerPx());
+    ui.syncControls();
+  } else if (action === 'lens' && story?.id === 'seasons') {
+    app.setLens(value);
+  } else if (action === 'earthquakes' && story?.id === 'plates') {
+    story.recent = value === 'recent';
+    app.setLayer('quakesLive', story.recent);
+    app.setLayer('quakes', !story.recent);
+    if (story.recent) app.goLive();
+  }
+}
+
 function flyTo(lon, lat, km) {
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches && !FROZEN) {
+    fly = null; cam.setKmPerPx(km); cam.lookAt(lon, lat); earthDirty = labelsDirty = true; saveHash(); return;
+  }
   const c = cam.center();
   fly = { t0: performance.now(), from: [c[0], c[1], cam.kmPerPx()], to: [lon, lat, km] };
   // The flight takes 0.9 s and where it ends is known now: the focus window for the destination is asked for at once,
@@ -210,7 +355,7 @@ function buildTracers() {
 
 // ------------------------------------------------------------------------------------ drawing
 function makeCache() {
-  if (cache) { gl.deleteFramebuffer(cache.fb); gl.deleteTexture(cache.tex); }
+  if (cache) { gl.deleteFramebuffer(cache.fb); gl.deleteTexture(cache.tex); if (cache.depth) gl.deleteRenderbuffer(cache.depth); }
   const tex = gl.createTexture();
   gl.bindTexture(gl.TEXTURE_2D, tex);
   gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8, canvas.width, canvas.height);
@@ -243,7 +388,11 @@ function tick(now) {
   else if (state.clock === 'run') {
     const sp = SPEEDS.find((s) => s.id === state.speed);
     if (sp.days) { fs.acc = (fs.acc || 0) + (dt / 1000) * sp.days; if (fs.acc >= 1) { const n = Math.floor(fs.acc); fs.acc -= n; state.t += n * DAY; timeChanged(); } }
-    else { state.t += dt * sp.rate; astroUpdate(); if (sp.rate > 30) earthDirty = labelsDirty = true; }
+    else {
+      state.t += dt * sp.rate;
+      if (rotationEnd !== null && state.t >= rotationEnd) app.setTime(rotationEnd);
+      else { astroUpdate(); if (sp.rate > 30) earthDirty = labelsDirty = true; }
+    }
   }
   if (now - lastEarthDraw > 2500) earthDirty = true;                 // the terminator creeps even in real time
 
@@ -267,12 +416,22 @@ function tick(now) {
   // the focus window is asked for sooner than the full month is (120 ms after the last movement against 350): a request that turns
   // out early costs a few tiles and is stopped, and a late one is half a second of blur
   detail.update(cam, now - settledAt > 120 && !fly, !!state.layers.detail, state.layers.lights && state.layers.daylight ? astro.sun : null, !!fly);
+  buildings.update(cam, now - settledAt > 180 && !fly, state.city && state.layers.detail);
   if (detail.fading(performance.now())) earthDirty = true;           // a window that has just arrived fades in
   if (earthDirty) {
     earthDirty = false; lastEarthDraw = now; state.atNow = isNow();
     gl.bindFramebuffer(gl.FRAMEBUFFER, cache.fb);
     gl.viewport(0, 0, cache.w, cache.h);
     earth.draw(state, cam, astro, detail);
+    if (state.city && buildings.vertices) {
+      if (!cache.depth) {
+        cache.depth = gl.createRenderbuffer();
+        gl.bindRenderbuffer(gl.RENDERBUFFER, cache.depth);
+        gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, cache.w, cache.h);
+        gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, cache.depth);
+      }
+      buildings.draw(cam, astro.sun, state.style === 'atlas');
+    }
     // each inset: the same shader through the inset's own camera, into a target of its own
     const relief = earth.relief;
     for (const I of insets) if (I.rect) { insetTarget(I); gl.bindFramebuffer(gl.FRAMEBUFFER, I.fb); gl.viewport(0, 0, I.pw, I.ph); earth.draw(state, I.cam, astro, null); }
@@ -348,7 +507,12 @@ function tick(now) {
   if (labelsDirty) { labelsDirty = false; drawNames(); }
   // 6. panels
   fs.detail = det.detail;
-  if (now - (fs.uiAt || 0) > 250) { fs.uiAt = now; ui.clock(); ui.hud(k, hover, det.detail === 'full' ? (detail.busy ? 'fetching finer tiles…' : '') : det.detail === 'preview' ? 'refining detail…' : 'loading terrain…', state.layers.detail && detail.cur && detail.uniforms(performance.now()).uDetAlbW > 0 ? detail.cur.credit : null); }
+  if (now - (fs.uiAt || 0) > 250) {
+    fs.uiAt = now; ui.clock(); ui.cityControls();
+    const credit = state.layers.detail && detail.cur && detail.uniforms(performance.now()).uDetAlbW > 0 ? detail.cur.credit || [] : [];
+    const sources = buildings.vertices && !credit.some((c) => c.link === CITY_CREDIT.link) ? [...credit, CITY_CREDIT] : credit;
+    ui.hud(k, hover, det.detail === 'full' ? (detail.busy ? 'fetching finer tiles…' : '') : det.detail === 'preview' ? 'refining detail…' : 'loading terrain…', sources);
+  }
   if (now - (fs.dashAt || 0) > 1000) { fs.dashAt = now; updateDash(false); if (state.clock !== 'paused' && card) refreshCard(); }
 }
 
@@ -359,7 +523,9 @@ function drawLines(camU, k, a) {
   if (L.graticule) { line('graticule'); line('equator'); }
   if (L.marks) line('circles', { dashKm: k * 14, duty: 0.55 });
   if (L.rivers) line('rivers', { alpha: Math.min(1, 14 / k) });
-  if (L.borders) { line('borders', { alpha: Math.min(1, 0.55 + 6 / k) }); line('disputed', { dashKm: Math.max(18, k * 9), duty: 0.55 }); }
+  if (L.borders) {
+    line('borders', { alpha: Math.min(1, 0.55 + 6 / k) }); line('disputed', { dashKm: Math.max(18, k * 9), duty: 0.55 });
+  }
   if (L.plates) { line('plates'); line('subduction'); }
 }
 /** The same for the catalogued points. */
@@ -442,6 +608,22 @@ function drawNames() {
     c.globalAlpha = 1;
   }
   drawMarks();
+  drawPins();
+}
+function drawPins() {
+  if (!state.pins.length) return;
+  cam.beginFrame();
+  const c = labels.ctx;
+  c.setTransform(labels.dpr, 0, 0, labels.dpr, 0, 0);
+  c.textAlign = 'center'; c.textBaseline = 'middle'; c.font = '700 11px system-ui';
+  state.pins.forEach(({ lon, lat }, i) => {
+    const p = cam.project(lon, lat);
+    if (!p || panelRects.some(([l, t, r, b]) => p[0] > l && p[0] < r && p[1] > t && p[1] < b)) return;
+    c.beginPath(); c.arc(p[0], p[1], 9, 0, Math.PI * 2);
+    c.fillStyle = i === 0 ? '#f7ca7a' : '#9dcbe7'; c.fill();
+    c.fillStyle = '#0d1620'; c.fillText(i === 0 ? 'A' : 'B', p[0], p[1] + 0.5);
+  });
+  c.textAlign = 'start';
 }
 /** The thin rule of an inset's frame and of its outline on the main map: one weight, one ink. */
 function rule(c, atlas, x, y, w, h) {
@@ -472,7 +654,7 @@ function updateDash(force) {
     const rows = live.quakes.rows, t = state.t;
     const wk = rows.filter((q) => t - q[6] < 7 * DAY && t >= q[6]);
     d.quakes = { day: rows.filter((q) => t - q[6] < DAY && t >= q[6]).length, week: wk.length, top: wk.sort((a, b) => b[4] - a[4])[0] };
-  } else d.quakeNote = live.status.quakes === 'unavailable' ? 'feed unavailable' : isNow() ? 'fetching…' : 'shown only at the present';
+  } else d.quakeNote = live.status.quakes === 'unavailable' ? 'Feed unavailable' : !isNow() ? 'Shown only at the present' : live.status.quakes === 'loading' ? 'Fetching…' : 'Open Planet to load the feed';
   ui.dashboard(d);
 }
 function nearestBig(lon, lat) {
@@ -531,6 +713,7 @@ function saveHash() {
     if (state.clock !== 'live') p.set('t', new Date(state.t).toISOString().slice(0, 16) + 'Z');
     p.set('v', cam.view); p.set('s', state.style); const kk = cam.kmPerPx(), dp = kk < 0.5 ? 4 : 2;                      // close in, a hundredth of a degree is a kilometre: a link must come back to the same street
     p.set('ll', `${c[0].toFixed(dp)},${c[1].toFixed(dp)}`); p.set('km', kk.toFixed(kk < 0.5 ? 3 : 2));
+    if (state.city) { p.set('city', '1'); p.set('pitch', cam.pitch.toString()); p.set('bearing', cam.bearing.toString()); }
     if (state.lens !== 'none') p.set('lens', state.lens);
     p.set('on', Object.keys(state.layers).filter((k) => state.layers[k]).join(','));
     history.replaceState(null, '', '#' + p.toString().replace(/%2C/g, ',').replace(/%3A/g, ':'));
@@ -541,8 +724,14 @@ function loadHash() {
   if (FROZEN) { state.t = FROZEN_T; state.clock = 'paused'; }
   if (p.get('t')) { const t = Date.parse(p.get('t')); if (Number.isFinite(t)) { state.t = t; state.clock = 'paused'; } }
   if (p.get('s') === 'atlas') state.style = 'atlas';
-  if (p.get('lens') && LENSES[p.get('lens')]) state.lens = p.get('lens');
+  if (p.get('lens') && Object.hasOwn(LENSES, p.get('lens'))) state.lens = p.get('lens');
   if (p.get('on') !== null) { const on = new Set(p.get('on').split(',')); for (const k in state.layers) state.layers[k] = on.has(k); }
+  if (p.get('city') === '1' && p.get('v') !== 'sheet') {
+    state.city = true;
+    const pitch = Number(p.get('pitch') ?? 52), bearing = Number(p.get('bearing') ?? 0);
+    cam.pitch = Number.isFinite(pitch) ? Math.max(0, Math.min(58, pitch)) : 52;
+    cam.bearing = Number.isFinite(bearing) ? Math.max(-180, Math.min(180, bearing)) : 0;
+  }
   return p;
 }
 
@@ -571,7 +760,7 @@ function allLoaded() {
   const h = fields.has;
   if (state.layers.detail) detail.update(cam, !fly, true, state.layers.lights && state.layers.daylight ? astro.sun : null, !!fly);            // the view may have moved since the last frame
   return h.water && h.climate && h.ocean && h.relief && h.elev && h.countries && !!fields.cpu.lanes && !!fields.cpu.pop1 && !!fields.cpu.co21 && pending.size === 0
-    && !(state.layers.detail && detail.busy);
+    && !(state.layers.detail && (detail.busy || (state.city && ['idle', 'loading'].includes(buildings.status))));
 }
 
 /** The frozen frame: wait for the data, then run a fixed number of seeded steps and stop. */
@@ -632,8 +821,13 @@ async function frozenFrame() {
     for (const id in state.layers) if (state.layers[id]) ensureLayer(id);
     if (LENSES[state.lens] && LENSES[state.lens].static) { pending.add('lens'); fields.loadStatic(LENSES[state.lens].static).then(() => { pending.delete('lens'); earthDirty = true; }); }
     ui.syncControls(); feedStatus();
-    const boot = document.getElementById('boot'); boot.classList.add('gone'); setTimeout(() => boot.remove(), FROZEN ? 0 : 900);
-    if (!FROZEN) setInterval(() => { if (state.layers.quakesLive && isNow()) live.loadQuakes(); if (state.layers.aurora && isNow()) live.loadAurora(); }, 10 * 60000);
+    document.getElementById('ui').inert = false;
+    boot.classList.add('gone'); setTimeout(() => { if (!boot.classList.contains('preview')) boot.remove(); }, FROZEN ? 0 : 550);
+    if (!FROZEN) setInterval(() => {
+      if (!isNow()) return;
+      if (state.layers.quakesLive || ui.planetOpen()) live.loadQuakes();
+      if (state.layers.aurora) live.loadAurora();
+    }, FEED_REFRESH);
     window.ATLAS = { ...app, gl, astro, labels, tracers, batches, shot, insets, pickAt: pick, panels: () => panelRects, step: (n = 1) => { for (let i = 0; i < n; i++) tick(Math.max(lastFrame + 16.7, FROZEN ? 0 : performance.now())); return n; }, get flights() { return flights; }, redraw: () => { earthDirty = labelsDirty = true; } };
     window.ATLAS.refView = (lon, lat, dist, discFrac) => { cam.refView(lon, lat, dist, discFrac); earthDirty = labelsDirty = true; resetTracers(); };
     window.ATLAS.stdView = () => { cam.stdView(); earthDirty = labelsDirty = true; resetTracers(); };
@@ -644,7 +838,7 @@ async function frozenFrame() {
     // A browser can take the GL context away (GPU process restart, a software renderer starting
     // up). Nothing drawn so far can be trusted, so start again; three tries, then say so.
     if (gl.isContextLost() && retryAfterContextLoss()) return;
-    bootMsg(String(e.message || e)); console.error(e);
+    showPreview('The interactive globe could not start. You can still explore this captured view of the atlas.'); console.error(e);
   }
 })();
 
@@ -657,4 +851,5 @@ function retryAfterContextLoss() {
   return true;
 }
 canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); });
+}
 canvas.addEventListener('webglcontextrestored', () => location.reload());

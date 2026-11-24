@@ -2,7 +2,10 @@
 // The ephemeris is checked against published almanac values (not against itself), the
 // projection by round trip, and the camera by projecting and unprojecting the same point.
 import { sun, moon, dayLength, monthState, gmstDeg } from '../web/js/astro.js';
-import { wtForward, wtInverse, Camera } from '../web/js/camera.js';
+import { wtForward, wtInverse, Camera, R_KM } from '../web/js/camera.js';
+import { buildingMesh } from '../web/js/building-mesh.js';
+import { cityTilePlan, CITY_EXAMPLES, CITY_START_KM } from '../web/js/cities.js';
+import { BUILDING_STRIDE } from '../web/js/streets.js';
 import { GIBS, gibsTileDeg, gibsTexelDeg, gibsMatrix, gibsPixel, gibsLonLat, gibsTile, gibsTileBounds, TERRAIN, mercY, mercLat, terrPixel, terrLonLat, terrTile,
   terrTileBounds, terrDecode, terrTexelDeg, terrTexelKm, tentTaps, compositeElevation, shippedElevation, planDetail, viewBox, windowHolds, windowUniforms, PLAN, KM_PER_DEG, nightLight, NIGHT_SHIPPED, despike, S2, s2TileDeg, s2TexelDeg, s2Matrix, s2Tile, s2TileBounds, maskPlan, sampleMask, boxMean, waterFlag, JRC, resampleMercator, quickPlan, waterColour, jrcCovers } from '../web/js/detail.js';
 import { INSETS, Inset, freeRect, fitInset, insetAlpha, INSET_FULL, INSET_GONE, INSET_PAD, MIN_GAIN } from '../web/js/insets.js';
@@ -643,6 +646,37 @@ if (online) {
   const lut = D.albedoLut(shader);
   ok('season: the albedo table is read out of the shader itself: nine knots, rising, black at 0', lut.length === 9 && lut[0].every((v) => v === 0) && lut.every((q, i) => i === 0 || q.every((v, k) => v > lut[i - 1][k])) && near(D.lutAlbedo(lut, 255, 0), lut[8][0], 1e-12) && near(D.lutAlbedo(lut, 255 / 16, 1), lut[1][1] / 2, 1e-12));
   ok('season: the shader unpacks with the same constants the page packs with', /0\.08 \* exp\(r \/ 255\.0 \* 3\.4420\)/.test(shader) && near(Math.log(2.5 / 0.08), 3.4420, 1e-4));
+}
+
+{
+  const camera = new Camera();
+  camera.resize(1440, 900, 1); camera.setKmPerPx(CITY_START_KM);
+  camera.pitch = 52; camera.bearing = 45;
+  for (const { name, lon, lat } of CITY_EXAMPLES) {
+    camera.lookAt(lon, lat); camera.beginFrame();
+    const center = camera.project(lon, lat), point = camera.unproject(498, 245);
+    const back = point && camera.project(...point);
+    ok(`city camera: ${name} stays centered through tilt and rotation`,
+      near(center[0], 720, 1e-7) && near(center[1], 450, 1e-7) && back && near(back[0], 498, 1e-7) && near(back[1], 245, 1e-7));
+    const plan = cityTilePlan(camera);
+    ok(`city tiles: ${name} has a bounded plan at building zoom`, plan && plan.z >= 13 && plan.count <= 48);
+  }
+  const outer = new Float32Array([512, 512, 3584, 512, 3584, 3584, 512, 3584, 512, 512]);
+  const yard = new Float32Array([1024, 1024, 1024, 3072, 3072, 3072, 3072, 1024, 1024, 1024]);
+  const building = { h: 180, base: 12, supplied: true, rings: [outer, yard] };
+  const tile = { x: 8192, ox: 8192, y: 8192 };
+  const mesh = buildingMesh(14, [tile], [{ extent: 4096, buildings: [building, { ...building, hide3d: true }] }], [8192.5, 8192.5]);
+  const heights = [];
+  for (let i = 0; i < mesh.data.length; i += BUILDING_STRIDE) heights.push((Math.hypot(mesh.data[i], mesh.data[i + 1], mesh.data[i + 2]) - 1) * R_KM * 1000);
+  ok('city mesh: a courtyard keeps its hole, inner and outer walls, and raised base',
+    mesh.count === 1 && mesh.data.length / (3 * BUILDING_STRIDE) === 24
+    && near(Math.min(...heights), 12, 0.5) && near(Math.max(...heights), 180, 0.5));
+  const crosses = { h: 7, rings: [new Float32Array([-512, 512, 3072, 512, 3072, 3584, -512, 3584])] };
+  const clipped = buildingMesh(14, [tile], [{ extent: 4096, buildings: [crosses] }], [8192.5, 8192.5]);
+  let west = true;
+  for (let i = 0; i < clipped.data.length; i += BUILDING_STRIDE) west &&= clipped.data[i + 1] >= 0;
+  ok('city mesh: a footprint in the tile buffer clips to the tile and reports its fallback height',
+    clipped.count === 1 && clipped.fallback === 1 && clipped.tallest === 7 && west);
 }
 
 console.log(bad ? `\napp math: ${bad} FAILURES` : '\napp math: ALL PASS');

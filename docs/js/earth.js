@@ -1,8 +1,8 @@
 // Draws the substrate: one full-screen triangle through shaders/earth.frag.glsl.
 
-import { program, setUniforms } from './gl.js?v=20261112T060955Z';
-import { UNIT } from './fields.js?v=20261112T060955Z';
-import { gmstDeg, D2R } from './astro.js?v=20261112T060955Z';
+import { program, setUniforms } from './gl.js?v=20261124T234638Z';
+import { UNIT } from './fields.js?v=20261124T234638Z';
+import { gmstDeg, D2R } from './astro.js?v=20261124T234638Z';
 
 export const LENSES = {
   none: { id: 0 },
@@ -55,7 +55,7 @@ export class Earth {
       uHasRelief: f.has.relief ? 1 : 0, uHasElev: f.has.elev ? 1 : 0, uHasLive: f.has.live && L.today ? 1 : 0,
       uHasClimate: f.has.climate ? 1 : 0, uHasOcean: f.has.ocean ? 1 : 0, uHasCountries: f.has.countries ? 1 : 0,
       uHasWater: f.has.water ? 1 : 0, uHasAurora: f.has.aurora && L.aurora && state.atNow ? 1 : 0, uHasCloudT: f.has.cloudT ? 1 : 0, uHasGrain: f.has.cloudGrain ? 1 : 0, uHasGrain2: f.has.cloudGrain2 ? 1 : 0,
-      uCloudsOn: L.clouds ? 1 : 0, uNightOn: L.lights ? 1 : 0, uAtmoOn: L.air ? 1 : 0, uDaylightOn: L.daylight ? 1 : 0, uIceOn: L.ice ? 1 : 0,
+      uCloudsOn: L.clouds ? 1 : 0, uNightOn: L.lights ? 1 : 0, uAtmoOn: L.air ? 1 : 0, uDaylightOn: L.daylight ? 1 : 0, uIceOn: L.ice || state.lens === 'ice' ? 1 : 0,
       uReliefLand: k.land, uReliefSea: k.sea,
       uLapse: f.meta.climate ? f.meta.climate.lapse_K_per_km : 6.5,
       uSelCountry: state.selCountry || 0,

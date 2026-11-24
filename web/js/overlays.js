@@ -632,12 +632,13 @@ export class Labels {
     let x = p[0];
     const y = p[1];
     if (st.dot) x += st.dot + 4; else x -= tw / 2;
+    if (it.cls === 'ocean' && this.w <= 860 && tw < this.w - 12) x = Math.max(6, Math.min(this.w - tw - 6, x));
     const x0 = st.dot ? p[0] - st.dot - 1.5 : x - 3, y0 = y - th / 2 - 1, x1 = x + tw + 3, y1 = y + th / 2 + 1;
     // where it will be at the real scale (it holds on to its point, see _carry): clear of everything taken,
     // and in a sub-view wholly inside the frame (a name cut by an inset's rule reads as a mistake)
     const z = this._z, cdx = (p[0] - this.w / 2) * (z - 1), cdy = (p[1] - this.h / 2) * (z - 1);
     if (!this._clear(x0 + cdx, y0 + cdy, x1 + cdx, y1 + cdy)) return;
-    if (this.sub && (x0 + cdx < 1 || y0 + cdy < 1 || x1 + cdx > this.w - 1 || y1 + cdy > this.h - 1)) return;
+    if ((this.sub || this.w <= 860) && (x0 + cdx < 1 || y0 + cdy < 1 || x1 + cdx > this.w - 1 || y1 + cdy > this.h - 1)) return;
     if (!this._free(x0, y0, x1, y1, -1)) return;
     this._take(x0, y0, x1, y1, -1, 0);
     this.placed.push({ x0, y0, x1, y1, it, px: p[0], py: p[1], kind: 'point', abbr: false, size: st.size, font: st.font, spacing, base: 'middle', lines: [{ t: text, x, y }], leader: null, st });
@@ -662,7 +663,7 @@ export class Labels {
     }
     const k = view.kmPerPx();                 // what shows at which zoom goes by the real scale
     // nothing moved: repaint what was solved (the clock redraws this layer every tick)
-    const key = sheet ? `s|${step}|${style}|${this.w}|${this.h}|${this._gen}` : `g|${cam.lon}|${cam.lat}|${cam.dist}|${cam.tanHalfFov}|${style}|${this.w}|${this.h}|${this._gen}`;
+    const key = sheet ? `s|${step}|${style}|${this.w}|${this.h}|${this._gen}` : `g|${cam.lon}|${cam.lat}|${cam.dist}|${cam.pitch}|${cam.bearing}|${cam.tanHalfFov}|${style}|${this.w}|${this.h}|${this._gen}`;
     const sig = (sheet ? `${key}|${view.mapUnitsPerPx}|${cam.mapCenter[0]}|${cam.mapCenter[1]}` : key) + '|' + this._bsig;
     if (sig === this._sig) { this._paint(atlas); return; }
     this._sig = sig;
@@ -674,7 +675,7 @@ export class Labels {
     this._hashInit();
     cam.beginFrame();
     this._b = cam._b;
-    if (!sheet) { const t = cam.tanHalfFov; this._g = [(2 * t) / this.h, t * (this.w / this.h), t, (2 * t) / this.h, cam.dist * cam.dist - 1]; }
+    if (!sheet) { const t = cam.tanHalfFov, r2 = this._b.pos.reduce((ss, v) => ss + v * v, 0); this._g = [(2 * t) / this.h, t * (this.w / this.h), t, (2 * t) / this.h, r2 - 1]; }
     if (sheet) {
       if (!LUT) LUT = wtTable();
       const u = cam.mapUnitsPerPx, sx = LUT_W / (2 * WT_XMAX), sy = LUT_H / (2 * WT_YMAX);
