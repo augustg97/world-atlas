@@ -6,7 +6,7 @@
 //
 // The functions are pure (the field store is an argument) so that build/test_app_math.mjs can run them.
 
-import { sun, dayLength } from './astro.js?v=20261112T060955Z';
+import { sun, dayLength } from './astro.js?v=20261124T210602Z';
 
 export const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const DAYS = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];            // a typical year: February has 28
@@ -127,14 +127,14 @@ export function ticks(lo, hi, n = 3) {
  * temperature as a line above, the month's precipitation as bars below. `now`: the month to mark (0-11) or -1.
  * Every month carries its three values as a native tooltip. Returns an SVG string of numbers only.
  */
-export function climateChart(s, now) {
+export function climateChart(s, now, range = s) {
   const W = 288, L = 30, R = 4, slot = (W - L - R) / 12, x = (m) => L + slot * (m + 0.5);
   const T0 = 16, T1 = 62, P0 = 86, P1 = 132;                         // the two panels' tops and bottoms
   // each panel's scale is its own data's range with a little air; the labelled values are round ones inside it
-  const tmin = Math.min(...s.t), tmax = Math.max(...s.t), pad = Math.max(0.8, 0.12 * (tmax - tmin)), tlo = tmin - pad, thi = tmax + pad;
+  const tmin = Math.min(...range.t), tmax = Math.max(...range.t), pad = Math.max(0.8, 0.12 * (tmax - tmin)), tlo = tmin - pad, thi = tmax + pad;
   const tt = ticks(tlo, thi, 3);
   const yT = (v) => T1 - ((v - tlo) / (thi - tlo)) * (T1 - T0);
-  const phi = Math.max(...s.pmm, 1) * 1.06, pt = ticks(0, phi, 2);
+  const phi = Math.max(...range.pmm, 1) * 1.06, pt = ticks(0, phi, 2);
   const yP = (v) => P1 - (v / phi) * (P1 - P0);
   const grid = (y) => `<line class="cg" x1="${L}" x2="${W - R}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}"/>`;
   const lab = (y, v) => `<text class="ct" x="${L - 5}" y="${(y + 3).toFixed(1)}" text-anchor="end">${esc(String(v).replace('-', '−'))}</text>`;

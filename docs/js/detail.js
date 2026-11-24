@@ -29,11 +29,11 @@
 // class of bug in this project (CLAUDE.md, "The canonical frame"); change nothing here without
 // running that test.
 
-import { UNIT } from './fields.js?v=20261112T060955Z';
-import { stamped } from './gl.js?v=20261112T060955Z';
-import { R_KM } from './camera.js?v=20261112T060955Z';
-import { WATER_RULE, boxMean, waterFlag, runRule } from './water.js?v=20261112T060955Z';
-import { OFM, STREETS, streetPlan } from './streets.js?v=20261112T060955Z';
+import { UNIT } from './fields.js?v=20261124T210602Z';
+import { stamped } from './gl.js?v=20261124T210602Z';
+import { R_KM } from './camera.js?v=20261124T210602Z';
+import { WATER_RULE, boxMean, waterFlag, runRule } from './water.js?v=20261124T210602Z';
+import { OFM, STREETS, streetPlan } from './streets.js?v=20261124T210602Z';
 
 const D2R = Math.PI / 180, R2D = 180 / Math.PI;
 export const KM_PER_DEG = R_KM * D2R;                       // 111.195 km on the atlas's sphere

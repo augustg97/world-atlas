@@ -46,6 +46,23 @@ const S = {
 
 export const CARD_TEXT_SOURCE = S.wiki;      // the cards' live descriptions (js/wiki.js); listed in About
 
+export const LENS_NOTES = {
+  solar: { vintage: 'Solar geometry at the selected time', legend: 'Sunlight reaching the top of the atmosphere, from the Sun’s angle at the selected time.' },
+  temp: { vintage: '1991–2020 baseline with a modelled daily cycle', legend: 'Air temperature 2 m above ground. The 1991–2020 average is adjusted for elevation and the local solar hour.' },
+  precip: { vintage: 'GPCP · 1991–2020', legend: 'Average daily rain and snowfall for this time of year, based on 1991–2020.' },
+  slp: { vintage: 'NCEP/NCAR · 1991–2020', legend: 'Average atmospheric pressure reduced to sea level, based on 1991–2020.' },
+  wind: { vintage: 'NCEP/NCAR · 1991–2020', legend: 'Speed of the average near-surface wind for this time of year, based on 1991–2020.' },
+  cloud: { vintage: 'ISCCP · 2007–2016', legend: 'Average share of the sky covered by cloud for this time of year, based on 2007–2016.' },
+  sst: { vintage: 'NOAA OISST · 1991–2020', legend: 'Average sea-surface temperature for this time of year, based on 1991–2020.' },
+  ice: { vintage: 'NSIDC · 1991–2020', legend: 'Average share of the water surface covered by ice. Sea ice uses the 1991–2020 record. Some inland ice is modelled.' },
+  elev: { vintage: 'ETOPO · 2022', legend: 'Ground height above sea level and sea-floor depth below it, from ETOPO 2022.' },
+  green: { vintage: 'Blue Marble · 2004 monthly composites', legend: 'Greenness estimated from visible colour in the 2004 Blue Marble monthly imagery.' },
+  pop: { vintage: 'GHSL · 2025 epoch', legend: 'Estimated residents per square kilometre in the 2025 GHSL population grid.' },
+  lights: { vintage: 'NASA Black Marble · 2016', legend: 'Relative brightness from NASA’s 2016 night-lights imagery, displayed at any hour.' },
+  co2: { vintage: 'EDGAR · 2022', legend: 'Fossil fuel and industrial CO₂ emitted per square kilometre during 2022.' },
+  ships: { vintage: 'AIS reports · 2015–2021', legend: 'Reported ship positions accumulated in each grid cell from 2015 to 2021.' },
+};
+
 export const SYSTEMS = [
   {
     id: 'sun', name: 'Sun & orbit', blurb: 'Where the Sun and Moon stand over the Earth at this instant. Everything else on the globe is downstream of this.',

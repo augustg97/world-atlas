@@ -170,7 +170,7 @@ export class Camera {
 
   /** The framing that shows the whole Earth. */
   home() {
-    if (this.view === 'globe') this.dist = 1 + 4.3 * Math.max(1, (this.h / this.w) * 1.15);
+    if (this.view === 'globe') this.dist = 1 + 4.3 * Math.max(1, this.h / this.w * 0.97);
     else { this.mapCenter = [0, 0]; this.mapUnitsPerPx = Math.max(2 * WT_XMAX / (this.w * 0.94), 2 * WT_YMAX / (this.h * 0.86)); }
   }
 

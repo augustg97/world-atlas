@@ -632,19 +632,20 @@ export class Labels {
     let x = p[0];
     const y = p[1];
     if (st.dot) x += st.dot + 4; else x -= tw / 2;
+    if (it.cls === 'ocean' && this.w <= 860 && tw < this.w - 12) x = Math.max(6, Math.min(this.w - tw - 6, x));
     const x0 = st.dot ? p[0] - st.dot - 1.5 : x - 3, y0 = y - th / 2 - 1, x1 = x + tw + 3, y1 = y + th / 2 + 1;
     // where it will be at the real scale (it holds on to its point, see _carry): clear of everything taken,
     // and in a sub-view wholly inside the frame (a name cut by an inset's rule reads as a mistake)
     const z = this._z, cdx = (p[0] - this.w / 2) * (z - 1), cdy = (p[1] - this.h / 2) * (z - 1);
     if (!this._clear(x0 + cdx, y0 + cdy, x1 + cdx, y1 + cdy)) return;
-    if (this.sub && (x0 + cdx < 1 || y0 + cdy < 1 || x1 + cdx > this.w - 1 || y1 + cdy > this.h - 1)) return;
+    if ((this.sub || this.w <= 860) && (x0 + cdx < 1 || y0 + cdy < 1 || x1 + cdx > this.w - 1 || y1 + cdy > this.h - 1)) return;
     if (!this._free(x0, y0, x1, y1, -1)) return;
     this._take(x0, y0, x1, y1, -1, 0);
     this.placed.push({ x0, y0, x1, y1, it, px: p[0], py: p[1], kind: 'point', abbr: false, size: st.size, font: st.font, spacing, base: 'middle', lines: [{ t: text, x, y }], leader: null, st });
     return true;
   }
 
-  draw(view, style, show) {
+  draw(view, style, show, quiet = false) {
     const ctx = this.ctx;
     ctx.setTransform(this.dpr, 0, 0, this.dpr, this.ox * this.dpr, this.oy * this.dpr);
     ctx.clearRect(0, 0, this.w, this.h);
@@ -663,7 +664,8 @@ export class Labels {
     const k = view.kmPerPx();                 // what shows at which zoom goes by the real scale
     // nothing moved: repaint what was solved (the clock redraws this layer every tick)
     const key = sheet ? `s|${step}|${style}|${this.w}|${this.h}|${this._gen}` : `g|${cam.lon}|${cam.lat}|${cam.dist}|${cam.tanHalfFov}|${style}|${this.w}|${this.h}|${this._gen}`;
-    const sig = (sheet ? `${key}|${view.mapUnitsPerPx}|${cam.mapCenter[0]}|${cam.mapCenter[1]}` : key) + '|' + this._bsig;
+    const overview = quiet && k >= 12;
+    const sig = (sheet ? `${key}|${view.mapUnitsPerPx}|${cam.mapCenter[0]}|${cam.mapCenter[1]}` : key) + '|' + this._bsig + '|' + overview;
     if (sig === this._sig) { this._paint(atlas); return; }
     this._sig = sig;
     // a drag only translates the sheet, and a zoom within a step only spreads it: what lies under each candidate is kept
@@ -684,6 +686,7 @@ export class Labels {
     const names = new Set();                     // a name is not printed twice (AUSTRALIA the continent and the state)
     const spreads = [];                          // continents: set last, across whatever is there
     const legacy = (it) => {
+      if (overview && it.cls !== 'continent' && (it.cls !== 'ocean' || it.rank > 1) && (it.cls !== 'country' || it.rank > 2)) return;
       if (k < (it.minKm || 0)) return;
       if (it.cls === 'continent') { if (k <= it.maxKm) spreads.push(it); return; }
       const twin = it.cls === 'country' ? it.text.toUpperCase() : null;
@@ -702,6 +705,7 @@ export class Labels {
       this._exact = cellPx > 1; this._cellPx = cellPx;
       const live = [];
       for (const it of this.states) {
+        if (overview && it.rank > 2) continue;
         const L = this._prep(it);
         if (!L.on) continue;
         let seen = this._onScreen(L.ax, L.ay, 0, 0);

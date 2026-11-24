@@ -1,7 +1,7 @@
 // The two cameras: a perspective globe and a Winkel Tripel sheet. The projection maths here is
 // the JS twin of web/shaders/common.glsl; js/selftest.js checks that the two agree.
 
-import { D2R, R2D, lonLatToVec, norm180 } from './astro.js?v=20261112T060955Z';
+import { D2R, R2D, lonLatToVec, norm180 } from './astro.js?v=20261124T210602Z';
 
 export const R_KM = 6371.0088;
 const TAN_HALF_FOV_DEFAULT = Math.tan(15 * D2R);  // 30 degree vertical field of view
@@ -170,7 +170,7 @@ export class Camera {
 
   /** The framing that shows the whole Earth. */
   home() {
-    if (this.view === 'globe') this.dist = 1 + 4.3 * Math.max(1, (this.h / this.w) * 1.15);
+    if (this.view === 'globe') this.dist = 1 + 4.3 * Math.max(1, this.h / this.w * 0.97);
     else { this.mapCenter = [0, 0]; this.mapUnitsPerPx = Math.max(2 * WT_XMAX / (this.w * 0.94), 2 * WT_YMAX / (this.h * 0.86)); }
   }
 

@@ -2,15 +2,33 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>World Atlas</title>
-<link rel="stylesheet" href="css/atlas.css?v=20261112T060955Z">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="Explore a living Earth atlas through sunlight, seasons, oceans and the people who live on the planet.">
+<meta name="theme-color" content="#080d14">
+<title>The World · A Living Atlas</title>
+<link rel="icon" href="img/daylight.webp" type="image/webp">
+<link rel="stylesheet" href="css/atlas.css?v=20261124T210602Z">
 </head>
 <body>
-<canvas id="gl"></canvas>
-<canvas id="labels"></canvas>
-<div id="ui"></div>
-<div id="boot"><div class="boot-title">THE WORLD</div><div class="boot-sub" id="boot-msg">Reading the fields…</div></div>
-<script type="module" src="js/main.js?v=20261112T060955Z"></script>
+<canvas id="gl" aria-label="Interactive Earth map"></canvas>
+<canvas id="labels" aria-hidden="true"></canvas>
+<div id="ui" inert></div>
+<div id="boot">
+  <div class="boot-loading"><div class="boot-title">The World</div><div class="boot-sub" id="boot-msg" role="status">Reading the fields…</div></div>
+  <main class="fallback" hidden>
+    <div class="fallback-copy">
+      <p class="section-label">World Atlas · Static preview</p>
+      <h1>Where is it daylight?</h1>
+      <p>The globe needs WebGL 2 in this browser. Explore a captured view of the atlas and follow the boundary between day and night.</p>
+      <details>
+        <summary>Follow the daylight boundary</summary>
+        <p>Start in the bright midday region, then trace the dim edge of the globe into night. As Earth rotates, cities cross that boundary and their lights appear in the dark.</p>
+        <p>The solar position is modelled for 21 June 2026 at 12:00 UTC. The underlying land imagery comes from NASA Blue Marble and the night lights from NASA Black Marble.</p>
+      </details>
+    </div>
+    <figure><img src="img/daylight.webp" width="880" height="880" alt="A rendered Earth showing Africa and Asia across the transition from day to night"><figcaption>Atlas model · 21 June 2026, 12:00 UTC</figcaption></figure>
+  </main>
+</div>
+<script type="module" src="js/main.js?v=20261124T210602Z"></script>
 </body>
 </html>

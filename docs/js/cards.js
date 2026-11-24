@@ -2,11 +2,11 @@
 // an eyebrow, a title, fact rows, values FOR THE CURRENT INSTANT with their evidence tier, the
 // vintage of every number, and its sources (SCOPE section 7).
 
-import { TIERS, LAYERS, LENS_DEFS, FUEL_COLORS } from './catalog.js?v=20261112T060955Z';
-import { sunElevation, localSolarTime, dayLength, D2R } from './astro.js?v=20261112T060955Z';
-import { R_KM } from './camera.js?v=20261112T060955Z';
-import { wikiKey } from './wiki.js?v=20261112T060955Z';
-import { monthlySeries, koppen, yearSentences, climateChart, climateTable } from './climate.js?v=20261112T060955Z';
+import { TIERS, LAYERS, LENS_DEFS, LENS_NOTES, FUEL_COLORS } from './catalog.js?v=20261124T210602Z';
+import { sunElevation, localSolarTime, dayLength, D2R } from './astro.js?v=20261124T210602Z';
+import { R_KM } from './camera.js?v=20261124T210602Z';
+import { wikiKey } from './wiki.js?v=20261124T210602Z';
+import { MONTH_NAMES, monthlySeries, koppen, yearSentences, climateChart, climateTable } from './climate.js?v=20261124T210602Z';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const fmt = (v, d = 0) => (Number.isFinite(v) ? v.toLocaleString('en-US', { maximumFractionDigits: d, minimumFractionDigits: d }) : '—');
@@ -15,7 +15,7 @@ const hhmm = (h) => { const m = Math.round(h * 60) % 1440; return `${String(Math
 const dur = (h) => (h >= 24 ? '24 h (polar day)' : h <= 0 ? '0 h (polar night)' : `${Math.floor(h)} h ${String(Math.round((h % 1) * 60)).padStart(2, '0')} m`);
 export const coord = (lon, lat) => `${Math.abs(lat).toFixed(2)}°${lat >= 0 ? 'N' : 'S'}, ${Math.abs(lon).toFixed(2)}°${lon >= 0 ? 'E' : 'W'}`;
 const badge = (tier, extra = '') => `<span class="tier tier-${tier}" title="${esc(TIERS[tier].title)}">${TIERS[tier].label}${extra ? ' · ' + esc(extra) : ''}</span>`;
-const row = (k, v, tier, extra) => `<div class="row"><span class="k">${k}</span><span class="v">${v}</span>${tier ? badge(tier, extra) : ''}</div>`;
+const row = (k, v, tier, extra) => `<div class="row"><span class="k">${k}</span><span class="v">${v}</span>${tier ? `<span class="row-evidence">${badge(tier)}${extra ? `<small>${esc(extra)}</small>` : ''}</span>` : ''}</div>`;
 const section = (title, body) => (body ? `<div class="sec"><div class="sec-h">${title}</div>${body}</div>` : '');
 const src = (list) => `<div class="src"><div class="sec-h">Sources</div>${list.map((s) => `<p>${esc(s)}</p>`).join('')}</div>`;
 const compass = (u, v) => ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'][Math.round((((Math.atan2(-u, -v) / D2R) % 360) + 360) % 360 / 22.5) % 16];
@@ -72,6 +72,54 @@ function seriesAt(F, lon, lat, year, water) {
   if (s.ok) { if (seriesMemo.size > 12) seriesMemo.delete(seriesMemo.keys().next().value); seriesMemo.set(k, s); }
   return s;
 }
+
+export function lensReading(ctx, lon, lat) {
+  const { F, lens, astro } = ctx, def = LENS_DEFS[lens];
+  if (!def) return null;
+  const climate = (field) => F.climate(field, lon, lat, astro.month);
+  const water = F.waterFrac(lon, lat) > 0.5;
+  const { vintage: source } = LENS_NOTES[lens];
+  let tier = def.tier, vintage = source, number = NaN, units = def.units, precision = 1;
+  switch (lens) {
+    case 'solar': number = Math.max(0, Math.sin(sunElevation(astro.sun, lon, lat) * D2R)) * 1361; precision = 0; break;
+    case 'temp': number = airTemp(F, lon, lat, astro.month, astro.sun).now; break;
+    case 'precip': case 'slp': number = climate(lens); break;
+    case 'wind': number = Math.hypot(climate('u10'), climate('v10')); break;
+    case 'cloud': number = climate('cloud') * 100; precision = 0; break;
+    case 'sst': if (water) number = climate('sst'); break;
+    case 'ice': {
+      if (!water) break;
+      number = climate('ice') * 100; precision = 0;
+      const kind = F.iceKind(lon, lat);
+      if (kind === 'model') { tier = 'modelled'; vintage = 'Lake ice model · 1991–2020 air climatology'; }
+      if (kind === 'lake') vintage = 'NOAA OISST · 1991–2020';
+      break;
+    }
+    case 'elev': number = F.elevation(lon, lat); precision = 0; break;
+    case 'green': if (!water) number = F.greenness(lon, lat, astro.month); units = 'index (0–1)'; precision = 2; break;
+    case 'lights': number = Math.sqrt(F.nightLight(lon, lat)); units = 'relative brightness (0–1)'; precision = 2; break;
+    case 'pop': if (!water) number = F.staticValue(lens, lon, lat); break;
+    case 'co2': number = F.staticValue(lens, lon, lat); break;
+    case 'ships': if (water) number = F.staticValue(lens, lon, lat); units = 'reports per cell'; precision = 0; break;
+  }
+  return { name: def.name, tier, vintage, value: Number.isFinite(number) ? `${fmt(number, precision)} ${units}` : 'No value here' };
+}
+
+export function comparisonCard(ctx, points) {
+  const d = new Date(ctx.t), month = d.getUTCMonth(), year = d.getUTCFullYear();
+  const seasons = points.map(({ lon, lat }) => seriesAt(ctx.F, lon, lat, year));
+  const ready = seasons.filter((s) => s.ok);
+  const range = { t: ready.flatMap((s) => s.t), pmm: ready.flatMap((s) => s.pmm) };
+  return `<p>${MONTH_NAMES[month]} seasonal averages · shared chart scales</p>${points.map(({ title, lon, lat }, i) => {
+    const s = seasons[i], lens = lensReading(ctx, lon, lat);
+    const day = dayLength(lat, ctx.astro.sun.dec);
+    return `<section class="compare-place"><h3>${i === 0 ? 'A' : 'B'} · ${esc(title)}</h3><p class="fine">${coord(lon, lat)}</p>
+      ${row('Day length', dur(day), 'modelled', 'Solar geometry')}
+      ${lens ? row(esc(lens.name), esc(lens.value), lens.tier, lens.vintage) : ''}
+      ${s.ok ? row('Monthly mean', `${fmt(s.t[month], 1)} °C`, 'climatology', '1991–2020') + climateChart(s, month, range) : `<p>${esc(s.why)}</p>`}
+    </section>`;
+  }).join('')}`;
+}
 /**
  * The atlas's own description of a place: the year there, computed from the fields the page holds (js/climate.js).
  * `where` finishes the heading ("in Tokyo", "at its label point"); `above` names something higher than the ground
@@ -86,7 +134,8 @@ function yearBlock(ctx, lon, lat, where = '', above = '', water = undefined) {
   const cls = k ? row('Köppen–Geiger class', `${k.code} · ${esc(k.name)}`, 'modelled')
     : `<div class="note">The Köppen–Geiger classes describe climates on land; none is given for a point on water.</div>`;
   const ground = s.water ? 'over the water' : `taken to the ground’s height here (${fmt(s.z)} m, a 10 km mean${above ? '; ' + esc(above) : ''}) at ${fmt(ctx.F.meta.climate.lapse_K_per_km, 1)} °C per km`;
-  return section(head, climateChart(s, now) + yearSentences(s).map((t) => `<p class="prose">${esc(t)}</p>`).join('') + cls + climateTable(s, now)
+  const selected = `<p class="chart-month"><strong>${MONTH_NAMES[now]}</strong> · ${fmt(s.t[now], 1)} °C · ${fmt(s.pmm[now])} mm</p>`;
+  return section(head, selected + climateChart(s, now) + yearSentences(s).map((t) => `<p class="prose">${esc(t)}</p>`).join('') + cls + climateTable(s, now)
     + `<p class="fine">Twelve monthly means of 1991–2020, written by rule from this atlas’s fields: air temperature from NCEP/NCAR Reanalysis 1, ${ground}; precipitation from GPCP v2.3. The fields resolve about 200 km (temperature) and 250 km (precipitation), so a coast, a mountain or a dry valley takes its surroundings’ values${k ? ', and the class can differ from a finer published map' : ''}. Day length is computed from the Sun’s geometry.</p>`);
 }
 

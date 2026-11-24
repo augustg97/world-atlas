@@ -16,13 +16,22 @@ import { Data } from './data.js';
 import { INSETS, Inset, insetAlpha, INSET_PAD } from './insets.js';
 import { Live, HOUR, DAY } from './live.js';
 import { UI, SPEEDS } from './ui.js';
+import { STORY_BY_ID } from './stories.js';
 import * as Cards from './cards.js';
 import { peopleBySun, iceExtents, meanTemps, mixMonth } from './dash.js';
 
 const canvas = document.getElementById('gl');
 const gl = canvas.getContext('webgl2', { antialias: false, alpha: false, powerPreference: 'high-performance', preserveDrawingBuffer: true });
-const bootMsg = (s) => { document.getElementById('boot-msg').textContent = s; };
-if (!gl) { bootMsg('This atlas needs WebGL 2, which this browser does not provide.'); throw new Error('no webgl2'); }
+const boot = document.getElementById('boot');
+const bootMsg = (s) => { boot.querySelector('#boot-msg').textContent = s; };
+function showPreview(message) {
+  document.getElementById('ui').inert = true;
+  if (!boot.isConnected) document.body.append(boot);
+  boot.classList.remove('gone');
+  boot.classList.add('preview');
+  boot.querySelector('.fallback').hidden = false;
+  if (message) boot.querySelector('.fallback-copy > p:nth-of-type(2)').textContent = message;
+}
 
 // ?frozen=1 is the deterministic mode the visual ratchet needs (Research/baselines/frames.json):
 // the clock is pinned to #t=, nothing is driven by requestAnimationFrame or the wall clock, the
@@ -31,15 +40,22 @@ if (!gl) { bootMsg('This atlas needs WebGL 2, which this browser does not provid
 const FROZEN = new URLSearchParams(location.search).has('frozen');
 const FROZEN_T = Date.UTC(2026, 5, 21, 12, 0, 0);
 const FROZEN_STEPS = 240;
+const FEED_REFRESH = 10 * 60000;
 if (FROZEN) seedRandom(20261109);
 
+if (!gl) {
+  showPreview();
+} else {
 const cam = new Camera();
+const DEFAULT_LAYERS = Object.fromEntries(Object.values(LAYERS).map((l) => [l.id, !!l.on]));
+const OPENING_LAYERS = { ...DEFAULT_LAYERS, marks: false, wind: false, currents: false, ships: false, flights: false, quakesLive: false };
 const state = {
   t: Date.now(), clock: 'live', speed: 'real', style: 'space', lens: 'none', selCountry: 0,
-  layers: Object.fromEntries(Object.values(LAYERS).map((l) => [l.id, !!l.on])),
+  layers: { ...OPENING_LAYERS }, story: null, pins: [],
 };
 let earthDirty = true, labelsDirty = true, lastEarthDraw = 0, selection = null, card = null, hashTimer = 0;
-const fields = new Fields(gl, () => { earthDirty = true; });
+let beforeStory = null, rotationEnd = null;
+const fields = new Fields(gl, () => { earthDirty = true; if (card) refreshCardSoon(); });
 const earth = new Earth(gl, fields);
 const data = new Data();
 const live = new Live(gl, fields, (k, s) => { earthDirty = true; feedStatus(); });
@@ -50,7 +66,7 @@ const labels = new Labels(document.getElementById('labels'));
 // camera and its own label layer, which draws into its frame on the main layer's canvas.
 const insets = INSETS.map((def) => { const I = new Inset(def); I.labels = new Labels(labels.canvas, true); return I; });
 // The interface's panels, as rectangles of the window. No name is set under one and no inset is put under one.
-const PANELS = ['top', 'left', 'left-open', 'card', 'dash', 'legend', 'hud', 'time'], PANEL_PAD = 4;
+const PANELS = ['top', 'left', 'card', 'compare', 'dash', 'spotlight', 'legend', 'hud', 'time', 'map-tools', 'mobile-nav', 'search-panel'], PANEL_PAD = 4;
 let panelRects = [], panelSig = '';
 const astro = { sun: sun(state.t), moon: moon(state.t), month: monthState(state.t) };
 let progs = {}, batches = {}, tracers = {}, flights = null, samplers = null, cache = null, dashCache = {}, ui = null;
@@ -67,16 +83,30 @@ const app = {
     ui.syncControls(); feedStatus(); saveHash();
   },
   setLens(id) {
-    state.lens = id; earthDirty = true;
+    state.lens = id; earthDirty = labelsDirty = true;
     const L = LENSES[id]; if (L && L.static) { pending.add('lens'); fields.loadStatic(L.static).then(() => { pending.delete('lens'); earthDirty = true; }); }
-    ui.syncControls(); saveHash();
+    ui.syncControls(); refreshCard(); saveHash();
   },
   setView(v) { cam.setView(v); earthDirty = labelsDirty = true; resetTracers(); ui.syncControls(); saveHash(); },
   setStyle(s) { state.style = s; earthDirty = labelsDirty = true; buildStatic(); ui.syncControls(); saveHash(); },
-  setTime(t) { state.t = t; state.clock = 'paused'; timeChanged(); },
-  goLive() { state.t = Date.now(); state.clock = 'live'; state.speed = 'real'; timeChanged(); ui.syncControls(); },
-  togglePlay() { state.clock = state.clock === 'paused' ? 'run' : 'paused'; ui.clock(); },
-  setSpeed(id) { state.speed = id; if (state.clock !== 'paused') state.clock = id === 'real' && Math.abs(state.t - Date.now()) < 5000 ? 'live' : 'run'; ui.clock(); },
+  setTime(t) { rotationEnd = null; state.t = t; state.clock = 'paused'; timeChanged(); },
+  goLive() {
+    rotationEnd = null; state.t = Date.now(); state.clock = 'live'; state.speed = 'real';
+    timeChanged(); ui.syncControls();
+    if (ui.planetOpen()) app.showPlanet();
+  },
+  togglePlay() { state.clock = state.clock === 'paused' ? 'run' : 'paused'; ui.clock(); saveHash(); },
+  setSpeed(id) { rotationEnd = null; state.speed = id; if (state.clock !== 'paused') state.clock = id === 'real' && Math.abs(state.t - Date.now()) < 5000 ? 'live' : 'run'; ui.clock(); },
+  startStory, exitStory, storyAction,
+  rotationState: () => rotationEnd === null ? null : state.clock,
+  showPlanet() {
+    if (isNow() && (!live.quakes || Date.now() - live.quakes.fetched >= FEED_REFRESH)) live.loadQuakes();
+    updateDash(true);
+  },
+  comparePlaces: () => Cards.comparisonCard(ctx(), state.pins),
+  setPins(pins) { state.pins = pins; labelsDirty = true; },
+  zoom(factor) { fly = null; cam.zoom(factor); earthDirty = labelsDirty = true; settledAt = performance.now(); saveHash(); },
+  home() { fly = null; cam.home(); if (cam.view === 'globe') cam.lookAt(astro.sun.lon + 42, 18); resetTracers(); earthDirty = labelsDirty = true; saveHash(); },
   search: (q) => data.search(q),
   pick(hit) { flyTo(hit.lon, hit.lat, Math.min(cam.kmPerPx(), hit.km)); openRef(hit.ref); },
   openRef(s) {
@@ -89,7 +119,7 @@ const app = {
   flyToSelection() { if (selection) flyTo(selection.lon, selection.lat, Math.min(cam.kmPerPx(), 4)); },
 };
 
-function ctx() { return { F: fields, D: data, astro, t: state.t }; }
+function ctx() { return { F: fields, D: data, astro, t: state.t, lens: state.lens }; }
 function openRef(ref) {
   const [kind, obj, extra] = ref;
   const build = {
@@ -108,12 +138,79 @@ function refreshCard() {
   if (!card) return;
   const c = card.build();
   selection = c.lon !== undefined ? { lon: c.lon, lat: c.lat } : null;
+  if (selection) c.lensReading = Cards.lensReading(ctx(), c.lon, c.lat);
   ui.showCard(c);
 }
 
 let fly = null;
 const pending = new Set();       // lazy data still on its way; a frozen frame waits for it
+const STORY_BASE = { ...OPENING_LAYERS, borders: false };
+function startStory(id) {
+  const story = STORY_BY_ID[id];
+  if (!story || state.story?.id === id) return;
+  beforeStory ||= {
+    style: state.style, lens: state.lens, layers: state.layers, t: state.t, clock: state.clock,
+    speed: state.speed, view: cam.view, center: cam.center(), km: cam.kmPerPx(),
+  };
+  rotationEnd = null;
+  app.closeCard();
+  state.story = { id, month: 5, pole: 'north', recent: true };
+  state.layers = { ...STORY_BASE, ...story.view.layers };
+  state.style = story.view.style;
+  cam.setView('globe'); cam.home();
+  for (const layer in state.layers) if (state.layers[layer] && !beforeStory.layers[layer]) ensureLayer(layer);
+  buildStatic(); resetTracers();
+  app.setLens(story.view.lens);
+  if (id === 'seasons') {
+    storyAction('month', '5');
+    flyTo(-35, 68, cam.kmPerPx());
+  } else {
+    app.goLive();
+    if (id === 'plates') flyTo(174, 8, cam.kmPerPx());
+    else flyTo(astro.sun.lon + 54, 12, cam.kmPerPx());
+  }
+  ui.syncControls();
+  updateDash(true);
+}
+function exitStory() {
+  if (!beforeStory) return;
+  const { style, lens, layers, t, clock, speed, view, center, km } = beforeStory;
+  beforeStory = null;
+  rotationEnd = null;
+  Object.assign(state, { story: null, style, lens, layers, t: clock === 'live' ? Date.now() : t, clock, speed });
+  cam.setView(view); cam.setKmPerPx(km);
+  flyTo(...center, km);
+  buildStatic(); resetTracers(); timeChanged(); ui.syncControls();
+}
+function storyAction(action, value) {
+  const story = state.story;
+  if (action === 'rotation' && story?.id === 'daylight') {
+    if (rotationEnd !== null) { app.togglePlay(); return; }
+    rotationEnd = state.t + DAY;
+    state.speed = 'h1'; state.clock = 'run';
+    timeChanged(); ui.syncControls();
+  } else if (action === 'month' && story?.id === 'seasons') {
+    story.month = Number(value);
+    app.setTime(Date.UTC(new Date(state.t).getUTCFullYear(), story.month, 21, 12));
+    ui.syncControls();
+  } else if (action === 'pole' && story?.id === 'seasons') {
+    story.pole = value;
+    flyTo(-35, value === 'north' ? 68 : -68, cam.kmPerPx());
+    ui.syncControls();
+  } else if (action === 'lens' && story?.id === 'seasons') {
+    app.setLens(value);
+  } else if (action === 'earthquakes' && story?.id === 'plates') {
+    story.recent = value === 'recent';
+    app.setLayer('quakesLive', story.recent);
+    app.setLayer('quakes', !story.recent);
+    if (story.recent) app.goLive();
+  }
+}
+
 function flyTo(lon, lat, km) {
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches && !FROZEN) {
+    fly = null; cam.setKmPerPx(km); cam.lookAt(lon, lat); earthDirty = labelsDirty = true; saveHash(); return;
+  }
   const c = cam.center();
   fly = { t0: performance.now(), from: [c[0], c[1], cam.kmPerPx()], to: [lon, lat, km] };
   // The flight takes 0.9 s and where it ends is known now: the focus window for the destination is asked for at once,
@@ -243,7 +340,11 @@ function tick(now) {
   else if (state.clock === 'run') {
     const sp = SPEEDS.find((s) => s.id === state.speed);
     if (sp.days) { fs.acc = (fs.acc || 0) + (dt / 1000) * sp.days; if (fs.acc >= 1) { const n = Math.floor(fs.acc); fs.acc -= n; state.t += n * DAY; timeChanged(); } }
-    else { state.t += dt * sp.rate; astroUpdate(); if (sp.rate > 30) earthDirty = labelsDirty = true; }
+    else {
+      state.t += dt * sp.rate;
+      if (rotationEnd !== null && state.t >= rotationEnd) app.setTime(rotationEnd);
+      else { astroUpdate(); if (sp.rate > 30) earthDirty = labelsDirty = true; }
+    }
   }
   if (now - lastEarthDraw > 2500) earthDirty = true;                 // the terminator creeps even in real time
 
@@ -290,13 +391,14 @@ function tick(now) {
   gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
   drawLines(camU, k, 1);
   const f = fs.still ? 0 : Math.min(3, dt / 16.7);                    // still: draw the tracers where they are (see frozenFrame)
+  const flow = state.lens === 'none' ? 1 : 0.3;
   if (samplers && !fs.hold) {
-    if (L.currents && fields.has.ocean) { if (f) tracers.currents.step(cam, samplers.currents, f); tracers.currents.draw(camU, 1); }
-    if (L.wind && fields.has.climate) { if (f) tracers.wind.step(cam, samplers.wind, f); tracers.wind.draw(camU, atlas ? 0.9 : 0.75); }
-    if (L.jet && fields.has.climate) { if (f) tracers.jet.step(cam, samplers.jet, f); tracers.jet.draw(camU, 0.9); }
-    if (L.ships && fields.cpu.lanes) { if (f) tracers.ships.step(cam, samplers.lanes, f); tracers.ships.draw(camU, atlas ? 0.9 : 0.62); }
+    if (L.currents && fields.has.ocean) { if (f) tracers.currents.step(cam, samplers.currents, f); tracers.currents.draw(camU, flow); }
+    if (L.wind && fields.has.climate) { if (f) tracers.wind.step(cam, samplers.wind, f); tracers.wind.draw(camU, flow * (atlas ? 0.9 : 0.75)); }
+    if (L.jet && fields.has.climate) { if (f) tracers.jet.step(cam, samplers.jet, f); tracers.jet.draw(camU, flow * 0.9); }
+    if (L.ships && fields.cpu.lanes) { if (f) tracers.ships.step(cam, samplers.lanes, f); tracers.ships.draw(camU, flow * (atlas ? 0.9 : 0.62)); }
   }
-  if (L.flights && flights) dashCache.aloft = flights.draw(camU, state.t, astro.sun, Math.max(0.62, Math.min(1, k / 8)), k);
+  if (L.flights && flights) dashCache.aloft = flights.draw(camU, state.t, astro.sun, flow * Math.max(0.62, Math.min(1, k / 8)), k);
   drawPoints(camU, k, 1);
 
   // dynamic points: live quakes, satellites, the Sun and Moon marks, the selection
@@ -359,7 +461,10 @@ function drawLines(camU, k, a) {
   if (L.graticule) { line('graticule'); line('equator'); }
   if (L.marks) line('circles', { dashKm: k * 14, duty: 0.55 });
   if (L.rivers) line('rivers', { alpha: Math.min(1, 14 / k) });
-  if (L.borders) { line('borders', { alpha: Math.min(1, 0.55 + 6 / k) }); line('disputed', { dashKm: Math.max(18, k * 9), duty: 0.55 }); }
+  if (L.borders) {
+    const strength = state.style === 'space' && !FROZEN ? 0.32 + 6 / k : 0.55 + 6 / k;
+    line('borders', { alpha: Math.min(1, strength) }); line('disputed', { dashKm: Math.max(18, k * 9), duty: 0.55 });
+  }
   if (L.plates) { line('plates'); line('subduction'); }
 }
 /** The same for the catalogued points. */
@@ -418,7 +523,7 @@ function drawNames() {
   labels.setBlocked(panelRects.concat(shown.map((I) => [I.rect.x - 3, I.rect.y - 3, I.rect.x + I.rect.w + 3, I.rect.y + I.rect.h + 3])));
   // under the main map's names: a thin outline around the ground each inset magnifies
   labels.underlay = shown.length ? (c, atlas) => { for (const I of shown) { const s = I.source(cam); c.globalAlpha = I.alpha; rule(c, atlas, s[0], s[1], s[2] - s[0], s[3] - s[1]); } c.globalAlpha = 1; } : null;
-  labels.draw(cam, state.style, show);
+  labels.draw(cam, state.style, show, !FROZEN && (state.style === 'space' || state.lens !== 'none'));
   const c = labels.ctx, atlas = state.style === 'atlas';
   for (const I of insets) {
     if (!I.rect || !show) { I.labels.placed = []; continue; }
@@ -442,6 +547,22 @@ function drawNames() {
     c.globalAlpha = 1;
   }
   drawMarks();
+  drawPins();
+}
+function drawPins() {
+  if (!state.pins.length) return;
+  cam.beginFrame();
+  const c = labels.ctx;
+  c.setTransform(labels.dpr, 0, 0, labels.dpr, 0, 0);
+  c.textAlign = 'center'; c.textBaseline = 'middle'; c.font = '700 11px system-ui';
+  state.pins.forEach(({ lon, lat }, i) => {
+    const p = cam.project(lon, lat);
+    if (!p || panelRects.some(([l, t, r, b]) => p[0] > l && p[0] < r && p[1] > t && p[1] < b)) return;
+    c.beginPath(); c.arc(p[0], p[1], 9, 0, Math.PI * 2);
+    c.fillStyle = i === 0 ? '#f7ca7a' : '#9dcbe7'; c.fill();
+    c.fillStyle = '#0d1620'; c.fillText(i === 0 ? 'A' : 'B', p[0], p[1] + 0.5);
+  });
+  c.textAlign = 'start';
 }
 /** The thin rule of an inset's frame and of its outline on the main map: one weight, one ink. */
 function rule(c, atlas, x, y, w, h) {
@@ -472,7 +593,7 @@ function updateDash(force) {
     const rows = live.quakes.rows, t = state.t;
     const wk = rows.filter((q) => t - q[6] < 7 * DAY && t >= q[6]);
     d.quakes = { day: rows.filter((q) => t - q[6] < DAY && t >= q[6]).length, week: wk.length, top: wk.sort((a, b) => b[4] - a[4])[0] };
-  } else d.quakeNote = live.status.quakes === 'unavailable' ? 'feed unavailable' : isNow() ? 'fetching…' : 'shown only at the present';
+  } else d.quakeNote = live.status.quakes === 'unavailable' ? 'Feed unavailable' : !isNow() ? 'Shown only at the present' : live.status.quakes === 'loading' ? 'Fetching…' : 'Open Planet to load the feed';
   ui.dashboard(d);
 }
 function nearestBig(lon, lat) {
@@ -542,7 +663,7 @@ function loadHash() {
   if (p.get('t')) { const t = Date.parse(p.get('t')); if (Number.isFinite(t)) { state.t = t; state.clock = 'paused'; } }
   if (p.get('s') === 'atlas') state.style = 'atlas';
   if (p.get('lens') && LENSES[p.get('lens')]) state.lens = p.get('lens');
-  if (p.get('on') !== null) { const on = new Set(p.get('on').split(',')); for (const k in state.layers) state.layers[k] = on.has(k); }
+    if (p.get('on') !== null) { const on = new Set(p.get('on').split(',')); for (const k in state.layers) state.layers[k] = on.has(k); }
   return p;
 }
 
@@ -632,8 +753,13 @@ async function frozenFrame() {
     for (const id in state.layers) if (state.layers[id]) ensureLayer(id);
     if (LENSES[state.lens] && LENSES[state.lens].static) { pending.add('lens'); fields.loadStatic(LENSES[state.lens].static).then(() => { pending.delete('lens'); earthDirty = true; }); }
     ui.syncControls(); feedStatus();
-    const boot = document.getElementById('boot'); boot.classList.add('gone'); setTimeout(() => boot.remove(), FROZEN ? 0 : 900);
-    if (!FROZEN) setInterval(() => { if (state.layers.quakesLive && isNow()) live.loadQuakes(); if (state.layers.aurora && isNow()) live.loadAurora(); }, 10 * 60000);
+    document.getElementById('ui').inert = false;
+    boot.classList.add('gone'); setTimeout(() => { if (!boot.classList.contains('preview')) boot.remove(); }, FROZEN ? 0 : 550);
+    if (!FROZEN) setInterval(() => {
+      if (!isNow()) return;
+      if (state.layers.quakesLive || ui.planetOpen()) live.loadQuakes();
+      if (state.layers.aurora) live.loadAurora();
+    }, FEED_REFRESH);
     window.ATLAS = { ...app, gl, astro, labels, tracers, batches, shot, insets, pickAt: pick, panels: () => panelRects, step: (n = 1) => { for (let i = 0; i < n; i++) tick(Math.max(lastFrame + 16.7, FROZEN ? 0 : performance.now())); return n; }, get flights() { return flights; }, redraw: () => { earthDirty = labelsDirty = true; } };
     window.ATLAS.refView = (lon, lat, dist, discFrac) => { cam.refView(lon, lat, dist, discFrac); earthDirty = labelsDirty = true; resetTracers(); };
     window.ATLAS.stdView = () => { cam.stdView(); earthDirty = labelsDirty = true; resetTracers(); };
@@ -644,7 +770,7 @@ async function frozenFrame() {
     // A browser can take the GL context away (GPU process restart, a software renderer starting
     // up). Nothing drawn so far can be trusted, so start again; three tries, then say so.
     if (gl.isContextLost() && retryAfterContextLoss()) return;
-    bootMsg(String(e.message || e)); console.error(e);
+    showPreview('The interactive globe could not start. You can still explore this captured view of the atlas.'); console.error(e);
   }
 })();
 
@@ -657,4 +783,5 @@ function retryAfterContextLoss() {
   return true;
 }
 canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); });
+}
 canvas.addEventListener('webglcontextrestored', () => location.reload());
