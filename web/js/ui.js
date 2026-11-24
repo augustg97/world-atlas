@@ -117,6 +117,12 @@ export class UI {
     this._buildSystems();
     this._bind();
     this.syncPanels();
+    const cityControls = $('#city-controls');
+    this.cityResize = new ResizeObserver(() => {
+      const height = Math.ceil(cityControls.getBoundingClientRect().height);
+      if (height) document.body.style.setProperty('--city-controls-height', `${height}px`);
+    });
+    this.cityResize.observe(cityControls);
   }
 
   _buildSystems() {

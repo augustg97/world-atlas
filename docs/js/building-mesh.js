@@ -1,9 +1,9 @@
 // Build roofs and walls off the main thread from the same OpenStreetMap tiles as the street plan.
 // Earcut handles courtyards and concave roofs. Faces are clipped to the tile that owns the ground.
-import earcut from './vendor/earcut.js?v=20261124T234441Z';
-import { lonLatToVec } from './astro.js?v=20261124T234441Z';
-import { R_KM } from './camera.js?v=20261124T234441Z';
-import { BUILDING_STRIDE, tileLat, tileLon } from './streets.js?v=20261124T234441Z';
+import earcut from './vendor/earcut.js?v=20261124T234638Z';
+import { lonLatToVec } from './astro.js?v=20261124T234638Z';
+import { R_KM } from './camera.js?v=20261124T234638Z';
+import { BUILDING_STRIDE, tileLat, tileLon } from './streets.js?v=20261124T234638Z';
 
 const R_M = R_KM * 1000;
 const MAX_TRIANGLES = 190000;

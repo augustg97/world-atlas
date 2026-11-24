@@ -1,6 +1,6 @@
-import { viewBox } from './detail.js?v=20261124T234441Z';
-import { BUILDING_STRIDE, OFM, streetTileRange, tileXY } from './streets.js?v=20261124T234441Z';
-import { program, setUniforms } from './gl.js?v=20261124T234441Z';
+import { viewBox } from './detail.js?v=20261124T234638Z';
+import { BUILDING_STRIDE, OFM, streetTileRange, tileXY } from './streets.js?v=20261124T234638Z';
+import { program, setUniforms } from './gl.js?v=20261124T234638Z';
 
 export const CITY_EXAMPLES = [
   { name: 'Los Angeles', lon: -118.2554, lat: 34.0501 },

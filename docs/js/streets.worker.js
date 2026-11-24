@@ -3,8 +3,8 @@
 //   {id, win, w, h, z, tiles: [{x, y, ox}], texelM}
 // and gets back {id, overlay: ImageBitmap|null, pattern: ImageBitmap, requests, bytes, cached, ms, roads, buildings}
 // or {id, error}. {cancel: id} stops one.
-import { OFM, STREETS, ROADS, ROAD_ORDER, RAIL, FILLS, LAMP_M, decodeTile, frame, tileLon, tileLat, shadowOffset } from './streets.js?v=20261124T234441Z';
-import { buildingMesh } from './building-mesh.js?v=20261124T234441Z';
+import { OFM, STREETS, ROADS, ROAD_ORDER, RAIL, FILLS, LAMP_M, decodeTile, frame, tileLon, tileLat, shadowOffset } from './streets.js?v=20261124T234638Z';
+import { buildingMesh } from './building-mesh.js?v=20261124T234638Z';
 
 const CACHE = 80;                       // decoded tiles kept
 const cache = new Map();

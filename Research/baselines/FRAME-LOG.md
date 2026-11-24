@@ -46,3 +46,12 @@ The atlas interface refresh was captured in Chromium with SwiftShader at the con
 - **2026-11-24** · `region-himalaya` — The shorter side panels expose more of the regional map. The snowy Himalayan arc, Tibetan lakes, and the Ganges plain retain their detail.
 - **2026-11-24** · `sheet-atlas` — Story and metric panels leave more room for the Winkel Tripel sheet. Both insets remain visible and the labels use the new panel bounds.
 - **2026-11-24** · `sheet-lens-temp` — The temperature legend moves to the center and carries the model and 1991–2020 baseline explanation. The same warm and cold regions are visible.
+
+The restored desktop layout was checked at 1440 × 900 in Chromium with SwiftShader.
+
+- **2026-11-24** · `globe-default` — The full Systems and Planet panels return alongside the globe. Coastlines, cloud bands and the transition into night remain legible.
+- **2026-11-24** · `globe-night-asia` — Lighter panels frame the dark globe. City lights and the sunlit limb remain visible.
+- **2026-11-24** · `globe-motion-atlantic` — The restored panels frame the wind, current and shipping layers at their original strengths.
+- **2026-11-24** · `region-himalaya` — The panels use the restored atlas layout. The Himalayan relief, rivers and regional labels remain visible in the map area.
+- **2026-11-24** · `sheet-atlas` — The Systems panel fits beside the Europe inset, and both regional insets remain visible alongside the political labels.
+- **2026-11-24** · `sheet-lens-temp` — The map retains the temperature scale and explanation alongside the full Systems and Planet panels.

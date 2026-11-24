@@ -3,24 +3,24 @@
 // The substrate is drawn into a cache whenever state or camera changes; things that move
 // (tracers, aircraft, satellites, pulses) are drawn over it every frame.
 
-import { Camera, R_KM } from './camera.js?v=20261124T234441Z';
-import { Fields, UNIT } from './fields.js?v=20261124T234441Z';
-import { Earth, LENSES } from './earth.js?v=20261124T234441Z';
-import { Detail } from './detail.js?v=20261124T234441Z';
-import { sun, moon, monthState, seasonName, D2R } from './astro.js?v=20261124T234441Z';
-import { program, setUniforms, texFromImage, loadVersion } from './gl.js?v=20261124T234441Z';
-import { LineBatch, PointBatch, Labels, segmentsFromLines, deq, graticule, parallels } from './overlays.js?v=20261124T234441Z';
-import { FlowTracers, Flights, makeSamplers, seedRandom } from './particles.js?v=20261124T234441Z';
-import { SYSTEMS, LAYERS, paletteCanvas, FUEL_COLORS } from './catalog.js?v=20261124T234441Z';
-import { Data } from './data.js?v=20261124T234441Z';
-import { INSETS, Inset, insetAlpha, INSET_PAD } from './insets.js?v=20261124T234441Z';
-import { Live, HOUR, DAY } from './live.js?v=20261124T234441Z';
-import { UI, SPEEDS } from './ui.js?v=20261124T234441Z';
-import { STORY_BY_ID } from './stories.js?v=20261124T234441Z';
-import { Buildings, CITY_CREDIT, CITY_EXAMPLES, CITY_START_KM } from './cities.js?v=20261124T234441Z';
-import { StreetWorker } from './street-client.js?v=20261124T234441Z';
-import * as Cards from './cards.js?v=20261124T234441Z';
-import { peopleBySun, iceExtents, meanTemps, mixMonth } from './dash.js?v=20261124T234441Z';
+import { Camera, R_KM } from './camera.js?v=20261124T234638Z';
+import { Fields, UNIT } from './fields.js?v=20261124T234638Z';
+import { Earth, LENSES } from './earth.js?v=20261124T234638Z';
+import { Detail } from './detail.js?v=20261124T234638Z';
+import { sun, moon, monthState, seasonName, D2R } from './astro.js?v=20261124T234638Z';
+import { program, setUniforms, texFromImage, loadVersion } from './gl.js?v=20261124T234638Z';
+import { LineBatch, PointBatch, Labels, segmentsFromLines, deq, graticule, parallels } from './overlays.js?v=20261124T234638Z';
+import { FlowTracers, Flights, makeSamplers, seedRandom } from './particles.js?v=20261124T234638Z';
+import { SYSTEMS, LAYERS, paletteCanvas, FUEL_COLORS } from './catalog.js?v=20261124T234638Z';
+import { Data } from './data.js?v=20261124T234638Z';
+import { INSETS, Inset, insetAlpha, INSET_PAD } from './insets.js?v=20261124T234638Z';
+import { Live, HOUR, DAY } from './live.js?v=20261124T234638Z';
+import { UI, SPEEDS } from './ui.js?v=20261124T234638Z';
+import { STORY_BY_ID } from './stories.js?v=20261124T234638Z';
+import { Buildings, CITY_CREDIT, CITY_EXAMPLES, CITY_START_KM } from './cities.js?v=20261124T234638Z';
+import { StreetWorker } from './street-client.js?v=20261124T234638Z';
+import * as Cards from './cards.js?v=20261124T234638Z';
+import { peopleBySun, iceExtents, meanTemps, mixMonth } from './dash.js?v=20261124T234638Z';
 
 const canvas = document.getElementById('gl');
 const gl = canvas.getContext('webgl2', { antialias: false, alpha: false, powerPreference: 'high-performance', preserveDrawingBuffer: true });

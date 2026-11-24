@@ -22,6 +22,7 @@
   --bottom-edge: 118px;
   --nav-bottom: 88px;
   --tool-side: var(--rim);
+  --city-controls-height: 165px;
 }
 @media (min-width: 861px) {
   body:has(#right > section:not([hidden])) { --tool-side: calc(var(--rim) + var(--right) + 11px); }
@@ -353,12 +354,13 @@ body:has(#compare-open:not([hidden])) #hud { right: calc(var(--tool-side) + 195p
 #city-retry { margin-top: 5px; font-size: .75rem; }
 .has-lens #city-controls { bottom: calc(var(--bottom-edge) + 115px); }
 .has-lens #map-tools { bottom: calc(var(--bottom-edge) + 115px); }
-.city-mode #map-tools { bottom: calc(var(--bottom-edge) + 142px); }
-.city-mode.has-lens #map-tools { bottom: calc(var(--bottom-edge) + 259px); }
+.city-mode #map-tools { bottom: calc(var(--bottom-edge) + var(--city-controls-height) + 8px); }
+.city-mode.has-lens #map-tools { bottom: calc(var(--bottom-edge) + var(--city-controls-height) + 123px); }
 .city-mode #hud {
-  bottom: calc(var(--bottom-edge) + 188px); right: var(--tool-side); max-width: min(410px, 38vw);
+  bottom: calc(var(--bottom-edge) + var(--city-controls-height) + 49px); right: var(--tool-side); max-width: min(410px, 38vw);
   background: var(--glass); border: 1px solid var(--line); border-radius: 8px; padding: 5px 8px;
 }
+.city-mode.has-lens #hud { bottom: calc(var(--bottom-edge) + var(--city-controls-height) + 164px); }
 .card-city { color: var(--gold-2); border-color: #f7ca7a64; }
 
 @media (min-width: 861px) and (max-width: 1110px) {
@@ -414,9 +416,9 @@ body:has(#compare-open:not([hidden])) #hud { right: calc(var(--tool-side) + 195p
   body:not(.city-mode):has(#city-open:not([hidden])) #map-tools { max-width: 169px; }
   .city-mode #city-open { display: none; }
   #city-controls { left: var(--rim); right: var(--rim); width: auto; }
-  .city-mode #map-tools, .city-mode #hud { bottom: calc(var(--nav-bottom) + 147px); }
   .city-mode #hud, .city-mode:has(#compare-open:not([hidden])) #hud { right: 145px; max-width: none; }
-  .city-mode.has-lens #map-tools, .city-mode.has-lens #hud { bottom: calc(var(--nav-bottom) + 258px); }
+  .city-mode #hud { bottom: calc(var(--nav-bottom) + var(--city-controls-height) + 8px); }
+  .city-mode.has-lens #hud { bottom: calc(var(--nav-bottom) + var(--city-controls-height) + 123px); }
   .sheet-open #city-controls { display: none; }
   #map-tools #compare-open { width: 100%; order: 5; }
   #hud, body:has(#compare-open:not([hidden])) #hud { left: var(--rim); right: 145px; justify-content: flex-start; max-width: none; font-size: .68rem; }

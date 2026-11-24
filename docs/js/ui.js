@@ -1,11 +1,11 @@
 // The interface: brand and clock, systems panel, time console, legend, card panel, dashboard,
 // search and About. All of it is generated from js/catalog.js.
 
-import { SYSTEMS, TIERS, LENS_DEFS, LENS_NOTES, paletteCss, CARD_TEXT_SOURCE } from './catalog.js?v=20261124T234441Z';
-import { coord } from './cards.js?v=20261124T234441Z';
-import { mountDescription } from './wiki.js?v=20261124T234441Z';
-import { STORIES, STORY_BY_ID } from './stories.js?v=20261124T234441Z';
-import { CITY_EXAMPLES } from './cities.js?v=20261124T234441Z';
+import { SYSTEMS, TIERS, LENS_DEFS, LENS_NOTES, paletteCss, CARD_TEXT_SOURCE } from './catalog.js?v=20261124T234638Z';
+import { coord } from './cards.js?v=20261124T234638Z';
+import { mountDescription } from './wiki.js?v=20261124T234638Z';
+import { STORIES, STORY_BY_ID } from './stories.js?v=20261124T234638Z';
+import { CITY_EXAMPLES } from './cities.js?v=20261124T234638Z';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -117,6 +117,12 @@ export class UI {
     this._buildSystems();
     this._bind();
     this.syncPanels();
+    const cityControls = $('#city-controls');
+    this.cityResize = new ResizeObserver(() => {
+      const height = Math.ceil(cityControls.getBoundingClientRect().height);
+      if (height) document.body.style.setProperty('--city-controls-height', `${height}px`);
+    });
+    this.cityResize.observe(cityControls);
   }
 
   _buildSystems() {
