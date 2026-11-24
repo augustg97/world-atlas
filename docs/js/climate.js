@@ -6,7 +6,7 @@
 //
 // The functions are pure (the field store is an argument) so that build/test_app_math.mjs can run them.
 
-import { sun, dayLength } from './astro.js?v=20261124T210602Z';
+import { sun, dayLength } from './astro.js?v=20261124T234441Z';
 
 export const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const DAYS = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];            // a typical year: February has 28

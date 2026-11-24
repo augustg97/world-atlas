@@ -645,7 +645,7 @@ export class Labels {
     return true;
   }
 
-  draw(view, style, show, quiet = false) {
+  draw(view, style, show) {
     const ctx = this.ctx;
     ctx.setTransform(this.dpr, 0, 0, this.dpr, this.ox * this.dpr, this.oy * this.dpr);
     ctx.clearRect(0, 0, this.w, this.h);
@@ -663,9 +663,8 @@ export class Labels {
     }
     const k = view.kmPerPx();                 // what shows at which zoom goes by the real scale
     // nothing moved: repaint what was solved (the clock redraws this layer every tick)
-    const key = sheet ? `s|${step}|${style}|${this.w}|${this.h}|${this._gen}` : `g|${cam.lon}|${cam.lat}|${cam.dist}|${cam.tanHalfFov}|${style}|${this.w}|${this.h}|${this._gen}`;
-    const overview = quiet && k >= 12;
-    const sig = (sheet ? `${key}|${view.mapUnitsPerPx}|${cam.mapCenter[0]}|${cam.mapCenter[1]}` : key) + '|' + this._bsig + '|' + overview;
+    const key = sheet ? `s|${step}|${style}|${this.w}|${this.h}|${this._gen}` : `g|${cam.lon}|${cam.lat}|${cam.dist}|${cam.pitch}|${cam.bearing}|${cam.tanHalfFov}|${style}|${this.w}|${this.h}|${this._gen}`;
+    const sig = (sheet ? `${key}|${view.mapUnitsPerPx}|${cam.mapCenter[0]}|${cam.mapCenter[1]}` : key) + '|' + this._bsig;
     if (sig === this._sig) { this._paint(atlas); return; }
     this._sig = sig;
     // a drag only translates the sheet, and a zoom within a step only spreads it: what lies under each candidate is kept
@@ -676,7 +675,7 @@ export class Labels {
     this._hashInit();
     cam.beginFrame();
     this._b = cam._b;
-    if (!sheet) { const t = cam.tanHalfFov; this._g = [(2 * t) / this.h, t * (this.w / this.h), t, (2 * t) / this.h, cam.dist * cam.dist - 1]; }
+    if (!sheet) { const t = cam.tanHalfFov, r2 = this._b.pos.reduce((ss, v) => ss + v * v, 0); this._g = [(2 * t) / this.h, t * (this.w / this.h), t, (2 * t) / this.h, r2 - 1]; }
     if (sheet) {
       if (!LUT) LUT = wtTable();
       const u = cam.mapUnitsPerPx, sx = LUT_W / (2 * WT_XMAX), sy = LUT_H / (2 * WT_YMAX);
@@ -686,7 +685,6 @@ export class Labels {
     const names = new Set();                     // a name is not printed twice (AUSTRALIA the continent and the state)
     const spreads = [];                          // continents: set last, across whatever is there
     const legacy = (it) => {
-      if (overview && it.cls !== 'continent' && (it.cls !== 'ocean' || it.rank > 1) && (it.cls !== 'country' || it.rank > 2)) return;
       if (k < (it.minKm || 0)) return;
       if (it.cls === 'continent') { if (k <= it.maxKm) spreads.push(it); return; }
       const twin = it.cls === 'country' ? it.text.toUpperCase() : null;
@@ -705,7 +703,6 @@ export class Labels {
       this._exact = cellPx > 1; this._cellPx = cellPx;
       const live = [];
       for (const it of this.states) {
-        if (overview && it.rank > 2) continue;
         const L = this._prep(it);
         if (!L.on) continue;
         let seen = this._onScreen(L.ax, L.ay, 0, 0);

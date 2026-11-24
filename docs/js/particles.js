@@ -3,8 +3,8 @@
 // and MODELLED aircraft on great circles. All are drawn as short streaks in geographic
 // coordinates, so they survive any camera move.
 
-import { LineBatch } from './overlays.js?v=20261124T210602Z';
-import { D2R, R2D } from './astro.js?v=20261124T210602Z';
+import { LineBatch } from './overlays.js?v=20261124T234441Z';
+import { D2R, R2D } from './astro.js?v=20261124T234441Z';
 
 const S = LineBatch.STRIDE;
 

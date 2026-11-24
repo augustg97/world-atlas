@@ -5,6 +5,7 @@ import { SYSTEMS, TIERS, LENS_DEFS, LENS_NOTES, paletteCss, CARD_TEXT_SOURCE } f
 import { coord } from './cards.js';
 import { mountDescription } from './wiki.js';
 import { STORIES, STORY_BY_ID } from './stories.js';
+import { CITY_EXAMPLES } from './cities.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -19,14 +20,15 @@ export class UI {
   constructor(app) {
     this.app = app;
     this.narrow = matchMedia('(max-width: 860px)');
-    this.leftPanel = 'stories';
+    this.leftPanel = 'layers';
+    this.desktopPlanet = true;
     this.mobilePanel = null;
     this.inspector = null;
     const modes = `<div class="seg view-mode" role="group" aria-label="Map projection"><button data-v="globe">Globe</button><button data-v="sheet">Sheet</button></div>
       <div class="seg view-mode" role="group" aria-label="Map appearance"><button data-s="space">Space</button><button data-s="atlas">Atlas</button></div>`;
     const nav = (id, label, icon, controls) => `<button class="nav-item" data-panel="${id}" aria-controls="${controls}" aria-expanded="false"><i class="nav-icon ${icon}" aria-hidden="true"></i><span>${label}</span></button>`;
-    const storiesNav = nav('stories', 'Stories', 'icon-stories', 'left');
-    const layersNav = nav('layers', 'Layers', 'icon-layers', 'left');
+    const storiesNav = nav('stories', 'Guided Views', 'icon-stories', 'left');
+    const layersNav = nav('layers', 'Systems', 'icon-layers', 'left');
     const planetNav = nav('planet', 'Planet', 'icon-planet', 'dash');
     const close = (panel) => `<button class="ghost icon-button" data-close="${panel}" aria-label="Close panel">×</button>`;
     $('#ui').innerHTML = `
@@ -41,19 +43,22 @@ export class UI {
           <div id="results" hidden></div>
         </div>
         <div class="clock" id="clock"><div class="clock-time"><span id="ck-time">--:--</span><span class="utc">UTC</span></div>
-          <div class="clock-mode" id="ck-mode"></div></div>
+          <div class="clock-date" id="ck-date"></div><div class="clock-mode" id="ck-mode"></div></div>
         <button class="ghost icon-button" id="btn-about" aria-label="About, sources and limits" title="About, sources and limits">i</button>
       </header>
       <aside id="left" aria-label="Explore">
         <section id="story-panel" class="side-content">
-          <div class="panel-h"><h2>Stories</h2>${close('stories')}</div>
-          <div class="side-scroll"><div id="story-now" hidden></div><div class="story-list">${STORIES.map((story) => `
+          <div class="panel-h"><h2>Guided Views</h2>${close('stories')}</div>
+          <div class="side-scroll"><div id="story-now" hidden></div>
+          <section class="city-presets"><h3>3D cities</h3><div>${CITY_EXAMPLES.map((city, i) => `<button class="ghost" data-city="${i}">${city.name}</button>`).join('')}</div>
+            <p>Search for any city to explore its mapped buildings in 3D.</p></section>
+          <div class="story-list">${STORIES.map((story) => `
             <button class="story-tile story-${story.id}" data-story="${story.id}" aria-pressed="false">
               <span class="story-copy"><span class="story-subject">${story.subject}</span><strong>${story.title}</strong><span class="story-summary">${story.summary}</span></span>
             </button>`).join('')}</div></div>
         </section>
         <section id="layer-panel" class="side-content" hidden>
-          <div class="panel-h"><h2>Layers</h2>${close('layers')}</div>
+          <div class="panel-h"><h2>Systems</h2>${close('layers')}</div>
           <div class="mobile-modes">${modes}</div>
           <div id="systems"></div>
         </section>
@@ -71,15 +76,28 @@ export class UI {
           <div id="compare-pins"></div><div id="compare-data"></div>
         </section>
         <section id="dash" aria-label="Planet details" hidden>
-          <div class="panel-h"><h2>Planet details</h2>${close('planet')}</div><div id="dash-content"></div>
+          <div class="panel-h"><h2 id="dash-title">Planet now</h2>${close('planet')}</div><div id="dash-feature" hidden></div><div id="dash-content"></div>
         </section>
       </aside>
       <section id="legend" aria-label="Map legend" hidden></section>
       <div id="hud"><div id="scale"><div id="scale-bar"></div><span id="scale-txt"></span></div><div id="cursor"></div><div id="detail"></div><div id="credit"></div></div>
+      <section id="city-controls" aria-label="City view controls" hidden>
+        <div class="city-row"><span><strong>3D buildings</strong> <span class="tier tier-modelled">MODELLED</span></span><button id="city-close" class="ghost">Exit 3D</button></div>
+        <div class="city-row">
+          <button id="city-left" class="ghost icon-button" aria-label="Rotate city left" title="Rotate city left">↶</button>
+          <label for="city-pitch">Tilt</label><input id="city-pitch" type="range" min="0" max="58" value="52">
+          <output id="city-angle" for="city-pitch">52°</output>
+          <button id="city-right" class="ghost icon-button" aria-label="Rotate city right" title="Rotate city right">↷</button>
+        </div>
+        <div id="city-status" role="status"></div>
+        <p>OpenStreetMap footprints via OpenFreeMap. Tile heights may be estimated. Missing heights use 7 m.</p>
+        <button id="city-retry" class="ghost" hidden>Retry building tiles</button>
+      </section>
       <div id="map-tools" role="group" aria-label="Map controls">
         <button class="ghost icon-button" id="zoom-in" aria-label="Zoom in" title="Zoom in">+</button>
         <button class="ghost icon-button" id="zoom-out" aria-label="Zoom out" title="Zoom out">−</button>
         <button class="ghost icon-button" id="map-home" aria-label="Fit Earth in view" title="Fit Earth in view"><i class="nav-icon icon-target" aria-hidden="true"></i></button>
+        <button class="ghost" id="city-open" aria-pressed="false" title="Show 3D buildings here" hidden>3D</button>
         <button class="ghost" id="compare-open" data-panel="compare" aria-controls="compare" aria-expanded="false" hidden>Compare</button>
       </div>
       <footer id="time" aria-label="Time controls">
@@ -104,8 +122,8 @@ export class UI {
   _buildSystems() {
     const host = $('#systems');
     host.innerHTML = SYSTEMS.map((s) => `
-      <section class="sys closed" data-sys="${s.id}">
-        <button class="sys-h" aria-expanded="false" aria-controls="system-${s.id}"><span class="sys-name">${s.name}</span><span class="sys-count" data-count="${s.id}" aria-hidden="true"></span><span class="chev" aria-hidden="true">▾</span></button>
+      <section class="sys" data-sys="${s.id}">
+        <button class="sys-h" aria-expanded="true" aria-controls="system-${s.id}"><span class="sys-name">${s.name}</span><span class="sys-count" data-count="${s.id}" aria-hidden="true"></span><span class="chev" aria-hidden="true">▾</span></button>
         <div class="sys-b" id="system-${s.id}"><p class="blurb">${esc(s.blurb)}</p>
           ${s.layers.map((l) => `<div class="layer" data-layer="${l.id}"><label class="sw"><input type="checkbox" data-layer="${l.id}" aria-label="${esc(l.name)}"><i></i></label>
             <button class="lname" data-info="layer:${l.id}">${esc(l.name)}</button><span class="tier tier-${l.tier}" title="${esc(TIERS[l.tier].title)}">${TIERS[l.tier].label}</span><div class="lstat" data-stat="${l.id}"></div></div>`).join('')}
@@ -133,6 +151,10 @@ export class UI {
       if (b.dataset.close) this.closePanel(b.dataset.close);
       if (b.dataset.v) app.setView(b.dataset.v);
       if (b.dataset.s) app.setStyle(b.dataset.s);
+      if (b.dataset.city !== undefined) {
+        app.openCity(CITY_EXAMPLES[Number(b.dataset.city)]);
+        if (this.narrow.matches) this.closePanel('stories');
+      }
       if (b.dataset.story) {
         if (app.state.story?.id === b.dataset.story && this.narrow.matches) this.closePanel('stories');
         else { this.inspector = null; app.startStory(b.dataset.story); this.syncPanels(); }
@@ -156,6 +178,12 @@ export class UI {
     $('#zoom-in').addEventListener('click', () => app.zoom(0.68));
     $('#zoom-out').addEventListener('click', () => app.zoom(1 / 0.68));
     $('#map-home').addEventListener('click', () => app.home());
+    $('#city-open').addEventListener('click', () => { if (app.state.city) app.closeCity(); else app.openCity(); });
+    $('#city-close').addEventListener('click', () => { app.closeCity(); $('#city-open').focus(); });
+    $('#city-left').addEventListener('click', () => app.turnCity(-45));
+    $('#city-right').addEventListener('click', () => app.turnCity(45));
+    $('#city-pitch').addEventListener('input', (e) => app.setCityPitch(Number(e.target.value)));
+    $('#city-retry').addEventListener('click', () => app.retryBuildings());
     const yr = $('#sl-year'), dy = $('#sl-day');
     const fromSliders = () => {
       const y = new Date(app.state.t).getUTCFullYear();
@@ -165,6 +193,7 @@ export class UI {
     $('#btn-about').addEventListener('click', () => this.showAbout());
     $('#card').addEventListener('click', (e) => {
       if (e.target.closest('.card-x')) { app.closeCard(); return; }
+      if (e.target.closest('.card-city')) { app.openCity(this._card.place); return; }
       if (e.target.closest('.card-pin')) { this.pinPlace(); return; }
       const o = e.target.closest('[data-open]');
       if (o?.dataset.open.startsWith('river:')) { const hit = app.data.riverRef(o.dataset.open.slice(6)); if (hit) app.pick(hit); }
@@ -199,20 +228,24 @@ export class UI {
 
   togglePanel(id) {
     if (this.narrow.matches) this.mobilePanel = this.mobilePanel === id ? null : id;
-    else if (id === 'layers' || id === 'stories') this.leftPanel = this.leftPanel === id ? null : id;
+    else if (id === 'stories') this.leftPanel = this.leftPanel === id ? 'layers' : id;
+    else if (id === 'layers') this.leftPanel = this.leftPanel === id ? null : id;
+    else if (id === 'planet') this.desktopPlanet = !this.desktopPlanet;
     else this.inspector = this.inspector === id ? null : id;
     this.syncPanels();
     if (id === 'search' && this.mobilePanel === 'search') $('#search').focus();
-    if (id === 'planet' && (this.inspector === 'planet' || this.mobilePanel === 'planet')) this.app.showPlanet();
+    if (id === 'planet' && this.planetOpen()) this.app.showPlanet();
     if (id === 'compare' && (this.inspector === 'compare' || this.mobilePanel === 'compare')) this.renderCompare();
   }
 
-  planetOpen() { return (this.narrow.matches ? this.mobilePanel : this.inspector) === 'planet'; }
+  planetOpen() { return this.narrow.matches ? this.mobilePanel === 'planet' : this.desktopPlanet; }
 
   closePanel(id) {
     if (id === 'place') { this.app.closeCard(); return; }
     if (this.narrow.matches) this.mobilePanel = null;
-    else if (id === 'layers' || id === 'stories') this.leftPanel = null;
+    else if (id === 'stories') this.leftPanel = 'layers';
+    else if (id === 'layers') this.leftPanel = null;
+    else if (id === 'planet') this.desktopPlanet = false;
     else if (id !== 'search') this.inspector = null;
     this.syncPanels();
     const buttons = [...document.querySelectorAll(`[data-panel="${id}"]`)];
@@ -229,13 +262,14 @@ export class UI {
     $('#layer-panel').hidden = left !== 'layers';
     $('#card').hidden = right !== 'place' || !this._card;
     $('#compare').hidden = right !== 'compare';
-    $('#dash').hidden = right !== 'planet';
+    $('#dash').hidden = !this.planetOpen();
     $('#time').hidden = mobile && this.mobilePanel !== 'time';
     $('#search-panel').hidden = mobile && this.mobilePanel !== 'search';
-    $('#spotlight').hidden = mobile ? Boolean(this.mobilePanel) : Boolean(right);
+    $('#spotlight').hidden = mobile ? Boolean(this.mobilePanel || this.app.state.city) : Boolean(right || this.planetOpen() || !this.app.state.story);
+    document.body.classList.toggle('city-mode', this.app.state.city);
     document.body.classList.toggle('sheet-open', mobile && Boolean(this.mobilePanel));
     for (const b of document.querySelectorAll('[data-panel]')) {
-      b.setAttribute('aria-expanded', String(b.dataset.panel === left || b.dataset.panel === right));
+      b.setAttribute('aria-expanded', String(b.dataset.panel === 'planet' ? this.planetOpen() : b.dataset.panel === left || b.dataset.panel === right));
     }
   }
 
@@ -243,6 +277,7 @@ export class UI {
     const story = this.app.state.story, host = $('#story-now'), active = STORY_BY_ID[story?.id];
     const key = `${active?.id}|${story?.pole}|${story?.month}|${story?.recent}|${this.app.state.lens}`;
     host.hidden = !active;
+    this.syncPanels();
     if (this.storyKey === key) return;
     this.storyKey = key;
     for (const b of document.querySelectorAll('[data-story]')) b.setAttribute('aria-pressed', String(b.dataset.story === story?.id));
@@ -256,7 +291,7 @@ export class UI {
         + pair('lens', 'What to compare', [['ice', 'Sea ice'], ['solar', 'Sunlight']], this.app.state.lens)
         : pair('earthquakes', 'Earthquake record', [['recent', 'Past 30 days'], ['historical', '2000–2025']], story.recent ? 'recent' : 'historical')
           + '<div class="story-key"><span>Plate boundaries</span><span>Volcanoes</span><span>Earthquakes</span></div>';
-    host.innerHTML = `<div class="section-label">${active.subject}</div><h3>${active.title}</h3><p>${active.detail}</p><div class="story-actions">${controls}</div><div class="story-footer"><button class="ghost mobile-only" data-close="stories">View map</button><button class="ghost" data-action="exit">Exit story</button></div>`;
+    host.innerHTML = `<div class="section-label">${active.subject}</div><h3>${active.title}</h3><p>${active.detail}</p><div class="story-actions">${controls}</div><div class="story-footer"><button class="ghost mobile-only" data-close="stories">View map</button><button class="ghost" data-action="exit">Exit guided view</button></div>`;
     [...host.querySelectorAll('[data-action]')].find((b) => b.dataset.action === focus?.action && b.dataset.value === focus?.value)?.focus();
   }
 
@@ -303,6 +338,7 @@ export class UI {
   syncControls() {
     const st = this.app.state;
     document.body.dataset.style = st.style;
+    document.body.dataset.view = this.app.cam.view;
     for (const c of document.querySelectorAll('input[data-layer]')) c.checked = !!st.layers[c.dataset.layer];
     for (const b of document.querySelectorAll('[data-lens]')) b.setAttribute('aria-pressed', String(b.dataset.lens === st.lens));
     for (const b of document.querySelectorAll('[data-v]')) b.setAttribute('aria-pressed', String(b.dataset.v === this.app.cam.view));
@@ -314,6 +350,7 @@ export class UI {
     $('#speed').value = st.speed;
     this.legend();
     this.syncStory();
+    this.cityControls();
   }
 
   clock() {
@@ -321,6 +358,7 @@ export class UI {
     const y = d.getUTCFullYear(), start = Date.UTC(y, 0, 1), doy = Math.floor((st.t - start) / 86400000), mins = d.getUTCHours() * 60 + d.getUTCMinutes();
     const month = `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]}`;
     $('#ck-time').textContent = time;
+    $('#ck-date').textContent = `${month} ${y}`;
     const mode = $('#ck-mode'), live = st.clock === 'live';
     mode.classList.toggle('live', live);
     mode.textContent = live ? 'Now' : 'Typical year';
@@ -389,6 +427,34 @@ export class UI {
     }
   }
 
+  cityControls() {
+    const { state, cam, buildings } = this.app, active = state.city;
+    $('#city-open').hidden = !active && (!state.layers.detail || cam.kmPerPx() >= 0.12);
+    $('#city-open').setAttribute('aria-pressed', String(active));
+    $('#city-controls').hidden = !active;
+    document.body.classList.toggle('city-mode', active);
+    if (!active) return;
+    const slider = $('#city-pitch');
+    slider.value = cam.pitch;
+    $('#city-angle').textContent = `${cam.pitch}°`;
+    slider.setAttribute('aria-valuetext', `${cam.pitch} degrees`);
+    const info = buildings.info;
+    let text = '';
+    if (!state.layers.detail) text = 'Turn on Finer ground in Systems to load building data.';
+    else if (buildings.status === 'zoom') text = 'Zoom in to see individual buildings.';
+    else if (buildings.status === 'failed') text = 'Building tiles could not be loaded.';
+    else if (buildings.status === 'empty') text = 'No building geometry is mapped in these tiles.';
+    else if (buildings.status === 'ready') {
+      text = `${info.count.toLocaleString('en-US')} rendered footprints`;
+      if (info.truncated) text += ' · nearest blocks and taller buildings prioritized';
+      else if (info.limited) text += ' · central tiles shown at this scale';
+      if (info.failed) text += ' · some tiles unavailable';
+    } else text = 'Loading building geometry…';
+    const status = $('#city-status');
+    if (status.textContent !== text) status.textContent = text;
+    $('#city-retry').hidden = buildings.status !== 'failed' && !info?.failed;
+  }
+
   layerStatus(id, text, cls = '') { const n = $(`[data-stat="${id}"]`); if (n) { n.textContent = text || ''; n.className = 'lstat ' + cls; } }
 
   showCard(card) {
@@ -405,7 +471,9 @@ export class UI {
     const r = card.lensReading;
     const lens = r ? `<section class="lens-reading" aria-label="Selected map layer at this place"><span>${esc(r.name)}</span><strong>${esc(r.value)}</strong><small><span class="tier tier-${r.tier}">${TIERS[r.tier].label}</span> ${esc(r.vintage)}</small></section>` : '';
     const pin = card.lon !== undefined && card.kind !== 'sat';
-    const html = `<div class="card-bar"><div>${card.lon !== undefined ? '<button class="ghost card-go" title="Centre the view here">Centre</button>' : ''}${pin ? '<button class="ghost card-pin">Pin place</button>' : ''}</div><button class="ghost icon-button card-x" aria-label="Close place details">×</button></div><div class="card-body">${lens}${card.html}</div>`;
+    const cities = card.kind === 'city' && Math.abs(card.lat) < 84
+      ? '<button class="ghost card-city">Explore in 3D</button>' : '';
+    const html = `<div class="card-bar"><div>${card.lon !== undefined ? '<button class="ghost card-go" title="Centre the view here">Centre</button>' : ''}${pin ? '<button class="ghost card-pin">Pin place</button>' : ''}${cities}</div><button class="ghost icon-button card-x" aria-label="Close place details">×</button></div><div class="card-body">${lens}${card.html}</div>`;
     if (same && was.html === html) return;
     const top = host.scrollTop, open = same ? [...host.querySelectorAll('details')].map((d) => d.open) : [];
     const focus = same ? [...host.querySelectorAll('button, summary')].indexOf(document.activeElement) : -1;
@@ -446,8 +514,16 @@ export class UI {
     $('#spot-kicker').textContent = active ? active.title : clock === 'live' ? 'Planet now' : 'Planet in a typical year';
     const spot = `<div class="spot-value">${metric}</div><div class="spot-label">${label}</div>${graphic}<p class="spot-source"><span class="tier tier-${tier}">${TIERS[tier].label}</span> ${esc(vintage)}</p>`;
     if (this.spotHTML !== spot) { $('#spot-metric').innerHTML = spot; this.spotHTML = spot; }
+    const feature = $('#dash-feature');
+    feature.hidden = !active;
+    const featureKey = active ? active.id + '|' + spot : '';
+    if (this.featureKey !== featureKey) {
+      feature.innerHTML = active ? `<div class="section-label">${active.title}</div>${spot}` : '';
+      this.featureKey = featureKey;
+    }
     if (!$('#compare').hidden) this.renderCompare();
     if ($('#dash').hidden) return;
+    $('#dash-title').textContent = clock === 'live' ? 'Planet now' : 'Planet in a typical year';
     $('#dash-content').innerHTML = `<div class="dash-date">${new Date(t).toISOString().slice(0, 16).replace('T', ' ')} UTC</div>
       <div class="dsec"><div class="sec-h">Sun & Moon</div>
         ${row('Sun overhead at', coord(d.sun.lon, d.sun.lat), 'modelled', d.sunPlace ? `near ${esc(d.sunPlace)}` : '')}

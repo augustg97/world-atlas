@@ -43,11 +43,13 @@ export function wtInverse(x, y) {
 // 5 m since release 1.8 (the owner's choice, 2026-11-11): a device pixel is 2.5 m, a house is four across, and what
 // is drawn at that scale is OpenStreetMap's streets and buildings over Sentinel-2 magnified (streets.js).
 export const MIN_KM_PER_PX = 0.005;
+export const CITY_MAX_KM = 0.060;
 export class Camera {
   constructor() {
     this.view = 'globe';
     this.lon = 15; this.lat = 22;          // sub-camera point, degrees
     this.dist = 5.2;                        // Earth radii from the centre
+    this.pitch = 0; this.bearing = 0;
     this.mapCenter = [0, 0];                // sheet: projected coords at the screen centre
     this.mapUnitsPerPx = 0.005;             // sheet: projected units per CSS px
     this.w = 1; this.h = 1; this.dpr = 1;
@@ -65,7 +67,21 @@ export class Camera {
     const l = this.lon * D2R, p = this.lat * D2R;
     const right = [-Math.sin(l), Math.cos(l), 0];
     const up = [-Math.sin(p) * Math.cos(l), -Math.sin(p) * Math.sin(l), Math.cos(p)];
-    return { right, up, f, pos: f.map((v) => -v * this.dist) };
+    const mix = this.cityFraming();
+    if (!mix || (!this.pitch && !this.bearing)) return { right, up, f, pos: f.map((v) => -v * this.dist) };
+    const heading = this.bearing * D2R * mix, angle = this.pitch * D2R * mix;
+    const ch = Math.cos(heading), sh = Math.sin(heading), cp = Math.cos(angle), sp = Math.sin(angle);
+    const east = right.map((v, i) => v * ch - up[i] * sh);
+    const north = up.map((v, i) => v * ch + right[i] * sh);
+    const forward = f.map((v, i) => v * cp + north[i] * sp);
+    const vertical = north.map((v, i) => v * cp - f[i] * sp);
+    // The optical axis always meets the same ground point. Pitch or bearing can change without drifting off it.
+    return { right: east, up: vertical, f: forward, pos: f.map((v, i) => -v - forward[i] * (this.dist - 1)) };
+  }
+
+  cityFraming() {
+    if (this.view !== 'globe') return 0;
+    return Math.max(0, Math.min(1, (CITY_MAX_KM - this.kmPerPx()) / (CITY_MAX_KM - 0.025)));
   }
 
   /** km of ground per CSS pixel at the view centre. */
@@ -106,7 +122,7 @@ export class Camera {
         if (h <= 0) return null;
         const vl = Math.hypot(vx, vy, vz);
         const bb = (b.pos[0] * vx + b.pos[1] * vy + b.pos[2] * vz) / vl;
-        if (this.dist * this.dist - bb * bb <= 1) return null;      // behind the planet
+        if (b.pos.reduce((ss, v) => ss + v * v, 0) - bb * bb <= 1) return null;      // behind the planet
       }
       const xc = vx * b.right[0] + vy * b.right[1] + vz * b.right[2];
       const yc = vx * b.up[0] + vy * b.up[1] + vz * b.up[2];
@@ -128,7 +144,7 @@ export class Camera {
       let d = [0, 1, 2].map((i) => b.right[i] * nx + b.up[i] * ny + b.f[i]);
       const dl = Math.hypot(...d); d = d.map((v) => v / dl);
       const bb = b.pos[0] * d[0] + b.pos[1] * d[1] + b.pos[2] * d[2];
-      const disc = bb * bb - (this.dist * this.dist - 1);
+      const disc = bb * bb - (b.pos.reduce((ss, v) => ss + v * v, 0) - 1);
       if (disc <= 0 || bb >= 0) return null;
       const t = -bb - Math.sqrt(disc);
       const p = [0, 1, 2].map((i) => b.pos[i] + t * d[i]);
@@ -141,8 +157,10 @@ export class Camera {
   pan(dxPx, dyPx) {
     if (this.view === 'globe') {
       const degPerPx = this.kmPerPx() / (R_KM * D2R);
-      this.lon = norm180(this.lon - dxPx * degPerPx / Math.max(0.2, Math.cos(this.lat * D2R)));
-      this.lat = Math.max(-89.5, Math.min(89.5, this.lat + dyPx * degPerPx));
+      const mix = this.cityFraming(), h = this.bearing * D2R * mix;
+      const dy = dyPx / Math.cos(this.pitch * D2R * mix), c = Math.cos(h), s = Math.sin(h);
+      this.lon = norm180(this.lon + (-dxPx * c + dy * s) * degPerPx / Math.max(0.2, Math.cos(this.lat * D2R)));
+      this.lat = Math.max(-89.5, Math.min(89.5, this.lat + (dxPx * s + dy * c) * degPerPx));
     } else {
       this.mapCenter[0] = Math.max(-WT_XMAX, Math.min(WT_XMAX, this.mapCenter[0] - dxPx * this.mapUnitsPerPx));
       this.mapCenter[1] = Math.max(-WT_YMAX, Math.min(WT_YMAX, this.mapCenter[1] + dyPx * this.mapUnitsPerPx));
@@ -181,6 +199,7 @@ export class Camera {
    */
   refView(lon, lat, dist, discFrac) {
     this.view = 'globe'; this._placed = true;
+    this.pitch = this.bearing = 0;
     this.lon = norm180(lon); this.lat = lat; this.dist = dist;
     this.tanHalfFov = Math.tan(Math.asin(1 / dist)) / discFrac;
   }

@@ -81,7 +81,7 @@ BORDER_KM = 6.0              # a click on an inset's ground may open the neighbo
 # layer uses its own table) and from a fresh canvas (ink boxes), so the layer's rectangles are checked, not trusted.
 PANELS = [
     "top", "left", "card", "compare", "dash", "spotlight", "legend", "hud", "time",
-    "map-tools", "mobile-nav", "search-panel",
+    "map-tools", "city-controls", "mobile-nav", "search-panel",
 ]
 JS = """([NX, NY, PANELS]) => {
   const cam = ATLAS.cam, W = cam.w, H = cam.h;

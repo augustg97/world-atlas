@@ -29,6 +29,7 @@ export const STREETS = {
   shadow: 0.62,         // a shadow's length over the building's height: the Sun 58 degrees up, as Sentinel-2's mid-morning summer pass has it
   defaultH: 7,          // metres, where OpenStreetMap gives a building no height (two storeys)
 };
+export const BUILDING_STRIDE = 7;
 
 // Each road class: `w` the paved width in metres; `light` its value in the pattern (0..1); `day` the opacity of its
 // pavement over the photograph. Pattern values of roads are all 0.5 and over and those of filled ground all under
@@ -53,17 +54,23 @@ export const tileXY = (lon, lat, z) => { const n = 2 ** z; return [(lon / 360 + 
 export const tileLon = (x, z) => (x / 2 ** z - 0.5) * 360;
 export const tileLat = (y, z) => (2 * Math.atan(Math.exp((0.5 - y / 2 ** z) * 2 * Math.PI)) - Math.PI / 2) * R2D;
 
+export function streetTileRange(win, z) {
+  const south = win.north - win.latSpan, n = 2 ** z;
+  if (win.north > 84 || south < -84) return null;
+  const [x0, y0] = tileXY(win.west, win.north, z), [x1, y1] = tileXY(win.west + win.lonSpan, south, z);
+  return { c0: Math.floor(x0), c1: Math.floor(x1 - 1e-9), r0: Math.max(0, Math.floor(y0)), r1: Math.min(n - 1, Math.floor(y1 - 1e-9)) };
+}
+
 /**
  * The vector tiles for a window {west, north, lonSpan, latSpan}: the finest zoom (OFM.maxZoom at most) at which the
  * window takes no more than `max` tiles. Null beyond Web Mercator's 85 degrees or when even the coarsest zoom is too many.
  */
 export function streetPlan(win, max = STREETS.maxTiles) {
-  const south = win.north - win.latSpan;
-  if (win.north > 84 || south < -84) return null;
   for (let z = OFM.maxZoom; z >= OFM.minZoom; z--) {
     const n = 2 ** z;
-    const [x0, y0] = tileXY(win.west, win.north, z), [x1, y1] = tileXY(win.west + win.lonSpan, south, z);
-    const c0 = Math.floor(x0), c1 = Math.floor(x1 - 1e-9), r0 = Math.max(0, Math.floor(y0)), r1 = Math.min(n - 1, Math.floor(y1 - 1e-9));
+    const range = streetTileRange(win, z);
+    if (!range) return null;
+    const { c0, c1, r0, r1 } = range;
     const count = (c1 - c0 + 1) * (r1 - r0 + 1);
     if (count > max) continue;
     const tiles = [];
@@ -172,8 +179,14 @@ export function decodeTile(bytes) {
         else if (ROADS[cls]) (out.roads[cls] ||= []).push(...geometry(geom));
       } else if (name === 'building') {
         if (type !== 3) continue;
-        const h = Number(props.render_height);
-        out.buildings.push({ h: Number.isFinite(h) && h > 0 ? h : STREETS.defaultH, rings: geometry(geom) });
+        const h = Number(props.render_height), supplied = Number.isFinite(h) && h > 0 && h <= 1500;
+        const base = Number(props.render_min_height);
+        out.buildings.push({
+          h: supplied ? h : STREETS.defaultH,
+          base: supplied && Number.isFinite(base) && base > 0 && base < h ? base : 0,
+          supplied, hide3d: props.hide_3d === true || props.hide_3d === 1 || ['true', '1', 'yes'].includes(props.hide_3d),
+          rings: geometry(geom),
+        });
       } else if (type === 3 && FILLS[props.class] !== undefined) (out.fills[props.class] ||= []).push(...geometry(geom));
     }
   }

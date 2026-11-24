@@ -1,8 +1,8 @@
 // Draws the substrate: one full-screen triangle through shaders/earth.frag.glsl.
 
-import { program, setUniforms } from './gl.js?v=20261124T210602Z';
-import { UNIT } from './fields.js?v=20261124T210602Z';
-import { gmstDeg, D2R } from './astro.js?v=20261124T210602Z';
+import { program, setUniforms } from './gl.js?v=20261124T234441Z';
+import { UNIT } from './fields.js?v=20261124T234441Z';
+import { gmstDeg, D2R } from './astro.js?v=20261124T234441Z';
 
 export const LENSES = {
   none: { id: 0 },

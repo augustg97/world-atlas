@@ -2,11 +2,11 @@
 // an eyebrow, a title, fact rows, values FOR THE CURRENT INSTANT with their evidence tier, the
 // vintage of every number, and its sources (SCOPE section 7).
 
-import { TIERS, LAYERS, LENS_DEFS, LENS_NOTES, FUEL_COLORS } from './catalog.js?v=20261124T210602Z';
-import { sunElevation, localSolarTime, dayLength, D2R } from './astro.js?v=20261124T210602Z';
-import { R_KM } from './camera.js?v=20261124T210602Z';
-import { wikiKey } from './wiki.js?v=20261124T210602Z';
-import { MONTH_NAMES, monthlySeries, koppen, yearSentences, climateChart, climateTable } from './climate.js?v=20261124T210602Z';
+import { TIERS, LAYERS, LENS_DEFS, LENS_NOTES, FUEL_COLORS } from './catalog.js?v=20261124T234441Z';
+import { sunElevation, localSolarTime, dayLength, D2R } from './astro.js?v=20261124T234441Z';
+import { R_KM } from './camera.js?v=20261124T234441Z';
+import { wikiKey } from './wiki.js?v=20261124T234441Z';
+import { MONTH_NAMES, monthlySeries, koppen, yearSentences, climateChart, climateTable } from './climate.js?v=20261124T234441Z';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const fmt = (v, d = 0) => (Number.isFinite(v) ? v.toLocaleString('en-US', { maximumFractionDigits: d, minimumFractionDigits: d }) : '—');

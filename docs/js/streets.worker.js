@@ -3,7 +3,8 @@
 //   {id, win, w, h, z, tiles: [{x, y, ox}], texelM}
 // and gets back {id, overlay: ImageBitmap|null, pattern: ImageBitmap, requests, bytes, cached, ms, roads, buildings}
 // or {id, error}. {cancel: id} stops one.
-import { OFM, STREETS, ROADS, ROAD_ORDER, RAIL, FILLS, LAMP_M, decodeTile, frame, tileLon, tileLat, shadowOffset } from './streets.js?v=20261124T210602Z';
+import { OFM, STREETS, ROADS, ROAD_ORDER, RAIL, FILLS, LAMP_M, decodeTile, frame, tileLon, tileLat, shadowOffset } from './streets.js?v=20261124T234441Z';
+import { buildingMesh } from './building-mesh.js?v=20261124T234441Z';
 
 const CACHE = 80;                       // decoded tiles kept
 const cache = new Map();
@@ -61,10 +62,26 @@ async function run(msg) {
   const t0 = performance.now(), marks = {};
   try {
     const got = new Array(tiles.length);
-    let next = 0;
-    const pull = async () => { while (next < tiles.length) { const k = next++; got[k] = await getTile(z, tiles[k], job); } };
+    if (tiles.some((t) => !cache.has(`${z}/${t.x}/${t.y}`))) await tileUrl(job.ctl.signal);
+    let next = 0, failed = 0, lastError = null;
+    const pull = async () => {
+      while (next < tiles.length) {
+        const k = next++;
+        try { got[k] = await getTile(z, tiles[k], job); }
+        catch (error) {
+          if (!msg.meshOnly || error.name === 'AbortError') throw error;
+          failed++; lastError = error;
+        }
+      }
+    };
     await Promise.all(Array.from({ length: Math.min(8, tiles.length) }, pull));
     if (job.ctl.signal.aborted) throw new DOMException('aborted', 'AbortError');
+    if (msg.meshOnly) {
+      if (failed === tiles.length && lastError) throw lastError;
+      const mesh = buildingMesh(z, tiles, got, msg.focus);
+      self.postMessage({ id, ...mesh, failed }, [mesh.data.buffer]);
+      return;
+    }
 
     const fr = frame(win, w, h);
     // Each tile's lines and rings in metres from the window's corner, with the tile's own square. A tile holds what
